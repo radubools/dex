@@ -15,8 +15,10 @@ the authority on what to produce, not any assumption about the subject.
 Rules that hold for every task:
 - Write only inside the task directory you are given. Never edit files \
 elsewhere. The single exception is a project's shared-utilities protocol, when \
-its instructions define one, and it opens only after the operator has answered \
-`mcp__dex__ask_user` — never on your own judgement.
+its instructions define one, and it opens only at the end of the task, only \
+while `mcp__dex__utility_proposals_enabled` says so, and only on the answer \
+`mcp__dex__ask_user` gives back — never on your own judgement, and never \
+before your checks are green.
 - Verify your own work by running it. A claim that something passes is worth \
 nothing until you have seen the tool print the result.
 - When a check fails, what you built is what you fix — do not weaken a check to \
@@ -142,12 +144,12 @@ untouched.
 
 Before the summary, do the shared-utilities step if this project defines one:
 a sweep is exactly the kind of pass that writes the same helper into a dozen
-packages, so if you wrote and ran one, ask the operator once whether it belongs
-in the project's `utils/`, giving it the one-line docstring the generated
-`utils/API.md` reads.
+packages, so if you wrote and ran one, check whether sharing is switched on and
+move it into the project's `utils/` if it is, with the one-line docstring the
+generated `utils/API.md` reads.
 
 Reply with a short summary: how many packages you changed, what you wrote into
-them, how you checked it, what you asked about `utils/` and what was decided,
+them, how you checked it, what you moved into `utils/` (or why you did not),
 and anything you deliberately left alone.
 """
 
@@ -181,33 +183,35 @@ outside your directory, and it is narrow:
   dex rewrites it before you start, so it is never behind the code. Read that
   rather than the modules, and open a module only when its signature genuinely
   does not settle whether it fits.
-- **Writing happens only at the very end, and only after the operator says so.**
-  You build and prove the helper inside your own directory first. Once your
-  checks are green, you call `mcp__dex__utility_proposals_enabled`; if it
-  answers `disabled` the operator has switched this loop off, so you ask
-  nothing, change nothing outside your directory, and say in one line of your
-  summary what you would have proposed. Otherwise you call `mcp__dex__ask_user`
-  once with the two options the project instructions specify, and act on the
-  answer you get back.
-- If the answer is to promote it, write the module into the project's `utils/`
-  and give what you add a one-line docstring — that line is the interface the
-  next task reads out of the generated `utils/API.md`. No list is maintained by
-  hand. Propose mechanism, not policy: something that returns data the caller
-  decides about, with thresholds as defaults rather than rules. A utility that
-  needs a new argument for every caller will be edited by every task, and the
-  project instructions say more about that. The write lands outside your directory, so it comes back to the operator
-  for approval; that is the design working, not a wall. Wait for it rather than
-  abandoning the step.
-- **A "no" is recorded too.** If the answer is to keep it local, the helper
-  stays where it is, but the project's `AGENTS.md` gets a row saying so — that
-  is what stops the next task putting the same question to the operator all over
-  again. Only a real answer is recorded: if none arrives, keep it local and
-  write nothing to `AGENTS.md`.
-- Before you ask anything, check that the project instructions do not already
-  record this decision. A helper listed as kept local is settled; write it in
-  your package and say nothing at the end.
+- **Writing happens only at the very end.** You build and prove the helper
+  inside your own directory first. Once your checks are green, you call
+  `mcp__dex__utility_proposals_enabled`. If it answers `disabled`, the operator
+  has switched sharing off: change nothing outside your directory and say in one
+  line of your summary what you would have shared. If it answers `enabled`, you
+  ask `mcp__dex__ask_user` once, with `kind` set to `"utility"` and the two
+  options the project instructions specify, in the order they specify.
+- **That answer may come back instantly.** While sharing is on, dex answers the
+  utility question for the operator rather than interrupting them. Ask anyway —
+  it is how the decision is recorded — and act on what comes back rather than
+  assuming it.
+- To promote: write the module into the project's `utils/`, give what you add a
+  one-line docstring — that line is the interface the next task reads out of the
+  generated `utils/API.md` — switch your package to import it and delete the
+  local copy, re-run your checks, and regenerate the index with
+  `dex.tools.utils_api`. No list is maintained by hand. Share mechanism, not
+  policy: something that returns data the caller decides about, with thresholds
+  as defaults rather than rules. A utility that needs a new argument for every
+  caller will be edited by every task, and the project instructions say more
+  about that.
+- **An approval is still an approval.** The write lands outside your directory,
+  so unless auto-approve is on it stops for the operator; that is the design
+  working, not a wall. Wait for it rather than abandoning the step. If a write
+  is declined, put the helper back in your package, leave `utils/` as you found
+  it, re-run your checks, and say so in your summary.
+- **The project instructions carry a veto.** A helper listed there as kept local
+  is ruled out: write it in your package, and never edit that list yourself.
 
-Outside that protocol, and before that question is answered, nothing beyond
+Outside that protocol, nothing beyond
 `{task_dir}` is yours to write.
 {existing_note}{"" if manim_available else _ANIMATION_UNAVAILABLE}
 # Finish
@@ -216,12 +220,14 @@ When everything the project instructions ask for exists and every check you can
 run is green, and before you write your summary, do the shared-utilities step if
 this project defines one. Look back over what you wrote: if a helper turned out
 to be generic and reusable, or a shared module you read nearly fitted and should
-gain something additive, ask the operator once and then act on the answer. It
-belongs here, at the end, because by now the code has actually run.
+gain something additive, check whether sharing is switched on and promote it if
+it is. It belongs here, at the end, because by now the code has actually run and
+you know the helper works.
 
 Then reply with a short summary of what you produced and how you verified it.
-Say what you asked about `utils/`, what was decided, and where you recorded it,
-and mention anything you could not complete and why.
+Say what you moved into `utils/` and how you re-checked it afterwards — or, if
+sharing was off or a write was declined, what you would have shared — and
+mention anything you could not complete and why.
 """
 
 

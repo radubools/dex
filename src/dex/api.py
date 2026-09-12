@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
 from .bus import EventBus
-from .config import CONFIG, MAX_WORKERS, Config
+from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation
 from . import designer
@@ -438,6 +438,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             moved = await tasks.set_paused(body.paused)
         if body.utility_proposals is not None:
             await settings.set(SettingsStore.UTILITY_PROPOSALS, body.utility_proposals)
+            # The loop only works in sequence: a promotion has to land before
+            # the next task reads the index. An explicit task_concurrency in the
+            # same request still wins — it is applied below, after this.
+            await tasks.set_concurrency(
+                SettingsStore.TASK_CONCURRENCY,
+                SEQUENTIAL_CONCURRENCY if body.utility_proposals else PARALLEL_CONCURRENCY,
+            )
+            await tasks.rebalance()
         if body.effort is not None:
             # "" clears the override rather than storing an invalid effort.
             await settings.set(SettingsStore.EFFORT, body.effort or None)

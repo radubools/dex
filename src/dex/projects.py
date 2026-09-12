@@ -90,10 +90,9 @@ What you find lands in one of three places:
   the change gets proposed at the end, like anything else.
 - **Nothing covers it.** Write your own, locally, and carry on.
 
-Then read *Kept local*. **If what you are about to write is already listed
-there, the operator has settled it**: write it inside your package and do not
-raise it again at the end. That table exists so the same question is never put
-to them twice — treat a row in it as closed, not as an opening to re-argue.
+Then read *Kept local*. **If what you are about to write is listed there, the
+operator has ruled it out**: write it inside your package and leave it there.
+That table is their veto, not a suggestion — a row in it is closed.
 
 ### Keep them general, or they will never stop changing
 
@@ -146,73 +145,83 @@ specific to this package — and **reusable**: you can name another package that
 would want it.
 
 **A shared module that should change.** You read one during the task, it nearly
-fit, and you worked around it. Propose the change now, but only an **additive,
-backward-compatible** one: a new function beside the existing one, or a new
-keyword argument whose default preserves today's behaviour. Packages you cannot
-see already import that module and you cannot test them, so a changed signature
-or an altered return value is not yours to propose. If what you need cannot be
-done additively, say so in the question and recommend keeping it local.
+fit, and composing around it did not cover the gap. Raise it now, but only as an
+**additive, backward-compatible** change: a new function beside the existing
+one, or a new keyword argument whose default preserves today's behaviour.
+Packages you cannot see already import that module and you cannot test them, so
+a changed signature or an altered return value is not yours to propose. If what
+you need cannot be done additively, keep yours local and say so in your summary.
 
 Before you ask about either, two checks.
 
-**Is the loop switched on?** Call `mcp__dex__utility_proposals_enabled`. It is a
-global operator setting, read at the moment you call it, and it is on unless the
-operator has turned it off. If it answers `disabled`, **ask nothing**: leave the
-helper where it is, add no row to any table, and note in one line of your
-summary that you had something worth proposing and the setting was off. Do not
-work around it, and do not raise it as prose in the summary instead — off means
-not asked.
+**Is it vetoed?** Read the *Kept local* table below. It is the operator's list of
+helpers that are deliberately not shared. A row there settles it: leave yours in
+your package and say nothing more about it.
 
-**Is it already settled?** Read the *Kept local* table one more time. A row
-there is a decision already made; do not reopen it. If your case is genuinely
-different from what that row describes, say so in your summary instead of
-asking again.
+**Is sharing switched on?** Call `mcp__dex__utility_proposals_enabled`. It is a
+global operator setting, read at the moment you call it. If it answers
+`disabled`, **ask nothing**: leave the helper where it is, change nothing
+outside your directory, and note in one line of your summary what you would have
+shared. Do not work around the setting, and do not argue the case at length in
+the summary instead — off means not asked.
 
-If the loop is on and nothing settles it, call `mcp__dex__ask_user` **once**,
-with exactly these two options:
+If nothing vetoes it and sharing is on, call `mcp__dex__ask_user` **once**, with
+`kind` set to `"utility"` and exactly these two options, **in this order**:
 
-- **"Put it in the project `utils/`"** — write the module, or the added
-  function or argument, into the project's `utils/`; change your package to
-  import it from there; and **re-run your checks** so you know the move broke
-  nothing. Give whatever you add a **one-line docstring**, and the same for the
-  module if it is new: that line is what the next task reads, so it is the
-  interface, not a comment. Then regenerate the index:
+- **"Put it in the project `utils/`"**
+- **"Keep it in the task directory"**
 
-  ```
-  {{python}} -m dex.tools.utils_api <project directory>
-  ```
+The `kind` and the order both matter: they are how dex recognises this question
+and which option it takes as the affirmative one. Get either wrong and the
+question goes to the operator as an interruption instead.
 
-  You do not hand-maintain a list anywhere — `utils/API.md` is generated from
-  the code, and dex rewrites it before every task besides. Those writes land
-  outside your task directory, so each comes back to the operator for approval.
-  That is expected; wait for it.
-- **"Keep it in the task directory"** — it stays local to this package and
-  `utils/` is untouched, but **add a row for it to the *Kept local* table
-  below**, naming the helper and the reason in a line. That row is the whole
-  point of the table: without it the next task writes the same helper, reaches
-  the same conclusion, and asks the operator the same question again. It is one
-  write to this file, so it comes back for approval like any other.
+**The answer may come back instantly.** While sharing is on, dex answers this
+one for the operator rather than interrupting them, and the answer is to
+promote. That is not a reason to skip the question — it is how the decision gets
+recorded where the operator can see it — and it is not a reason to assume the
+answer either. Ask, wait, and do what comes back.
 
 Make the question concrete — name the module, say what it does in a line, say
 what you verified, and name the packages that would want it:
 
-> `validate_manifest(path)` checks a manifest against the schema above; run
-> here, and it caught two missing fields. Every package needs it. Put it in
-> the project `utils/`, or keep it local to this package?
+> `check_limb_symmetry(pose)` compares left and right limb lengths and reports
+> the mismatches; run here against all 20 landmarks. Every pose package needs it
+> before it is done. Put it in the project `utils/`, or keep it local to this
+> package?
 
-For a change to something that is already shared, say what is there now, what
-you need, and why your version is additive:
+**On "Put it in the project `utils/`", in this order:**
 
-> `utils/helpers.py` has `validate(obj)`, which does not cover the new field I
-> needed; I checked it locally. A `strict=False` keyword defaulting to
-> today's behaviour would cover it. Add it to `utils/helpers.py`, or keep it
-> local to this package?
+1. Write the module, or the added function or argument, into the project's
+   `utils/`.
+2. Give whatever you add a **one-line docstring**, and the same for the module
+   if it is new. That line is the interface the next task reads out of the
+   generated index, so it is not a comment — write it for a stranger.
+3. Change your package to import it from `utils/` and **delete the local copy**.
+   Two versions is the thing this avoids.
+4. **Re-run your checks.** You moved working code; you do not know it still
+   works until you have seen it pass from its new home.
+5. Regenerate the index:
+
+   ```
+   {{python}} -m dex.tools.utils_api <project directory>
+   ```
+
+You maintain no list by hand — `utils/API.md` and the roster in this file are
+both generated from the code, and dex rewrites them before every task besides.
+
+The writes land outside your task directory, so unless the operator has
+auto-approve on, each one still stops for their approval. Wait for it rather
+than abandoning the step. **If a write is declined, that is the answer** — put
+the helper back in your package, leave `utils/` as you found it, re-run your
+checks, and say so in your summary.
+
+**On "Keep it in the task directory"**, it stays where it is and `utils/` is
+untouched. Do not edit the *Kept local* table yourself; it is the operator's.
 
 Ask **once**, at the end, and only about code that has actually run. If several
 things belong together, name them all in that one question. Do not ask about a
-three-line helper only your package will ever use. If no answer comes back,
-keep it local, add **no** row — nothing was decided, and a silence recorded as a
-decision would close the question for every task after you — and say so in your
+three-line helper only your package will ever use — that is not a shared
+utility. If no answer comes back at all, keep it local and say so in your
 summary.
 
 A project-scoped task already has the project directory as its own, so its
@@ -239,12 +248,14 @@ A row is enough to tell whether a module is worth a closer look. When one is,
 `utils/API.md` gives every public signature and constant at about a tenth of
 the source; the module itself is the last resort.
 
-### Kept local — already decided
+### Kept local — the operator's veto
 
-Helpers the operator has decided **not** to share, one row each. A row here is
-settled: write the helper inside your own package and do not ask about it again.
-Add a row whenever the answer to your question is "keep it in the task
-directory".
+Helpers that are deliberately **not** shared, one row each. This table is
+maintained by the operator, not by you: **never add, edit, or remove a row.**
+Read it before you promote anything, and if what you have is listed, leave it in
+your package.
+
+It is empty unless someone has put something in it.
 
 | Helper | Why it stays local |
 |---|---|

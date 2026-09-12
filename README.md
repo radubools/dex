@@ -92,6 +92,66 @@ daemon does not otherwise see Postgres.app or `/opt/homebrew/bin`.
 npm run build
 ```
 
+## Backing up the generated material
+
+`assets/` and `datasets/` are **not in git** — a gigabyte of video and audio
+that changes with every run. They are copied to the external drive instead:
+
+```bash
+./scripts/backup-assets.sh
+```
+
+The script refuses to run when the drive is not mounted. That guard matters:
+`/Volumes/external` is an ordinary empty directory when nothing is plugged in,
+and a plain `rsync` would fill the boot disk while appearing to succeed. It is
+additive — no `--delete` — so a local mistake cannot erase the backup, at the
+cost of renamed packages leaving their old names behind. It logs to
+`.pm2-logs/backup-assets.log`.
+
+### The daily schedule
+
+It runs **daily at 12:30**, as a LaunchAgent at
+`~/Library/LaunchAgents/com.dex.backup-assets.plist`. The equivalent cron line,
+if you would rather use `crontab -e`:
+
+```
+30 12 * * * /Users/raduparadovschi/dex/scripts/backup-assets.sh
+```
+
+launchd rather than cron because this is a laptop: launchd runs a job that was
+missed while the Mac slept, and cron simply skips it. Midday rather than the
+small hours for the same reason — a 03:00 backup on a sleeping machine never
+happens.
+
+Managing it:
+
+```bash
+launchctl list | grep dex.backup
+```
+
+```bash
+launchctl kickstart gui/$(id -u)/com.dex.backup-assets
+```
+
+```bash
+launchctl bootout gui/$(id -u)/com.dex.backup-assets
+```
+
+### It needs Full Disk Access first
+
+macOS blocks background jobs from writing to external drives, so the scheduled
+run fails with `Operation not permitted` until the permission is granted — even
+though running the script by hand works, because a terminal already has it.
+
+In **System Settings → Privacy & Security → Full Disk Access**, add `/bin/sh`
+(press ⌘⇧G in the file picker to type the path), then:
+
+```bash
+launchctl kickstart gui/$(id -u)/com.dex.backup-assets
+```
+
+Check `.pm2-logs/backup-assets.log` for a `copied:` line rather than `FAILED:`.
+
 ## Where things live
 
 | Path | |

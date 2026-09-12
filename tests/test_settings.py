@@ -168,7 +168,7 @@ def test_the_settings_endpoint_toggles_utility_proposals(config, db, monkeypatch
         assert client.get("/api/settings").json()["settings"]["utility_proposals"] is True
 
 
-def test_the_brief_makes_a_task_check_the_switch_before_asking():
+def test_the_brief_makes_a_task_check_the_switch_before_promoting():
     """A flag nothing consults is decoration."""
     from pathlib import Path
 
@@ -181,16 +181,24 @@ def test_the_brief_makes_a_task_check_the_switch_before_asking():
         manim_available=True,
     )
     assert "mcp__dex__utility_proposals_enabled" in text
-    assert "you ask" in text and "nothing, change nothing outside your directory" in text
+    # Off: touch nothing outside the task directory. On: ask, tagged, and the
+    # answer may already be waiting.
+    assert "change nothing outside your directory" in text
+    assert '`kind` set to `"utility"`' in text
 
 
-def test_the_guides_gate_the_proposal_on_the_switch():
+def test_the_guides_gate_sharing_on_the_switch():
     from pathlib import Path
 
     for project in ("algorithms", "yoga"):
         guide = (Path("assets") / project / "AGENTS.md").read_text(encoding="utf-8")
         assert "mcp__dex__utility_proposals_enabled" in guide, project
+        # Disabled means leave the tree alone; enabled means ask, and dex
+        # answers on the operator's behalf.
         assert "**ask nothing**" in guide, project
+        assert "dex answers this" in guide, project
+        # And the operator's veto list is theirs alone.
+        assert "never add, edit, or remove a row" in guide, project
 
 
 async def test_effort_defers_to_the_deployment_until_an_operator_picks_one(db):
@@ -254,3 +262,44 @@ async def test_a_task_runs_at_the_operators_effort(config, db, monkeypatch):
 
     assert seen.get("effort") == "low"
     assert seen["effort"] != config.effort
+
+
+def test_utility_proposals_drive_the_task_concurrency(config, db, monkeypatch):
+    """The loop only works in sequence.
+
+    Six tasks in parallel all read the same roster before any of them promotes
+    anything, so several write the same helper and the operator answers the
+    same question six times.
+    """
+    from dex.config import PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY
+
+    monkeypatch.setattr("dex.queue.TaskRunner", __import__(
+        "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
+    with TestClient(create_app(config)) as client:
+        on = client.put("/api/settings", json={"utility_proposals": True}).json()["settings"]
+        assert on["task_concurrency"] == SEQUENTIAL_CONCURRENCY == 1
+
+        off = client.put("/api/settings", json={"utility_proposals": False}).json()["settings"]
+        assert off["task_concurrency"] == PARALLEL_CONCURRENCY == 6
+
+
+def test_an_explicit_concurrency_in_the_same_request_still_wins(config, db, monkeypatch):
+    """Coupling is a convenience, not a lock: the operator can still say."""
+    monkeypatch.setattr("dex.queue.TaskRunner", __import__(
+        "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
+    with TestClient(create_app(config)) as client:
+        body = client.put(
+            "/api/settings", json={"utility_proposals": True, "task_concurrency": 4}
+        ).json()["settings"]
+        assert body["utility_proposals"] is True
+        assert body["task_concurrency"] == 4
+
+
+def test_concurrency_set_on_its_own_does_not_disturb_the_flag(config, db, monkeypatch):
+    monkeypatch.setattr("dex.queue.TaskRunner", __import__(
+        "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
+    with TestClient(create_app(config)) as client:
+        client.put("/api/settings", json={"utility_proposals": True})
+        body = client.put("/api/settings", json={"task_concurrency": 5}).json()["settings"]
+        assert body["task_concurrency"] == 5
+        assert body["utility_proposals"] is True

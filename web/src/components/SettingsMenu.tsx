@@ -178,7 +178,7 @@ export function SettingsMenu({
           <label className="menu-row toggle">
             <span>
               Utility proposals
-              <small>Let a task ask to share a helper in the project's utils/</small>
+              <small>Let a task ask to share a helper in the project's utils/; runs tasks one at a time</small>
             </span>
             <input
               type="checkbox"
@@ -193,7 +193,15 @@ export function SettingsMenu({
           <div className="menu-row">
             <span>
               Tasks at once
-              <small>{data ? `${data.running} running` : ' '}</small>
+              {/* Turning proposals on drops this to 1, which looks like a bug
+                  unless the reason is next to the number. */}
+              <small>
+                {settings?.utility_proposals === false
+                  ? data
+                    ? `${data.running} running`
+                    : ' '
+                  : 'one at a time, so utility proposals land in order'}
+              </small>
             </span>
             <Stepper
               value={settings?.task_concurrency ?? 3}

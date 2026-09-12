@@ -111,7 +111,7 @@ export type DexEvent = Base &
     | { type: 'asset'; path: string; kind: AssetKind; bytes: number; change: string }
     | { type: 'tags'; project: string; slug: string; tags: string[]; removed: boolean }
     | { type: 'question'; id: string; question: string; options: string[] }
-    | { type: 'question_answered'; id: string; answer: string }
+    | { type: 'question_answered'; id: string; answer: string; auto?: boolean }
     | { type: 'approval'; id: string; tool: string; title: string; input: Record<string, string>; auto?: boolean }
     | { type: 'approval_resolved'; id: string; decision: string; auto?: boolean }
     | { type: 'result'; ok: boolean; durationMs: number; turns: number; costUsd: number; summary: string }

@@ -375,9 +375,16 @@ function QuestionRow({
   if (item.answer !== undefined) {
     return (
       <div className="feed-card question answered">
-        <div className="card-kind">Asked</div>
-        <div className="card-title">{item.question}</div>
-        <div className="muted small">You said: {item.answer}</div>
+        {/* Said by whom matters: an automatic answer is dex acting on a
+            standing setting, not a decision the operator made just now. */}
+        <div className="card-kind">{item.auto ? 'Asked — answered automatically' : 'Asked'}</div>
+        <div className="card-title">
+          <Prose text={item.question} />
+        </div>
+        <div className="muted small">
+          {item.auto ? 'Utility sharing is on, so dex said: ' : 'You said: '}
+          <Prose text={item.answer} inline />
+        </div>
       </div>
     )
   }
@@ -389,10 +396,16 @@ function QuestionRow({
   return (
     <div className="feed-card question">
       <div className="card-kind">dex is asking</div>
-      <div className="card-title">{item.question}</div>
+      <div className="card-title">
+        <Prose text={item.question} />
+      </div>
       <div className="options">
         {item.options.map((option) => (
-          <button key={option} className="option" onClick={() => send(option)}>{option}</button>
+          // The label is rendered; `option` itself is what goes back, so the
+          // agent receives the string it offered rather than stripped markup.
+          <button key={option} className="option" onClick={() => send(option)}>
+            <Prose text={option} inline />
+          </button>
         ))}
       </div>
       <div className="freeform">

@@ -14,6 +14,18 @@ MAX_WORKERS = 16
 #: Used until the database has a value of its own.
 DEFAULT_CONCURRENCY = 3
 
+#: Tasks at once while shared-utility proposals are on. One at a time, because
+#: a promotion has to land — and `utils/API.md` be regenerated — before the next
+#: task reads the index. Six in parallel all read the same empty roster, several
+#: write the same helper, and the operator answers the same question six times.
+SEQUENTIAL_CONCURRENCY = 1
+
+#: Restored when proposals are switched off. Deliberately not
+#: DEFAULT_CONCURRENCY: that is the cold-start guess for a fresh install, while
+#: this is the parallelism an operator turning the loop off is asking to get
+#: back.
+PARALLEL_CONCURRENCY = 6
+
 
 def _env_path(name: str, default: Path) -> Path:
     raw = os.environ.get(name)

@@ -94,8 +94,9 @@ def test_the_brief_opens_a_door_for_shared_utilities():
     assert "The one exception is shared utilities" in text
     # The three things that make the loop actually run.
     assert "Reading is always allowed" in text
-    assert "only at the very end, and only after the operator says so" in text
-    assert "comes back to the operator for approval" in text
+    assert '`kind` set to `"utility"`' in text
+    assert "may come back instantly" in text
+    assert "stops for the operator" in text
     # And it fires at the finish, not mid-task.
     assert "before you write your summary" in text
 
@@ -124,7 +125,7 @@ def test_the_guides_define_the_protocol_the_brief_points_at():
         assert "dex.tools.utils_api" in guide, project
         # Ask at the end, with the operator's two options.
         assert "prove it first, then ask at the end" in guide, project
-        assert "Keep it in the task directory" in guide, project
+        assert "dex answers this" in guide, project
         assert "Put it in the project `utils/`" in guide, project
         # Utilities general enough that tasks are not forever editing them.
         assert "Keep them general" in guide, project
@@ -136,7 +137,7 @@ def test_the_guides_define_the_protocol_the_brief_points_at():
         # A "no" sticks, so the next task does not ask the same question again.
         assert "Kept local" in guide, project
         assert "Why it stays local" in guide, project
-        assert "do not ask about it again" in guide, project
+        assert "ruled it out" in guide, project
 
 
 def test_declining_a_promotion_is_recorded_so_it_is_not_re_asked():
@@ -147,13 +148,11 @@ def test_declining_a_promotion_is_recorded_so_it_is_not_re_asked():
     again.
     """
     text = brief(ALGORITHMS / "two-sum")
-    assert 'A "no" is recorded too' in text
-    assert "stops the next task putting the same question to the operator" in text
-    # Silence is not a decision, so it records nothing.
-    assert "if none arrives, keep it local and" in text
-    assert "write nothing to `AGENTS.md`" in text
-    # And a settled row is checked before asking, not after.
-    assert "record this decision" in text
+    assert "The project instructions carry a veto" in text
+    assert "never edit that list yourself" in text
+    # A declined write is an answer, not a reason to give up halfway.
+    assert "If a write\n  is declined" in text
+    assert "leave `utils/` as you found\n  it" in text
 
 
 def test_a_new_project_starts_with_the_protocol():
@@ -161,8 +160,8 @@ def test_a_new_project_starts_with_the_protocol():
 
     guide = STARTER_GUIDE.format(name="Demo", description="A demo.")
     assert "Shared utilities" in guide
-    assert "mcp__dex__ask_user" in guide
-    assert "Keep it in the task directory" in guide
+    assert "mcp__dex__utility_proposals_enabled" in guide
+    assert "Do not ask" in guide
     assert "Kept local" in guide
 
 

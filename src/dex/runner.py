@@ -146,11 +146,10 @@ class TaskRunner:
         #: Streaming block index -> the id the UI accumulates deltas under.
         self._blocks: dict[int, str] = {}
         self._block_kinds: dict[int, str] = {}
-        #: Thinking text accumulated per streaming block, and the completed
-        #: blocks it produced. A finished ThinkingBlock whose text is not in
-        #: here never streamed, so it has to be emitted whole.
-        self._thinking_parts: dict[int, list[str]] = {}
-        self._streamed_thinking: set[str] = set()
+        #: Whether this transport streams thinking at all. Set by the first
+        #: thinking delta and never cleared: one delta proves the deltas are
+        #: coming, so no completed block ever needs emitting whole.
+        self._thinking_streams = False
         #: Running list-price estimate, so a task shows spend while it works
         #: instead of nothing until it finishes.
         self._estimated_cost = 0.0
@@ -202,14 +201,31 @@ class TaskRunner:
             if self.task.state is TaskState.AWAITING_INPUT:
                 self.set_state(TaskState.RUNNING)
 
+    async def _auto_answer(self, kind: str, options: list[str]) -> str | None:
+        """The answer dex gives on the operator's behalf, or None to ask them.
+
+        Only the shared-utility question, and only while the setting is on. The
+        first option is the affirmative one — the project guides fix that order,
+        and an empty list means the agent offered nothing to pick.
+        """
+        if kind.strip().lower() != "utility" or not options:
+            return None
+        # Read now rather than at task start, so turning sharing off stops the
+        # next question in a run already going.
+        if not await self.settings.utility_proposals():
+            return None
+        return options[0]
+
     def _ask_user_server(self) -> Any:
         import uuid
 
         @tool(
             "ask_user",
             "Ask the operator one clarifying question about the problem statement. "
-            "Use it only when the answer changes the algorithm, and offer concrete options.",
-            {"question": str, "options": list},
+            "Use it only when the answer changes the algorithm, and offer concrete options. "
+            "Pass kind='utility' for the end-of-task question about promoting a helper "
+            "into the project's utils/, which dex may answer for the operator.",
+            {"question": str, "options": list, "kind": str},
         )
         async def ask_user(args: dict[str, Any]) -> dict[str, Any]:
             question_id = uuid.uuid4().hex[:12]
@@ -220,6 +236,14 @@ class TaskRunner:
                 question=str(args.get("question", "")),
                 options=options,
             )
+            # A utility question has one answer while sharing is on, and the
+            # operator said so by leaving the setting on. Still asked, so the
+            # decision is recorded where they can see it, but answered here
+            # rather than parking the task on a doorbell nobody needs to hear.
+            auto = await self._auto_answer(str(args.get("kind", "")), options)
+            if auto is not None:
+                self.emit("question_answered", id=question_id, answer=auto, auto=True)
+                return {"content": [{"type": "text", "text": auto}]}
             answer = await self._park(question_id, "waiting on a clarifying question")
             self.emit("question_answered", id=question_id, answer=answer)
             return {"content": [{"type": "text", "text": str(answer)}]}
@@ -470,16 +494,13 @@ class TaskRunner:
             if delta.get("type") == "text_delta" and delta.get("text"):
                 self.emit("text_delta", id=block_id, delta=delta["text"])
             elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
-                self._thinking_parts.setdefault(index, []).append(delta["thinking"])
+                self._thinking_streams = True
                 self.emit("thinking_delta", id=block_id, delta=delta["thinking"])
             return
 
         if kind == "content_block_stop":
             block_id = self._blocks.pop(index, None)
             self._block_kinds.pop(index, None)
-            parts = self._thinking_parts.pop(index, None)
-            if parts:
-                self._streamed_thinking.add("".join(parts))
             if block_id is not None:
                 self.emit("block_end", id=block_id)
 
@@ -551,7 +572,14 @@ class TaskRunner:
                     # Thinking usually arrives as deltas too — but when the CLI
                     # hands it over only as a finished block, skipping it here
                     # dropped it entirely and the task looked idle for minutes.
-                    if block.thinking and block.thinking not in self._streamed_thinking:
+                    #
+                    # Matching this text against what streamed is what the first
+                    # version did, and it duplicated every block in the panel:
+                    # the SDK yields this message before the block's trailing
+                    # `content_block_stop`, so the comparison ran against a set
+                    # that did not have the text yet. One delta anywhere in the
+                    # run is proof enough that the deltas are coming.
+                    if block.thinking and not self._thinking_streams:
                         self.emit("thinking", text=block.thinking)
                     continue
                 if isinstance(block, ToolUseBlock):

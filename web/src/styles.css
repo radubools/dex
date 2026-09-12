@@ -245,6 +245,15 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 .card-kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .card-title { font-weight: 600; }
+/* A question is markdown now. The weight belongs to the card, not to every
+   element inside it, or inline `code` and links come out bolder than the ask. */
+.card-title .prose-md { font-weight: 400; }
+.card-title .prose-md > *:last-child { margin-bottom: 0; }
+/* Inline mode has no block children to normalise, so it needs its own reset:
+   a label inside a button must not introduce line boxes of its own. */
+.prose-md.inline { display: inline; }
+.prose-md.inline code { font-size: 0.9em; }
+.option .prose-md.inline { color: inherit; }
 
 .plan-row {
   display: flex; gap: 10px; align-items: flex-start;

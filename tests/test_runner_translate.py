@@ -166,6 +166,60 @@ async def test_streamed_thinking_is_not_repeated_as_a_whole_block(runner):
     assert [e for e in history if e.type == "thinking"] == []
 
 
+async def test_a_block_that_has_not_closed_yet_is_still_not_repeated(runner):
+    """The duplicate every task showed in the panel.
+
+    The SDK yields the AssistantMessage before the block's trailing
+    `content_block_stop`. The first version banked the streamed text at the
+    stop and compared against it here, so the comparison ran against a set that
+    did not have the text yet and every thinking block was rendered twice —
+    once streamed, once whole, with identical content.
+    """
+    run, bus = runner
+    stream(run, "u1", {"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "thinking"}})
+    for piece in ("weighing ", "the ", "approach"):
+        stream(run, "u1", {"type": "content_block_delta", "index": 0,
+                           "delta": {"type": "thinking_delta", "thinking": piece}})
+    # No content_block_stop: the message lands first, exactly as it does live.
+    run._translate(
+        AssistantMessage(
+            content=[ThinkingBlock(thinking="weighing the approach", signature="x")],
+            model="claude-opus-5",
+            usage=None,
+        )
+    )
+    stream(run, "u1", {"type": "content_block_stop", "index": 0})
+    await asyncio.sleep(0.2)
+
+    history = await bus.history()
+    assert [e for e in history if e.type == "thinking"] == []
+    assert "".join(e.data["delta"] for e in history if e.type == "thinking_delta") == (
+        "weighing the approach"
+    )
+
+
+async def test_a_later_block_is_not_repeated_either(runner):
+    """One delta proves the transport streams; every block after is covered."""
+    run, bus = runner
+    for turn, text in (("u1", "first thought"), ("u2", "second thought")):
+        stream(run, turn, {"type": "content_block_start", "index": 0,
+                           "content_block": {"type": "thinking"}})
+        stream(run, turn, {"type": "content_block_delta", "index": 0,
+                           "delta": {"type": "thinking_delta", "thinking": text}})
+        run._translate(
+            AssistantMessage(
+                content=[ThinkingBlock(thinking=text, signature="x")],
+                model="claude-opus-5",
+                usage=None,
+            )
+        )
+        stream(run, turn, {"type": "content_block_stop", "index": 0})
+    await asyncio.sleep(0.2)
+
+    assert [e for e in await bus.history() if e.type == "thinking"] == []
+
+
 async def test_text_blocks_are_still_skipped_after_the_thinking_change(runner):
     """Splitting the isinstance check must not start duplicating text."""
     run, bus = runner
@@ -260,3 +314,38 @@ async def test_a_diff_failure_does_not_block_the_edit(runner, monkeypatch):
     context = type("Ctx", (), {"tool_use_id": "t1", "title": None, "description": None})()
     # The edit still goes through even though its diff could not be built.
     assert await decide("Write", {"file_path": "/tmp/x.py", "content": "x"}, context) == "allowed"
+
+
+async def test_a_utility_question_answers_itself_while_sharing_is_on(runner, db):
+    """Asked so the operator can see it, answered so they are not stopped.
+
+    The question is the record of the decision; parking the task on it while
+    the setting already says yes is the interruption the setting exists to
+    remove.
+    """
+    from dex.store import SettingsStore
+
+    run, _ = runner
+    options = ["Put it in the project `utils/`", "Keep it in the task directory"]
+    assert await run._auto_answer("utility", options) == options[0]
+
+    # Off, and the operator is asked as before.
+    await SettingsStore(db).set(SettingsStore.UTILITY_PROPOSALS, False)
+    assert await run._auto_answer("utility", options) is None
+
+
+async def test_only_the_utility_question_answers_itself(runner):
+    """Every other question is still the operator's to answer."""
+    run, _ = runner
+    options = ["Two pointers", "Hash map"]
+    assert await run._auto_answer("", options) is None
+    assert await run._auto_answer("clarify", options) is None
+    # A tagged question with nothing to choose from is not answerable either.
+    assert await run._auto_answer("utility", []) is None
+
+
+async def test_the_tag_is_read_loosely(runner):
+    """A model that shouts or pads the tag still means the same thing."""
+    run, _ = runner
+    options = ["Put it in the project `utils/`", "Keep it in the task directory"]
+    assert await run._auto_answer(" Utility ", options) == options[0]
