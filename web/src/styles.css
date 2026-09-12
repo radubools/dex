@@ -1,0 +1,1304 @@
+:root {
+  --bg: #0b0d12;
+  --panel: #12151d;
+  --panel-2: #171b25;
+  --line: #232838;
+  --text: #e7e9ee;
+  --muted: #8b93a7;
+  --accent: #7dd3fc;
+  --add: #4ade80;
+  --add-bg: rgba(74, 222, 128, 0.09);
+  --del: #f87171;
+  --del-bg: rgba(248, 113, 113, 0.09);
+  --warn: #fbbf24;
+  --radius: 14px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, -apple-system, system-ui, "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.error { color: var(--del); }
+.pass { color: var(--add); }
+
+/* ---------------- layout ----------------
+   Phone: chat fills the screen; threads slide in, task panel and viewer are
+   bottom sheets. Desktop (>=1000px): threads | chat | task panel, viewer
+   replacing the task panel's column. */
+
+.app {
+  display: grid;
+  grid-template-columns: 1fr;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* The implicit column would be `auto`, which sizes to the widest child and
+     so never shrinks: on a phone that pushed the topbar and the chat past the
+     screen edge. `minmax(0, 1fr)` lets the single column be narrower than its
+     content, which is what makes the children wrap instead of overflow. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  height: 100dvh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+.view-toggle {
+  display: flex; flex: none;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
+}
+.view-toggle button {
+  /* Sized for a finger and a glyph, not for a word. */
+  min-width: 44px; min-height: 40px; padding: 0 10px;
+  background: none; border: none;
+  color: var(--muted); font-size: 15px; line-height: 1;
+}
+.view-toggle button.on { color: var(--text); background: var(--line); }
+.view-toggle button:first-child { border-radius: 8px 0 0 8px; }
+.view-toggle button:last-child { border-radius: 0 8px 8px 0; }
+
+.topbar-title {
+  flex: 1; min-width: 0; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---------------- auto-approve switch ---------------- */
+
+.auto-approve {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 0 4px;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+  user-select: none; white-space: nowrap;
+}
+.auto-approve input {
+  /* Kept in the accessibility tree but visually replaced by .switch. */
+  position: absolute; opacity: 0; width: 1px; height: 1px;
+}
+.auto-approve .switch {
+  position: relative; flex: none;
+  width: 38px; height: 22px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.auto-approve .switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--muted); transition: transform 0.15s ease, background 0.15s ease;
+}
+.auto-approve.on { color: var(--warn); }
+.auto-approve.on .switch {
+  background: color-mix(in srgb, var(--warn) 28%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+}
+.auto-approve.on .switch::after { transform: translateX(16px); background: var(--warn); }
+.auto-approve input:focus-visible + .switch {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+/* The label is a lot of width on a phone; the switch alone carries the state. */
+@media (max-width: 520px) { .auto-label { display: none; } }
+
+/* Six controls do not fit across a phone. Wrapping puts the drawer button,
+   project and view toggle on the first line, and gives the title its own line
+   with the buttons that act on it — rather than crushing the title to nothing
+   and pushing Settings off-screen. */
+@media (max-width: 560px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    /* Tighter than the desktop 10px: the controls only fit one row with it.
+       At 375px they need 353px of the 359px this leaves — six to spare. */
+    column-gap: 5px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .topbar-title {
+    /* `order` puts the title after every control whatever the source order,
+       and a 100% basis makes it take a row to itself — otherwise it wrapped
+       and dragged the buttons to its right down with it. */
+    order: 1;
+    flex: 1 0 100%;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    /* It owns the row, so it reads centred rather than hugging the left. */
+    text-align: center;
+  }
+  /* Settings is the last control, pushed to the far edge so the row reads as
+     navigation on the left and settings on the right. */
+  .topbar > *:last-child { margin-left: auto; }
+  /* The project name gives way before a control is pushed onto a new row, and
+     it has to be a hard cap rather than a share of the viewport: flexbox picks
+     line breaks from each item's own width before it shrinks anything, so a
+     long name like "Algorithms" pushed Settings onto a third row. The full
+     name is still in the dropdown. */
+  .topbar .project-trigger { max-width: 144px; }
+}
+
+/* Icon-only header buttons. The label moves into `title`/`aria-label` so the
+   six header controls fit one row on a phone instead of wrapping or running
+   off the edge. Sized for a finger, not for the glyph. */
+.topbar button.icon-only {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 44px; min-height: 40px; padding: 0 10px;
+  font-size: 15px; line-height: 1;
+}
+
+/* ---------------- threads ---------------- */
+
+.threads {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(82vw, 320px);
+  z-index: 30;
+  transform: translateX(-102%);
+  transition: transform 0.2s ease-out;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding-top: env(safe-area-inset-top);
+}
+.threads.open { transform: none; }
+
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 25; }
+
+.threads-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px; border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 650; letter-spacing: 0.02em; }
+
+.thread-list { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.thread-row { display: flex; align-items: center; border-radius: 10px; }
+.thread-row.on { background: var(--panel-2); }
+.thread-open {
+  flex: 1; min-width: 0; text-align: left;
+  display: flex; flex-direction: column; gap: 2px;
+  background: none; border: none; padding: 10px; min-height: 44px;
+}
+/* Wrapped rather than truncated: a phone-width drawer cut most of a name off,
+   and thread names ("Yoga · design") are how you tell threads apart. */
+.thread-title { overflow-wrap: anywhere; }
+.thread-meta { font-size: 11px; color: var(--muted); }
+
+.health { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border-top: 1px solid var(--line); }
+.chip {
+  font-size: 11px; padding: 3px 8px; border-radius: 999px;
+  background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+}
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+
+/* ---------------- chat ---------------- */
+
+.chat {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 14px 24px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.empty { margin: auto 0; max-width: 46ch; }
+.empty h2 { font-size: 18px; margin: 0 0 8px; }
+
+.bubble.user {
+  align-self: flex-end; max-width: 88%;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 4px var(--radius);
+  padding: 10px 13px; white-space: pre-wrap;
+}
+.prose { white-space: pre-wrap; margin: 0; }
+
+.chat-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+/* ---------------- plan ---------------- */
+
+.plan-card, .feed-card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.card-kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.card-title { font-weight: 600; }
+
+.plan-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel-2);
+}
+.plan-row.off { opacity: 0.45; }
+/* Already queued or finished: visibly out of play, and not clickable. */
+.plan-row.started { opacity: 0.5; background: var(--panel); }
+.plan-row.started .plan-title { text-decoration: line-through; text-decoration-color: var(--muted); }
+.plan-pick { display: flex; align-items: flex-start; padding-top: 2px; cursor: pointer; }
+.plan-pick input { width: 18px; height: 18px; accent-color: var(--accent); }
+.plan-row.started .plan-pick { cursor: not-allowed; }
+.plan-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.plan-title { font-weight: 550; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 6px; border-radius: 999px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+}
+.plan-slug { font-family: ui-monospace, monospace; font-size: 11px; color: var(--accent); }
+/* The fold for finished work: a link, not a button, because it reveals rather
+   than acts. */
+.plan-done-toggle {
+  align-self: flex-start;
+  min-height: 36px; padding: 0;
+  background: none; border: none;
+  color: var(--accent); font-size: 12px; text-align: left;
+}
+.plan-problem {
+  margin: 2px 0 0; font-size: 12px; color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.plan-problem.open { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.plan-more {
+  align-self: flex-start; margin-top: 4px; padding: 4px 0;
+  background: none; border: none; color: var(--accent); font-size: 11px;
+}
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions button {
+  flex: 1 1 auto; min-height: 44px; min-width: 96px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2);
+}
+.actions .primary { background: var(--accent); color: #06212e; border-color: transparent; font-weight: 600; }
+.actions .primary:disabled { background: var(--panel-2); color: var(--muted); font-weight: 400; }
+.actions .danger { color: var(--del); }
+
+/* ---------------- task chips ---------------- */
+
+.started { display: flex; flex-direction: column; gap: 8px; }
+.task-chips { display: flex; flex-direction: column; gap: 8px; }
+
+.task-chip {
+  position: relative; overflow: hidden;
+  display: grid;
+  /* Two rows rather than three columns. The title and the live activity were
+     competing for one row, and a long activity ("Edit assets/yoga/.../
+     pigeon_pose.json") squeezed the title to nothing — which, with `anywhere`,
+     broke the name into one character per line. On its own row the name always
+     has the full width. */
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "dot title"
+    "dot state";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+  min-height: 52px; padding: 10px 12px; text-align: left;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+}
+.task-chip.active { border-color: var(--accent); }
+.task-chip > .state-dot { grid-area: dot; }
+/* min-width:0 lets the title be the column that gives way; without it the grid
+   refuses to shrink it and crushes the state label instead. It wraps rather
+   than truncating, because the title is what tells two tasks apart. */
+.chip-title { grid-area: title; min-width: 0; overflow-wrap: anywhere; }
+.chip-state {
+  grid-area: state; justify-self: start;
+  font-size: 11px; color: var(--muted);
+  min-width: 0; max-width: 100%;
+  /* Two lines, then ellipsis. It has the row to itself so it may wrap, but the
+     activity is whatever the agent is running — sometimes a multi-line shell
+     command — and unbounded wrapping made a single chip 1552px tall. */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.chip-progress {
+  position: absolute; left: 0; bottom: 0; height: 2px;
+  background: var(--accent); transition: width 0.4s ease;
+}
+
+.state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.state-dot.running { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.state-dot.awaiting_input { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+.state-dot.succeeded { background: var(--add); }
+.state-dot.failed, .state-dot.cancelled { background: var(--del); }
+.state-dot.paused { background: var(--accent); opacity: 0.6; }
+
+/* ---------------- composer ---------------- */
+
+.composer {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--panel);
+}
+.composer textarea {
+  flex: 1; resize: none; min-height: 44px; max-height: 40dvh;
+  padding: 11px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  /* Inputs do not inherit the page font; 16px also stops iOS Safari zooming
+     the page when the field takes focus. */
+  font-family: inherit; font-size: 16px; line-height: 1.4; field-sizing: content;
+}
+.composer textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+.send-btn {
+  min-height: 44px; min-width: 66px; padding: 0 16px; border-radius: 12px;
+  border: 1px solid transparent; background: var(--accent); color: #06212e; font-weight: 600;
+}
+.send-btn:disabled { background: var(--panel-2); color: var(--muted); }
+
+/* ---------------- task panel ---------------- */
+
+.task-panel, .viewer {
+  /* On a phone these are full screens in a navigation stack, not sheets: the
+     chat is behind them and `‹` pops back to it. */
+  position: fixed; inset: 0; z-index: 20;
+  display: grid; background: var(--bg);
+  /* Same reason as `.main`: the implicit column is `auto`, so a long task
+     title sized the whole panel wider than the screen. */
+  grid-template-columns: minmax(0, 1fr);
+  animation: slide-in 0.2s ease-out;
+}
+.viewer { z-index: 21; }
+@keyframes slide-in {
+  from { transform: translateX(6%); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+/* Back chevron: the navigation affordance on mobile, hidden on desktop where
+   the panes sit side by side. */
+.back-btn {
+  min-width: 40px; min-height: 44px; margin-left: -8px;
+  background: none; border: none; color: var(--accent); font-size: 26px;
+  line-height: 1; padding: 0 8px;
+}
+/* An extra row when the paused note is showing; grid tolerates the spare. */
+.task-panel { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+.task-panel.with-composer { grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+.viewer { grid-template-rows: auto minmax(0, 1fr); }
+
+.panel-head, .viewer-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.panel-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.icon-btn {
+  margin-left: auto; min-width: 44px; min-height: 44px;
+  background: none; border: none; color: var(--muted); font-size: 17px;
+}
+.icon-btn.small { min-width: 36px; min-height: 36px; font-size: 13px; margin: 0; }
+.icon-btn.menu { margin: 0; }
+
+.progress { height: 3px; background: var(--panel-2); }
+.progress-fill { height: 100%; background: var(--accent); transition: width 0.5s ease; }
+.progress-fill.succeeded { background: var(--add); }
+.progress-fill.failed, .progress-fill.cancelled { background: var(--del); }
+.progress-fill.paused { background: var(--accent); opacity: 0.5; }
+
+.paused-note { margin: 0; padding: 0 14px 8px; }
+.panel-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; }
+.badge {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.badge.running, .badge.awaiting_input { color: var(--accent); }
+.badge.succeeded { color: var(--add); }
+.badge.failed, .badge.cancelled { color: var(--del); }
+.badge.paused { color: var(--accent); }
+.ghost-btn {
+  min-height: 40px; padding: 0 14px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--line);
+}
+.ghost-btn.small { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.ghost-btn.accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ghost-btn:disabled { opacity: 0.5; }
+
+.load-error {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 10px; font-size: 13px;
+  background: var(--del-bg); color: var(--del);
+  border: 1px solid color-mix(in srgb, var(--del) 40%, var(--line));
+}
+
+.tabs { display: flex; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.tabs button {
+  background: none; border: none; padding: 10px 12px; min-height: 44px;
+  color: var(--muted); border-bottom: 2px solid transparent;
+}
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+.panel-body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 14px calc(20px + env(safe-area-inset-bottom)); }
+
+/* ---------------- activity feed ---------------- */
+
+.feed { display: flex; flex-direction: column; gap: 10px; }
+.feed-text { margin: 0; }
+.feed-thinking {
+  color: var(--muted); font-size: 13px;
+  border-left: 2px solid var(--line); padding-left: 10px;
+}
+.feed-thinking summary {
+  cursor: pointer; display: flex; gap: 8px; align-items: baseline;
+  list-style: none;
+}
+.feed-thinking summary::-webkit-details-marker { display: none; }
+.feed-thinking summary::before { content: '▸'; color: var(--muted); }
+.feed-thinking[open] summary::before { content: '▾'; }
+.thinking-peek {
+  flex: 1; min-width: 0; font-style: italic; opacity: 0.7;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.feed-thinking[open] .thinking-peek { display: none; }
+
+/* A caret while tokens are still arriving. */
+.feed-text.streaming .prose-md > *:last-child::after {
+  content: '▍'; margin-left: 2px; color: var(--accent);
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.prose-md > *:first-child { margin-top: 0; }
+.prose-md > *:last-child { margin-bottom: 0; }
+.prose-md p { margin: 0 0 0.6em; }
+.prose-md ul, .prose-md ol { margin: 0 0 0.6em; padding-left: 1.3em; }
+.prose-md code {
+  background: var(--panel-2); padding: 1px 5px; border-radius: 5px; font-size: 0.88em;
+}
+.prose-md pre {
+  background: #0e1117; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; overflow-x: auto; font-size: 12px;
+}
+.prose-md pre code { background: none; padding: 0; }
+.prose-md h1, .prose-md h2, .prose-md h3 { font-size: 14px; margin: 0.8em 0 0.3em; }
+.prose-md table { border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; }
+.prose-md th, .prose-md td { border: 1px solid var(--line); padding: 4px 8px; }
+
+.feed-tool { display: flex; align-items: baseline; gap: 9px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.tool-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.feed-tool.running .tool-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.feed-tool.ok .tool-dot { background: var(--add); }
+.feed-tool.error .tool-dot { background: var(--del); }
+.feed-tool .tool-title { color: var(--text); }
+/* The path being edited rides in these rows and is the thing that overflowed
+   the activity panel; nothing here is allowed to be unbreakable. */
+.feed-tool, .feed-tool * { min-width: 0; overflow-wrap: anywhere; }
+.tool-out {
+  flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px; font-size: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  white-space: pre-wrap; overflow-x: auto;
+}
+
+.feed-diff {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 44px; padding: 8px 12px; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+}
+.feed-diff:active { border-color: var(--accent); }
+.diff-icon { color: var(--accent); font-weight: 700; }
+.diff-path {
+  flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 12px;
+  /* `anywhere`, not `break-word`: a path has no spaces to break at, so any
+     other value leaves it one long unbreakable run that overflows. */
+  overflow-wrap: anywhere;
+}
+.counts { font-size: 12px; white-space: nowrap; }
+.counts .add { color: var(--add); }
+.counts .del { color: var(--del); }
+
+.feed-result { color: var(--muted); font-size: 12px; }
+.error-box {
+  margin: 0; padding: 10px 12px; font-size: 12px; white-space: pre-wrap;
+  background: var(--del-bg); border: 1px solid color-mix(in srgb, var(--del) 40%, var(--line));
+  border-radius: 10px; color: var(--del); overflow-x: auto;
+}
+
+.feed-card.approval.pending { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.options { display: flex; flex-direction: column; gap: 8px; }
+.option {
+  text-align: left; min-height: 44px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2);
+}
+.option:active { border-color: var(--accent); }
+.freeform { display: flex; gap: 8px; }
+.freeform input {
+  flex: 1; min-height: 44px; padding: 0 12px; font-family: inherit; font-size: 16px;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text);
+}
+.freeform button { min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); }
+
+/* ---------------- task composer + queued notes ---------------- */
+
+.task-composer {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--panel);
+}
+.task-composer textarea {
+  flex: 1; resize: none; min-height: 40px; max-height: 30dvh;
+  padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  font-family: inherit; font-size: 16px; line-height: 1.4; field-sizing: content;
+}
+.task-composer .send-btn { min-height: 40px; min-width: 64px; }
+
+.feed-note { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.feed-note .bubble.user { max-width: 100%; }
+
+.queued-notes {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px; border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px dashed color-mix(in srgb, var(--warn) 40%, var(--line));
+}
+.queued-note { font-size: 13px; }
+
+/* ---------------- asset explorer ---------------- */
+
+.explorer { display: flex; flex-direction: column; gap: 16px; }
+.explorer-group { display: flex; flex-direction: column; gap: 4px; }
+.explorer-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); padding-bottom: 2px;
+}
+.asset-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 46px; padding: 8px 10px; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+}
+.asset-row.open { border-color: var(--accent); }
+.asset-icon { flex: none; }
+.asset-name {
+  flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.asset-size { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* ---------------- viewer ---------------- */
+
+.viewer-path {
+  font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
+  min-width: 0; overflow-wrap: anywhere;
+}
+.viewer-body {
+  overflow: auto; -webkit-overflow-scrolling: touch;
+  padding: 14px calc(14px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+}
+.code-view { margin: 0; font-size: 12.5px; line-height: 1.6; white-space: pre; overflow-x: auto; }
+
+.gif-view { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.gif-view img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); }
+
+.manifest { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 12px; }
+.manifest th, .manifest td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+.manifest th { color: var(--muted); font-weight: 500; }
+
+.dir-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+/* ---------------- diff ---------------- */
+
+.diff { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 12px; background: #0e1117; }
+.diff-line { display: flex; gap: 8px; padding: 1px 8px; }
+.diff-line code { white-space: pre-wrap; word-break: break-word; }
+.diff-gutter { color: var(--muted); user-select: none; flex: none; width: 1ch; }
+.diff-add { background: var(--add-bg); }
+.diff-add .diff-gutter, .diff-add code { color: var(--add); }
+.diff-del { background: var(--del-bg); }
+.diff-del .diff-gutter, .diff-del code { color: var(--del); }
+.diff-hunk { color: var(--muted); background: var(--panel-2); }
+.diff-more {
+  width: 100%; padding: 8px; min-height: 40px; background: var(--panel-2);
+  border: none; border-top: 1px solid var(--line); color: var(--accent); font-size: 12px;
+}
+
+/* ---------------- markdown + mermaid ---------------- */
+
+.markdown { max-width: 72ch; }
+.markdown h1 { font-size: 20px; }
+.markdown h2 { font-size: 17px; margin-top: 1.6em; }
+.markdown p, .markdown li { color: #d5d9e2; }
+.markdown code { background: var(--panel-2); padding: 1px 5px; border-radius: 5px; font-size: 0.88em; }
+.md-code { background: #0e1117; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
+.markdown table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; font-size: 13px; }
+.markdown th, .markdown td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+.markdown blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+
+.mermaid-slot {
+  margin: 14px 0; padding: 10px; background: #0e1117;
+  border: 1px solid var(--line); border-radius: 10px; overflow-x: auto;
+}
+.mermaid-slot svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+/* A slot with no SVG yet must still reserve space, or the panel jumps as
+   diagrams appear. */
+.mermaid-slot:empty { min-height: 120px; }
+.mermaid-error { color: var(--del); font-size: 12px; }
+
+.fatal { padding: 32px 20px; max-width: 48ch; margin: 0 auto; }
+.fatal h1 { font-size: 18px; }
+
+/* ---------------- desktop ---------------- */
+
+@media (min-width: 1000px) {
+  .app { grid-template-columns: 280px minmax(0, 1fr); }
+  .app.with-panel, .app.with-viewer { grid-template-columns: 280px minmax(0, 1fr) minmax(360px, 34vw); }
+
+  .threads { position: static; transform: none; width: auto; }
+  .scrim, .icon-btn.menu { display: none; }
+
+  /* Desktop is unchanged: three columns side by side, no navigation stack. */
+  .task-panel, .viewer {
+    position: static; height: 100dvh; border-radius: 0;
+    border-top: none; border-left: 1px solid var(--line);
+    background: var(--panel);
+    box-shadow: none; animation: none;
+  }
+  .back-btn { display: none; }
+  /* With both open the viewer takes the column and the panel steps aside. */
+  .app.with-panel.with-viewer .task-panel { display: none; }
+  .chat { padding: 24px max(24px, calc(50% - 420px)); }
+  .app.with-panel .chat, .app.with-viewer .chat { padding: 24px 28px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* ---------------- settings menu ---------------- */
+
+.menu-anchor { position: relative; flex: none; }
+.menu-trigger {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 40px; padding: 0 12px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--muted); font-size: 12px; white-space: nowrap;
+}
+.menu-trigger.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.switch-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.switch-dot.on { background: var(--warn); }
+
+.menu-panel {
+  /* Rendered into document.body via a portal and positioned from the
+     trigger's rect, so no ancestor stacking context can bury it. */
+  position: fixed; right: 12px; top: 60px;
+  width: min(92vw, 330px); z-index: 200;
+  display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+  padding: 6px;
+}
+.menu-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 10px; border-radius: 8px; font-size: 13px;
+}
+.menu-row.column { flex-direction: column; align-items: stretch; gap: 8px; }
+.menu-row.toggle { cursor: pointer; }
+.menu-row span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.menu-row small { color: var(--muted); font-size: 11px; }
+.menu-row input[type='checkbox'] { width: 38px; height: 22px; accent-color: var(--warn); flex: none; }
+.menu-row select {
+  min-height: 38px; padding: 0 10px; border-radius: 8px; font: inherit; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+}
+.menu-row code { font-size: 11px; color: var(--accent); }
+
+.stepper {
+  display: flex; align-items: center; gap: 2px; flex: none;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+}
+.stepper button {
+  min-width: 34px; min-height: 34px; background: none; border: none;
+  color: var(--text); font-size: 15px;
+}
+.stepper button:disabled { color: var(--muted); }
+.stepper span { min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.menu-costs { border-top: 1px solid var(--line); margin-top: 4px; padding: 6px 4px 4px; }
+.cost-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 0 6px 8px; }
+.cost-grid.wide { grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); padding: 0 0 14px; }
+.cost-cell {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line);
+}
+.cost-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.cost-value { font-size: 13px; font-variant-numeric: tabular-nums; }
+.menu-costs .ghost-btn { width: calc(100% - 12px); margin: 0 6px 4px; }
+
+/* ---------------- cost dashboard ---------------- */
+
+.cost-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.segmented { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; }
+.segmented button {
+  min-height: 34px; padding: 0 10px; background: none; border: none;
+  color: var(--muted); font-size: 12px;
+}
+.segmented button.on { color: var(--text); background: var(--line); }
+.segmented button:first-child { border-radius: 7px 0 0 7px; }
+.segmented button:last-child { border-radius: 0 7px 7px 0; }
+
+.chart-scroll { overflow-x: auto; padding-bottom: 4px; }
+.cost-chart .grid { stroke: var(--line); stroke-width: 1; }
+.cost-chart .tick { fill: var(--muted); font-size: 9px; text-anchor: middle; }
+
+.legend { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.legend li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.legend-value { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---------------- animation player ---------------- */
+
+.player { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.player-frame {
+  position: relative;
+  display: flex; min-height: 0; justify-content: center; align-items: center;
+  /* The animation's own shape, uncropped, everywhere it is shown. */
+  width: 100%;
+  margin-inline: auto;
+  max-width: min(100%, 78vh);
+  overflow: hidden;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: #06070a;
+}
+.player img {
+  width: 100%; height: auto; min-height: 0;
+  object-fit: contain;
+}
+/* The previous frame stays up while the next loads, dimmed so the wait reads
+   as work in progress rather than a stall. */
+.player.loading .player-frame img { opacity: 0.45; transition: opacity 0.15s ease; }
+.player-empty { width: 100%; height: 100%; background: #0e1117; }
+.player-spinner {
+  position: absolute; top: 50%; left: 50%; width: 26px; height: 26px;
+  margin: -13px 0 0 -13px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* The controls are a HUD over the animation rather than a strip beneath it,
+   so hiding them gives their space back to the picture. */
+.player-controls {
+  /* Clear of the corner button rather than over it: the button stays visible
+     and clickable while the panel it opened is showing. */
+  position: absolute; left: 8px; right: 8px; bottom: 48px; z-index: 2;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 8px; border-radius: 10px;
+  background: color-mix(in srgb, #06070a 82%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+}
+.player-controls[hidden] { display: none; }
+
+.player-buttons {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  display: flex; gap: 6px;
+}
+.player-options {
+  z-index: 2;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 32px; padding: 0 10px; border-radius: 999px;
+  font-size: 12px; color: var(--muted);
+  background: color-mix(in srgb, #06070a 72%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+}
+.player-options.on { color: var(--text); border-color: var(--accent); }
+/* The options button is a corner control, not a labelled button. */
+.player-options-corner {
+  position: absolute; right: 8px; bottom: 8px; top: auto; left: auto;
+  min-width: 36px; justify-content: center; padding: 0;
+}
+
+/* Full screen is an overlay rather than the Fullscreen API: iOS Safari does
+   not support requestFullscreen on an element, which is the device this
+   matters most on. */
+.player-full {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 12px; background: #06070a;
+}
+.player-full img {
+  max-width: 100%; max-height: 100%;
+  /* `contain` here, not `cover`: full screen is where you go to see all of it. */
+  object-fit: contain; border-radius: 8px;
+}
+.player-full-close { position: absolute; top: max(12px, env(safe-area-inset-top)); right: 12px; }
+.steps { display: flex; align-items: center; gap: 6px; }
+.step-label {
+  font-size: 11px; color: var(--muted); min-width: 0;
+  max-width: 20ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The animation's own shape here too, as wide as the reel allows. Squaring it
+   off and cropping made it bigger but cut the edges of the frame; the whole
+   picture at its natural shape is what the animation was drawn to be. */
+.reel-media .player { width: 100%; display: flex; }
+.reel-media .player-frame { width: 100%; max-width: none; margin: auto; }
+
+/* ---------------- review feed ---------------- */
+
+
+.feed { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.feed-status {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 14px; border-bottom: 1px solid var(--line);
+}
+
+.reels {
+  overflow-y: auto;
+  /* Native snap: a swipe on a phone lands on exactly one reel. */
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.reel {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  height: 100%;
+  display: grid;
+  position: relative;
+  /* Portrait: the animation is a square as wide as the screen — roughly the
+     top half — and everything else scrolls in what is left. The row is `auto`
+     so the square sets it, rather than the square being squeezed into a half
+     that is shorter than the screen is wide. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 2px auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "progress"
+    "title"
+    "media"
+    "body";
+}
+.reel-progress { grid-area: progress; }
+.reel-title { grid-area: title; }
+.reel-media { grid-area: media; }
+.reel-body { grid-area: body; }
+
+/* Landscape: the same split turned on its side — animation left, rest right. */
+@media (orientation: landscape) {
+  .reel {
+    grid-template-columns: minmax(0, 50%) minmax(0, 1fr);
+    grid-template-rows: 2px auto minmax(0, 1fr);
+    grid-template-areas:
+      "progress progress"
+      "title    title"
+      "media    body";
+  }
+  .reel-body { border-top: none; border-left: 1px solid var(--line); }
+  /* Half the width, and the animation's own shape decides the height. */
+  .reel-media .player-frame { width: 100%; }
+}
+
+.reel-title {
+  margin: 0;
+  padding: 12px 16px 8px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.reel-progress { background: var(--panel-2); }
+.reel-progress span { display: block; height: 100%; background: var(--accent); transition: width 0.1s linear; }
+
+.reel-media {
+  display: flex; align-items: center; justify-content: center;
+  background: #06070a; overflow: hidden;
+  /* Just enough to keep the frame off the screen edges. */
+  padding: 6px;
+}
+/* Sizing belongs to `.player-frame` now; the leftover `max-height: 100%` here
+   capped the picture and letterboxed it inside its own square. */
+.reel-media img { border-radius: 10px; }
+.reel-placeholder { color: var(--muted); font-size: 13px; }
+
+.reel-body {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  /* The animation owns half the reel, so what is left has to scroll rather
+     than run off the bottom of the screen. */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+.reel-summary {
+  margin: 0; font-size: 12.5px; color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.reel-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mono { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+
+.reel-approaches { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.reel-approaches li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+
+.reel-links {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  opacity: 0.35; transition: opacity 0.3s ease;
+}
+/* The links come forward once the animation has had its time. */
+.reel-links.shown { opacity: 1; }
+.reel-links button {
+  min-height: 40px; padding: 0 12px; border-radius: 10px; font-size: 12px;
+  background: var(--panel-2); border: 1px solid var(--line);
+}
+.reel-links.shown button { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+
+.reel-rate { display: flex; gap: 8px; }
+.reel-rate button {
+  flex: 1; min-height: 44px; border-radius: 10px; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--line);
+}
+.reel-rate button:first-child { color: var(--del); }
+.reel-rate button:last-child { color: var(--add); }
+
+/* On a wide screen the animation should not stretch the full width. Capped by
+   width so the shape is preserved: 82vh wide is about 46vh tall at 16:9, which
+   is the height this used to be capped at. */
+@media (min-width: 1000px) {
+  .reel-media .player-frame { max-width: min(100%, 82vh); }
+}
+
+/* ---------------- projects ---------------- */
+
+.project-trigger { gap: 6px; max-width: 40vw; }
+.project-current {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text);
+}
+.project-panel { width: min(92vw, 300px); }
+.project-list { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow-y: auto; }
+.project-row {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  min-height: 46px; padding: 8px 10px; border-radius: 8px;
+  background: none; border: 1px solid transparent;
+}
+.project-row.on { background: var(--panel-2); border-color: var(--accent); }
+.project-name { font-size: 13px; }
+.project-meta { font-size: 11px; color: var(--muted); }
+.new-project { padding: 8px 4px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+
+/* The project's own conversation, set apart from the work it produced. */
+.thread-icon { color: var(--accent); margin-right: 6px; }
+.thread-divider {
+  border: none; border-top: 1px solid var(--line);
+  margin: 8px 10px; opacity: 0.8;
+}
+
+.prose.guide-changed {
+  border-left: 2px solid color-mix(in srgb, var(--add) 55%, var(--line));
+  padding-left: 10px;
+}
+.prose.guide-changed .card-kind { color: var(--add); display: block; margin-bottom: 4px; }
+
+.guide-source {
+  width: 100%; min-height: 60dvh; resize: vertical;
+  padding: 12px; border-radius: 10px;
+  background: #0e1117; border: 1px solid var(--line); color: var(--text);
+  font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.6;
+}
+
+/* ---------------- 3D pose viewer ---------------- */
+
+.pose { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: 100%; min-height: 320px; }
+.pose-stage { position: relative; min-height: 0; border-radius: 10px; overflow: hidden; }
+/* The renderer sizes the drawing buffer only (updateStyle: false), so the
+   canvas is laid out by CSS. Absolute fill keeps it off the stage's own
+   height, which would otherwise feed back into the ResizeObserver. */
+.pose-stage canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+/* The label layer sits over the scene and must not swallow orbit gestures. */
+.pose-stage .pose-labels { position: absolute; inset: 0; pointer-events: none; }
+.pose-controls {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding-top: 10px;
+}
+.pose-name { font-weight: 600; }
+.pose-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.pose-toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+/* Search, an optional filter drawer, then the list. Flex rather than fixed grid
+   rows: with a track per child, the drawer landed in the `1fr` track and
+   collapsed to zero — its pills spilling over the list as loose text and
+   numbers — and which track the list fell into then depended on whether the
+   drawer happened to be open. Here the list simply takes what is left. */
+.library { display: flex; flex-direction: column; min-height: 0; }
+.library-search, .library .tag-groups { flex: none; }
+.library .explorer { flex: 1; min-height: 0; overflow-y: auto; padding: 0 14px 16px; }
+.library-search input {
+  flex: 1; min-height: 38px; padding: 0 12px; border-radius: 8px;
+  font-family: inherit; font-size: 16px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+}
+.library-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 14px; }
+.library-search select {
+  min-height: 38px; padding: 0 10px; border-radius: 8px; font: inherit; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+}
+
+
+.reel-clips {
+  display: inline-flex; align-items: center; gap: 2px;
+  margin-left: 10px; vertical-align: middle;
+}
+.reel-clip {
+  font-size: 12px; font-weight: 400; color: var(--muted);
+  white-space: nowrap; padding: 0 4px;
+}
+.clip-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--muted); cursor: pointer;
+}
+.clip-step:hover:not(:disabled) {
+  color: var(--text); border-color: var(--line); background: var(--panel-2);
+}
+/* Kept in place rather than hidden at the ends: a control that disappears
+   moves the label under the pointer just as it is being clicked. */
+.clip-step:disabled { opacity: 0.25; cursor: default; }
+
+/* ---------------- task chip controls ---------------- */
+
+.chip-row { display: flex; align-items: stretch; gap: 6px; min-width: 0; }
+.chip-row .task-chip { flex: 1; min-width: 0; }
+.chip-row.active .task-chip { border-color: var(--accent); }
+
+.chip-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.chip-action {
+  width: 30px; min-height: 30px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  color: var(--muted); cursor: pointer;
+}
+.chip-action svg { display: block; }
+.chip-action:hover { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+.chip-action:disabled { opacity: 0.4; cursor: default; }
+
+/* On a narrow screen the controls take a row of their own rather than eating
+   the width the task's name needs. */
+@media (max-width: 620px) {
+  .chip-row { flex-wrap: wrap; }
+  .chip-actions { width: 100%; justify-content: flex-end; }
+}
+
+/* ---------------- collapsed task groups ---------------- */
+
+.task-groups { display: flex; flex-direction: column; gap: 10px; }
+.task-group { display: flex; flex-direction: column; gap: 6px; }
+
+/* Reads as a continuation of the list it opens, not as an action on the chip
+   above it, so it sits inset and quiet. */
+.more-toggle {
+  align-self: flex-start;
+  padding: 3px 10px; border-radius: 999px;
+  font: inherit; font-size: 11.5px; line-height: 1.5;
+  background: transparent; border: 1px dashed var(--line); color: var(--muted);
+  cursor: pointer;
+}
+.more-toggle:hover { color: var(--text); border-color: var(--muted); }
+/* The repeats between rows are a way out, not a heading: quieter than the one
+   that closes the group, and they only firm up under the pointer. */
+.more-toggle.inline {
+  border-color: transparent; font-size: 11px; padding: 1px 8px; opacity: 0.55;
+}
+.more-toggle.inline:hover { opacity: 1; border-color: var(--line); }
+
+/* ---------------- library filter pills ---------------- */
+
+.tag-groups {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 0 14px 10px;
+  /* Long vocabularies (28 topics) must not push the list off screen. */
+  max-height: 40vh; overflow-y: auto;
+}
+
+.filter-toggle, .filter-clear {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  min-height: 38px; padding: 0 12px; border-radius: 8px;
+  font: inherit; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  cursor: pointer;
+}
+.filter-toggle:hover, .filter-clear:hover { color: var(--text); }
+.filter-toggle.on { color: var(--accent); border-color: var(--accent); }
+.filter-toggle .chevron { font-size: 10px; opacity: 0.7; }
+.tag-group { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+/* The group name comes from the tag itself, so it can be any length; it gets a
+   column wide enough for the ones in use and wraps rather than truncating. */
+.tag-group-name {
+  flex: none; min-width: 68px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.tag-pills { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.tag-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  font: inherit; font-size: 12px; line-height: 1.4;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  cursor: pointer;
+}
+.tag-pill:hover { color: var(--text); }
+.tag-pill.on {
+  background: var(--accent); border-color: var(--accent); color: var(--bg);
+  font-weight: 600;
+}
+/* The count is the reason to pick a pill, so it stays legible when selected
+   rather than dropping to a muted grey on an accent ground. */
+.tag-count { font-size: 10px; opacity: 0.7; }
+.tag-pill.on .tag-count { opacity: 0.85; }
+.tag-pill.clear { border-style: dashed; align-self: flex-start; }
+
+.asset-tags { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.row-tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  white-space: nowrap;
+}
+
+/* On a narrow screen the tag list would push the name to nothing, so it drops
+   under it instead of competing for the row. */
+@media (max-width: 620px) {
+  .asset-row { flex-wrap: wrap; }
+  .asset-tags { order: 3; width: 100%; justify-content: flex-start; }
+  .tag-group { flex-direction: column; align-items: stretch; gap: 4px; }
+}
+
+/* ---------------- confirmation modal ---------------- */
+
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.modal {
+  width: min(100%, 420px);
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 18px; border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--line);
+}
+.modal h2 { margin: 0; font-size: 16px; }
+.modal p { margin: 0; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.modal-actions .ghost-btn { min-height: 40px; }
+
+
+/* ---------------- package view ---------------- */
+
+.package-view { display: flex; flex-direction: column; gap: 14px; }
+.package-title { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.package-group { display: flex; flex-direction: column; gap: 6px; }
+.package-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.package-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 0 10px; border-radius: 10px;
+  font-family: ui-monospace, monospace; font-size: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  overflow-wrap: anywhere;
+}
+.package-link:active { border-color: var(--accent); }
+
+
+/* ---------------- failures ---------------- */
+
+.error-note { display: flex; flex-direction: column; gap: 6px; }
+.error-line {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  color: var(--del);
+}
+.error-text { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.error-more {
+  flex: none; min-height: 32px; padding: 0 8px; border-radius: 8px;
+  background: none; border: 1px solid var(--line); color: var(--muted); font-size: 11px;
+}
+
+
+/* ---------------- video sections ---------------- */
+
+.player-frame video {
+  display: block; margin: 0 auto;
+  /* Bounded by both sides, not by width alone. The frame's `max-width: 78vh`
+     is meant to stop a tall picture dominating, but applied to a 16:9 video in
+     landscape it capped the width at less than a third of the panel. */
+  width: auto; height: auto;
+  max-width: 100%; max-height: 78vh;
+}
+/* A video is bounded by the rule above; the frame just positions it. */
+.player-frame:has(video) { max-width: 100%; }
+.player-full video { max-width: 100%; max-height: 100%; }
+.sections-drawer { display: flex; flex-direction: column; gap: 6px; }
+.sections-toggle {
+  display: flex; align-items: center; gap: 8px; align-self: flex-start;
+  max-width: 100%; min-height: 28px; padding: 2px 10px 2px 6px;
+  border-radius: 999px; font: inherit; font-size: 12px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  cursor: pointer;
+}
+.sections-toggle:hover { color: var(--text); }
+.sections-toggle .chevron { font-size: 10px; opacity: 0.7; }
+/* The section playing right now, shown on the closed drawer — otherwise
+   opening it is the only way to tell where you are. */
+.sections-now {
+  color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.sections { display: flex; flex-wrap: wrap; gap: 6px; }
+.section-chip {
+  min-height: 34px; padding: 0 10px; border-radius: 999px;
+  font-size: 12px; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  overflow-wrap: anywhere;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+/* Chosen to loop. */
+.section-chip.on { color: var(--text); border-color: var(--accent); }
+/* Passing through right now. Filled rather than outlined, so it reads at a
+   glance in a row of ten and does not compete with the looping outline — a
+   section can be both at once. */
+.section-chip.playing {
+  color: var(--bg); background: var(--accent); border-color: var(--accent);
+  font-weight: 600;
+}
+
+
+/* Captions live under the picture, never over it: a manim scene puts its own
+   caption line at the bottom of the frame, and overlaid cues cover it. */
+.caption-bar {
+  margin: 0; padding: 8px 10px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  font-size: 13px; line-height: 1.45; text-align: center;
+  overflow-wrap: anywhere;
+}
+.caption-full {
+  position: absolute; left: 12px; right: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  background: color-mix(in srgb, #06070a 86%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+
+/* The live tasks, gathered at the end of a long thread. */
+.now-running {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.now-running .card-kind { color: var(--accent); }
