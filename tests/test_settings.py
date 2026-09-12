@@ -139,3 +139,118 @@ async def test_the_worker_ceiling_has_one_home(db):
     # And so does the request model.
     field = SettingsRequest.model_fields["task_concurrency"]
     assert any(getattr(m, "le", None) == MAX_WORKERS for m in field.metadata)
+
+
+async def test_utility_proposals_default_to_on(db):
+    """The loop is the point; an operator who dislikes it turns it off once."""
+    settings = SettingsStore(db)
+    assert await settings.utility_proposals() is True
+    assert (await settings.all())[SettingsStore.UTILITY_PROPOSALS] is True
+
+
+async def test_turning_utility_proposals_off_is_read_back(db):
+    settings = SettingsStore(db)
+    await settings.set(SettingsStore.UTILITY_PROPOSALS, False)
+    assert await settings.utility_proposals() is False
+
+
+def test_the_settings_endpoint_toggles_utility_proposals(config, db, monkeypatch):
+    monkeypatch.setattr("dex.queue.TaskRunner", __import__(
+        "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
+    with TestClient(create_app(config)) as client:
+        assert client.get("/api/settings").json()["settings"]["utility_proposals"] is True
+
+        body = client.put("/api/settings", json={"utility_proposals": False}).json()
+        assert body["settings"]["utility_proposals"] is False
+
+        # And back, so a switch is a switch.
+        client.put("/api/settings", json={"utility_proposals": True})
+        assert client.get("/api/settings").json()["settings"]["utility_proposals"] is True
+
+
+def test_the_brief_makes_a_task_check_the_switch_before_asking():
+    """A flag nothing consults is decoration."""
+    from pathlib import Path
+
+    from dex.prompts import generation_prompt
+
+    text = generation_prompt(
+        problem="x",
+        task_dir=Path("assets/algorithms/two-sum"),
+        python=Path("/w/python"),
+        manim_available=True,
+    )
+    assert "mcp__dex__utility_proposals_enabled" in text
+    assert "you ask" in text and "nothing, change nothing outside your directory" in text
+
+
+def test_the_guides_gate_the_proposal_on_the_switch():
+    from pathlib import Path
+
+    for project in ("algorithms", "yoga"):
+        guide = (Path("assets") / project / "AGENTS.md").read_text(encoding="utf-8")
+        assert "mcp__dex__utility_proposals_enabled" in guide, project
+        assert "**ask nothing**" in guide, project
+
+
+async def test_effort_defers_to_the_deployment_until_an_operator_picks_one(db):
+    settings = SettingsStore(db)
+    assert await settings.effort() is None
+    await settings.set(SettingsStore.EFFORT, "max")
+    assert await settings.effort() == "max"
+    # Cleared back to the deployment default rather than stored as empty.
+    await settings.set(SettingsStore.EFFORT, None)
+    assert await settings.effort() is None
+
+
+def test_the_settings_endpoint_takes_an_effort_and_rejects_a_bad_one(config, db, monkeypatch):
+    monkeypatch.setattr("dex.queue.TaskRunner", __import__(
+        "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
+    with TestClient(create_app(config)) as client:
+        body = client.get("/api/settings").json()
+        assert body["settings"]["effort"] is None
+        assert body["defaultEffort"] == config.effort
+        assert [e["id"] for e in body["efforts"]] == ["low", "medium", "high", "xhigh", "max"]
+
+        assert client.put("/api/settings", json={"effort": "max"}).json()["settings"]["effort"] == "max"
+        # "" is how the UI clears the override.
+        assert client.put("/api/settings", json={"effort": ""}).json()["settings"]["effort"] is None
+        # Anything else is not an effort level.
+        assert client.put("/api/settings", json={"effort": "ludicrous"}).status_code == 422
+
+
+async def test_a_task_runs_at_the_operators_effort(config, db, monkeypatch):
+    """The setting is worth nothing if the runner still reads the env var."""
+    import asyncio
+    import contextlib
+
+    from dex.bus import EventBus
+    from dex.runner import TaskRunner
+    from dex.store import SettingsStore as S
+    from dex.store import TaskStore
+
+    seen: dict[str, str] = {}
+
+    class CapturingClient:
+        def __init__(self, options):
+            seen["effort"] = options.effort
+
+        async def __aenter__(self):
+            raise asyncio.CancelledError
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("dex.runner.ClaudeSDKClient", CapturingClient, raising=False)
+    settings = S(db)
+    await settings.set(S.EFFORT, "low")
+
+    task = Task(problem="p", title="t", slug="effort-probe")
+    task.project = "algorithms"
+    bus = EventBus(db)
+    runner = TaskRunner(task, config, bus, TaskStore(db), settings)
+    with contextlib.suppress(BaseException):
+        await runner.run()
+
+    assert seen.get("effort") == "low"
+    assert seen["effort"] != config.effort

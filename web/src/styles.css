@@ -292,6 +292,10 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .actions .primary { background: var(--accent); color: #06212e; border-color: transparent; font-weight: 600; }
 .actions .primary:disabled { background: var(--panel-2); color: var(--muted); font-weight: 400; }
 .actions .danger { color: var(--del); }
+/* Sits beside Run as a modifier, not an action of its own, so it keeps to its
+   own width instead of sharing the row evenly with the primary button. */
+.actions .plan-select-toggle { flex: 0 0 auto; color: var(--muted); }
+.actions .plan-select-toggle:hover { color: var(--text); border-color: var(--muted); }
 
 /* ---------------- task chips ---------------- */
 

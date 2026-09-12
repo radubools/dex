@@ -257,3 +257,9 @@ build/
 .idea/
 .vscode/
 *.swp
+
+# Generated study material and the construction dataset: large binaries
+# (video, audio) that churn with every run, and reproducible from the agents.
+# Backed up to the external volume rather than versioned here.
+assets/
+datasets/

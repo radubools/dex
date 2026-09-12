@@ -175,6 +175,21 @@ export function SettingsMenu({
             />
           </label>
 
+          <label className="menu-row toggle">
+            <span>
+              Utility proposals
+              <small>Let a task ask to share a helper in the project's utils/</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              // Absent until an operator has ever touched it, and the loop is
+              // on by default -- so undefined reads as on, matching the server.
+              checked={settings?.utility_proposals ?? true}
+              onChange={(e) => patch({ utility_proposals: e.target.checked })}
+            />
+          </label>
+
           <div className="menu-row">
             <span>
               Tasks at once
@@ -210,6 +225,24 @@ export function SettingsMenu({
               {data?.models.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label} — {m.note}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="menu-row column">
+            <span>
+              Thinking effort
+              <small>How hard a task thinks before acting; applies to new tasks</small>
+            </span>
+            <select
+              value={(settings?.effort as string) ?? ''}
+              onChange={(e) => patch({ effort: e.target.value })}
+            >
+              <option value="">Default ({data?.defaultEffort})</option>
+              {data?.efforts.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.label} — {e.note}
                 </option>
               ))}
             </select>

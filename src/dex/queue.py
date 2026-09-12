@@ -366,6 +366,8 @@ class TaskManager:
             finished_at=None,
             error=None,
             activity=None,
+            # Asked for by name, so the hold is lifted.
+            held=False,
         )
         self.bus.publish(
             Event(type="task_state", task_id=task_id,
@@ -397,6 +399,9 @@ class TaskManager:
             # never started and it would never be picked up again.
             started_at=task.started_at or time.time(),
             finished_at=None,
+            # Held, so dex leaves it alone. Without this the next free slot
+            # picked it straight back up and the button did nothing.
+            held=True,
         )
         self.bus.publish(
             Event(type="task_state", task_id=task_id,
@@ -435,6 +440,7 @@ class TaskManager:
             activity=None,
             cost_usd=None,
             turns=None,
+            held=False,
         )
         self.bus.publish(
             Event(type="task_state", task_id=task_id,

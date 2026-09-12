@@ -146,6 +146,11 @@ class TaskRunner:
         #: Streaming block index -> the id the UI accumulates deltas under.
         self._blocks: dict[int, str] = {}
         self._block_kinds: dict[int, str] = {}
+        #: Thinking text accumulated per streaming block, and the completed
+        #: blocks it produced. A finished ThinkingBlock whose text is not in
+        #: here never streamed, so it has to be emitted whole.
+        self._thinking_parts: dict[int, list[str]] = {}
+        self._streamed_thinking: set[str] = set()
         #: Running list-price estimate, so a task shows spend while it works
         #: instead of nothing until it finishes.
         self._estimated_cost = 0.0
@@ -219,7 +224,22 @@ class TaskRunner:
             self.emit("question_answered", id=question_id, answer=answer)
             return {"content": [{"type": "text", "text": str(answer)}]}
 
-        return create_sdk_mcp_server(name="dex", version="0.1.0", tools=[ask_user])
+        @tool(
+            "utility_proposals_enabled",
+            "Check whether this dex has shared-utility proposals turned on. Call it at "
+            "the end of a task, before asking the operator about promoting a helper "
+            "into the project's utils/. Returns 'enabled' or 'disabled'.",
+            {},
+        )
+        async def utility_proposals_enabled(_args: dict[str, Any]) -> dict[str, Any]:
+            # Read now, not at task start: turning the loop off silences runs
+            # already in flight, which is the whole point of a global switch.
+            on = await self.settings.utility_proposals()
+            return {"content": [{"type": "text", "text": "enabled" if on else "disabled"}]}
+
+        return create_sdk_mcp_server(
+            name="dex", version="0.1.0", tools=[ask_user, utility_proposals_enabled]
+        )
 
     async def _escalate(
         self, approval_id: str, tool_name: str, input_data: dict[str, Any], title: str | None
@@ -292,6 +312,7 @@ class TaskRunner:
             escalate=self._escalate,
         )
         decide = self._with_diffs(policy.build())
+        effort = await self.settings.effort() or self.config.effort
         resume_session = self.task.resumed_from
         if resume_session:
             self.emit("text", text=f"Resuming the previous agent session ({resume_session[:8]}…).")
@@ -311,10 +332,19 @@ class TaskRunner:
             # Stream token deltas so the UI can render text as it arrives
             # instead of a block at a time.
             include_partial_messages=True,
+            # On a high-effort run thinking is most of the wall clock — one
+            # goddess-pose task spent 122s in a single block before its first
+            # visible token, and the panel showed nothing for it. The CLI omits
+            # thinking from the stream unless a display is asked for, which is
+            # why not one `thinking` event exists in 157k rows. Ask for it, and
+            # the panel's collapsed thinking step fills in as it arrives.
+            thinking={"type": "adaptive", "display": "summarized"},
             can_use_tool=decide,
             mcp_servers={"dex": self._ask_user_server()},
             max_turns=self.config.max_turns,
-            effort=self.config.effort,  # type: ignore[arg-type]
+            # Read at task start, so a change applies to new work while runs
+            # already going keep the effort they were planned with.
+            effort=effort,  # type: ignore[arg-type]
             setting_sources=[],  # ignore local .claude config; the brief is the spec
             # Continues the earlier run's conversation when there is one, so the
             # agent keeps what it already worked out instead of starting over.
@@ -322,6 +352,7 @@ class TaskRunner:
             stderr=lambda line: self.emit("error", message=line[:500], fatal=False),
         )
 
+        self._refresh_utils_index()
         prompt = generation_prompt(
             problem=self.task.problem,
             task_dir=self.task_dir,
@@ -399,6 +430,24 @@ class TaskRunner:
         except Exception:
             log.exception("could not record session for %s", self.task.id)
 
+    def _refresh_utils_index(self) -> None:
+        """Rewrite the project's `utils/API.md` before the agent reads it.
+
+        The guides send a task to that one file instead of the modules — 13% of
+        the bytes — but a generated index is only worth reading if it is true.
+        Doing it here means it cannot drift behind a module a previous task
+        changed and forgot to regenerate. Writes only on a real difference, so
+        in the steady state it touches nothing and the watcher stays quiet.
+        """
+        project_dir = self.task_dir if self.task.project_wide else self.task_dir.parent
+        try:
+            from .tools.utils_api import write
+
+            write(project_dir)
+        except Exception:
+            # An index is a convenience. Never fail a task over one.
+            log.exception("could not refresh the utils index for %s", project_dir)
+
     def _translate_delta(self, message: Any) -> None:
         """One Anthropic stream event -> an append to a text or thinking block."""
         event = getattr(message, "event", None) or {}
@@ -421,12 +470,16 @@ class TaskRunner:
             if delta.get("type") == "text_delta" and delta.get("text"):
                 self.emit("text_delta", id=block_id, delta=delta["text"])
             elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                self._thinking_parts.setdefault(index, []).append(delta["thinking"])
                 self.emit("thinking_delta", id=block_id, delta=delta["thinking"])
             return
 
         if kind == "content_block_stop":
             block_id = self._blocks.pop(index, None)
             self._block_kinds.pop(index, None)
+            parts = self._thinking_parts.pop(index, None)
+            if parts:
+                self._streamed_thinking.add("".join(parts))
             if block_id is not None:
                 self.emit("block_end", id=block_id)
 
@@ -490,9 +543,16 @@ class TaskRunner:
         if isinstance(message, AssistantMessage):
             self._accrue(getattr(message, "usage", None))
             for block in message.content:
-                # Text and thinking already arrived as deltas; re-emitting the
-                # completed block here would duplicate every word.
-                if isinstance(block, (TextBlock, ThinkingBlock)):
+                # Text already arrived as deltas; re-emitting the completed
+                # block here would duplicate every word.
+                if isinstance(block, TextBlock):
+                    continue
+                if isinstance(block, ThinkingBlock):
+                    # Thinking usually arrives as deltas too — but when the CLI
+                    # hands it over only as a finished block, skipping it here
+                    # dropped it entirely and the task looked idle for minutes.
+                    if block.thinking and block.thinking not in self._streamed_thinking:
+                        self.emit("thinking", text=block.thinking)
                     continue
                 if isinstance(block, ToolUseBlock):
                     title = _tool_title(block.name, block.input)

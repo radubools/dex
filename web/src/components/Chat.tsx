@@ -311,9 +311,11 @@ function PlanCard({
   const [sent, setSent] = useState(false)
   const [showDone, setShowDone] = useState(false)
   const [showAll, setShowAll] = useState(false)
-  const chosen = tasks.filter(
-    (t) => !dropped.has(t.slug) && ['new', 'failed'].includes(planState(t.slug)),
-  )
+  // Rows still open to a decision. A done or running one is locked, so it is
+  // neither counted nor touched by the select-all toggle.
+  const selectable = tasks.filter((t) => ['new', 'failed'].includes(planState(t.slug)))
+  const chosen = selectable.filter((t) => !dropped.has(t.slug))
+  const noneChosen = chosen.length === 0
 
   // Finished work is history; it folds away. What stays is what still needs a
   // decision: never run, or run and failed — a failure is worth another go.
@@ -382,11 +384,13 @@ function PlanCard({
           </>
         )
       })()}
-      {!sent && chosen.length > 0 && (
+      {/* Keyed off `selectable`, not `chosen`: deselecting everything used to
+          take the whole row away with it, and with it the only way back. */}
+      {!sent && selectable.length > 0 && (
         <div className="actions">
           <button
             className="primary"
-            disabled={chosen.length === 0}
+            disabled={noneChosen}
             onClick={() => {
               setSent(true)
               onConfirm(chosen)
@@ -394,6 +398,18 @@ function PlanCard({
           >
             Run {chosen.length} task{chosen.length === 1 ? '' : 's'}
           </button>
+          {/* Everything starts selected, so this reads "Deselect all" first and
+              flips once there is nothing left to run. */}
+          {selectable.length > 1 && (
+            <button
+              className="plan-select-toggle"
+              onClick={() =>
+                setDropped(noneChosen ? new Set() : new Set(selectable.map((t) => t.slug)))
+              }
+            >
+              {noneChosen ? 'Select all' : 'Deselect all'}
+            </button>
+          )}
         </div>
       )}
     </div>

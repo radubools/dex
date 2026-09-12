@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- 'package' for the usual one-package task, 'project' for a small uniform
     -- edit across the packages a project already has.
     scope        TEXT        NOT NULL DEFAULT 'package',
+    -- Paused because the operator said so, rather than because dex made room.
+    -- Both look like 'paused'; only dex's own are picked up again on their own.
+    held         BOOLEAN     NOT NULL DEFAULT false,
     -- Set while a worker holds the task, so a crashed worker's task can be
     -- told apart from one that is genuinely running.
     claimed_by   TEXT,
@@ -163,3 +166,6 @@ UPDATE tasks SET state = 'cancelled'
 
 -- Older databases predate project-wide tasks; everything in them is a package.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'package';
+
+-- Older databases have no notion of a pause dex must not undo.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS held BOOLEAN NOT NULL DEFAULT false;

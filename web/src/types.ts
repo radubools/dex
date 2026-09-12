@@ -170,7 +170,11 @@ export type Settings = {
   paused: boolean
   task_concurrency: number
   chat_concurrency: number
+  /** Tasks may ask about promoting a helper into a project's utils/. */
+  utility_proposals: boolean
   model: string | null
+  /** How hard a task thinks before acting; null defers to the deployment. */
+  effort: string | null
   animation_speed: number
   [projectModel: string]: unknown
 }
@@ -183,8 +187,10 @@ export type SettingsResponse = {
   settings: Settings
   costs: CostTotals
   models: ModelChoice[]
+  efforts: ModelChoice[]
   project: string
   defaultModel: string
+  defaultEffort: string
   running: number
   planning: number
   /** Tasks currently parked, whether by a pause or by chat pressure. */

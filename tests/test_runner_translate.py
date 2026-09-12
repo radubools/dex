@@ -11,7 +11,14 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    StreamEvent,
+    TextBlock,
+    ThinkingBlock,
+    ToolUseBlock,
+)
 
 from dex.bus import EventBus
 from dex.models import Task
@@ -106,6 +113,78 @@ async def test_tool_use_emits_a_tool_event_carrying_the_activity(runner):
     tools = [e for e in await bus.history() if e.type == "tool"]
     assert tools[-1].data["activity"] == "run tests"
     assert run.task.activity == "run tests"
+
+
+def stream(run, uuid, event):
+    run._translate(StreamEvent(uuid=uuid, session_id="s", event=event))
+
+
+async def test_thinking_that_never_streamed_is_still_shown(runner):
+    """A high-effort run spends minutes here, and it was all being dropped.
+
+    The CLI omits thinking from the stream unless a display is asked for, so
+    `_translate_delta` saw no deltas and the AssistantMessage handler skipped
+    the finished block as a duplicate. The result was a task that looked idle
+    for two minutes with nothing in the panel.
+    """
+    run, bus = runner
+    run._translate(
+        AssistantMessage(
+            content=[ThinkingBlock(thinking="weighing the approach", signature="x")],
+            model="claude-opus-5",
+            usage=None,
+        )
+    )
+    await asyncio.sleep(0.2)
+
+    thinking = [e for e in await bus.history() if e.type == "thinking"]
+    assert [e.data["text"] for e in thinking] == ["weighing the approach"]
+
+
+async def test_streamed_thinking_is_not_repeated_as_a_whole_block(runner):
+    """When deltas do arrive, the finished block must not double them up."""
+    run, bus = runner
+    stream(run, "u1", {"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "thinking"}})
+    for piece in ("weighing ", "the ", "approach"):
+        stream(run, "u1", {"type": "content_block_delta", "index": 0,
+                           "delta": {"type": "thinking_delta", "thinking": piece}})
+    stream(run, "u1", {"type": "content_block_stop", "index": 0})
+    run._translate(
+        AssistantMessage(
+            content=[ThinkingBlock(thinking="weighing the approach", signature="x")],
+            model="claude-opus-5",
+            usage=None,
+        )
+    )
+    await asyncio.sleep(0.2)
+
+    history = await bus.history()
+    deltas = [e for e in history if e.type == "thinking_delta"]
+    assert "".join(e.data["delta"] for e in deltas) == "weighing the approach"
+    # The completed block adds nothing: the UI already has every word.
+    assert [e for e in history if e.type == "thinking"] == []
+
+
+async def test_text_blocks_are_still_skipped_after_the_thinking_change(runner):
+    """Splitting the isinstance check must not start duplicating text."""
+    run, bus = runner
+    run._translate(
+        AssistantMessage(content=[TextBlock(text="hello")], model="claude-opus-5", usage=None)
+    )
+    await asyncio.sleep(0.2)
+    assert [e for e in await bus.history() if e.type == "text"] == []
+
+
+def test_the_agent_is_asked_for_visible_thinking():
+    """Nothing reaches the UI unless the CLI is told to emit thinking at all."""
+    import inspect
+
+    import dex.runner
+
+    source = inspect.getsource(dex.runner.TaskRunner.run)
+    assert '"display": "summarized"' in source
+    assert '"type": "adaptive"' in source
 
 
 async def test_a_pricing_failure_costs_only_the_estimate(runner, monkeypatch):

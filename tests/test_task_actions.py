@@ -50,16 +50,18 @@ async def a_task(manager: TaskManager, state: TaskState, **fields) -> Task:
 
 # ------------------------------------------------------------------- pause
 
-async def test_pausing_a_queued_task_leaves_it_ready_to_go_again(manager):
+async def test_pausing_a_queued_task_leaves_it_ready_to_be_resumed(manager):
     task = await a_task(manager, TaskState.QUEUED)
 
     paused = await manager.pause_task(task.id)
 
     assert paused.state is TaskState.PAUSED
-    # `paused()` skips rows that never started, so a paused task has to look
-    # like one that ran or it would never be picked up again.
+    # It still has to look like a row that ran, or nothing would ever start it
+    # again — including the operator asking for it by name.
     assert paused.started_at is not None
-    assert [t.id for t in await manager.tasks.paused(limit=10)] == [task.id]
+    # But dex does not start it: that is what `held` means, and it is covered
+    # by the tests further down.
+    assert paused.held is True
 
 
 async def test_a_finished_task_cannot_be_paused(manager):
@@ -245,3 +247,66 @@ def test_resume_is_an_action_the_endpoint_accepts(client):
     ).json()
     assert body["action"] == "resume"
     assert body["skipped"] == [made["id"]]
+
+
+# ------------------------------------------------- a hold that actually holds
+
+async def test_a_pause_the_operator_asked_for_is_not_undone_by_the_queue(manager):
+    """Pausing showed the task paused, then waiting for capacity, then running.
+
+    `paused` means two things — dex made room, or the operator said stop — and
+    the queue revived both. Only dex's own may be picked up again.
+    """
+    task = await a_task(manager, TaskState.QUEUED)
+    await manager.pause_task(task.id)
+
+    assert (await manager.tasks.get(task.id)).held is True
+    # The queue's own revival pass must pass it over, however much room there is.
+    assert await manager.resume_paused(slots=10) == 0
+    assert (await manager.tasks.get(task.id)).state is TaskState.PAUSED
+
+
+async def test_a_pause_dex_made_for_room_is_still_picked_up_again(manager):
+    """The other half: preemption has to keep working."""
+    task = await a_task(manager, TaskState.QUEUED)
+    await manager.tasks.set_state(task.id, TaskState.PAUSED, started_at=time.time())
+
+    assert (await manager.tasks.get(task.id)).held is False
+    assert await manager.resume_paused(slots=10) == 1
+    assert (await manager.tasks.get(task.id)).state is TaskState.QUEUED
+
+
+async def test_resuming_by_hand_lifts_the_hold(manager):
+    task = await a_task(manager, TaskState.QUEUED)
+    await manager.pause_task(task.id)
+
+    resumed = await manager.resume_in_place(task.id)
+
+    assert resumed.state is TaskState.QUEUED
+    assert resumed.held is False
+
+
+async def test_restarting_lifts_the_hold_too(manager):
+    task = await a_task(manager, TaskState.QUEUED)
+    await manager.pause_task(task.id)
+
+    restarted = await manager.restart(task.id)
+
+    assert restarted.state is TaskState.QUEUED
+    assert restarted.held is False
+
+
+async def test_an_archived_task_is_not_revived_by_a_late_write(manager):
+    """Archiving cancels the run, and the run then records its own ending.
+
+    That write arrived after the archive and undid it, so the task came back,
+    waited for capacity and started again.
+    """
+    task = await a_task(manager, TaskState.RUNNING, started_at=time.time())
+    await manager.archive(task.id)
+
+    # Exactly what a cancelled run writes on its way out.
+    await manager.tasks.set_state(task.id, TaskState.PAUSED, finished_at=None)
+
+    assert (await manager.tasks.get(task.id)).state is TaskState.ARCHIVED
+    assert await manager.resume_paused(slots=10) == 0

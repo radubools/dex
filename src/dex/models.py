@@ -168,6 +168,10 @@ class Task:
     #: whole, for a small uniform edit across packages that already exist —
     #: adding a field to every manifest, say. Never wider than one project.
     scope: str = "package"
+    #: Paused by the operator rather than by dex making room. A task dex paused
+    #: goes again by itself when there is capacity; one the operator paused
+    #: waits to be told, or the button means nothing.
+    held: bool = False
 
     @property
     def project_wide(self) -> bool:
@@ -216,6 +220,7 @@ class Task:
             "outputSlug": self.output_slug or self.slug,
             "model": self.model,
             "scope": self.scope,
+            "held": self.held,
             "costIsEstimate": self.cost_is_estimate,
             "canResume": self.state.resumable,
             "canRerun": self.state.terminal,

@@ -13,7 +13,10 @@ instructions are given to you at the top of your brief. Follow them; they are \
 the authority on what to produce, not any assumption about the subject.
 
 Rules that hold for every task:
-- Write only inside the task directory you are given. Never edit files elsewhere.
+- Write only inside the task directory you are given. Never edit files \
+elsewhere. The single exception is a project's shared-utilities protocol, when \
+its instructions define one, and it opens only after the operator has answered \
+`mcp__dex__ask_user` — never on your own judgement.
 - Verify your own work by running it. A claim that something passes is worth \
 nothing until you have seen the tool print the result.
 - When a check fails, what you built is what you fix — do not weaken a check to \
@@ -120,7 +123,10 @@ and nothing else.
 - Do not regenerate, rewrite, or improve packages. Do not fix things you notice
   in passing. A package you were not asked to change must come out byte for
   byte as it went in.
-- Do not create packages, and do not create directories.
+- Do not create packages, and do not create directories. The project's own
+  `utils/` is the one exception, and only under the shared-utilities protocol in
+  the instructions above — which still means asking the operator first, at the
+  end, about code you have already run.
 - Read what you need with `grep`, `sed`, and small scripts run through
   `{python}`. Prefer one pass over the whole project to a hundred separate
   reads.
@@ -134,8 +140,15 @@ untouched.
 {"" if manim_available else _ANIMATION_UNAVAILABLE}
 # Finish
 
+Before the summary, do the shared-utilities step if this project defines one:
+a sweep is exactly the kind of pass that writes the same helper into a dozen
+packages, so if you wrote and ran one, ask the operator once whether it belongs
+in the project's `utils/`, giving it the one-line docstring the generated
+`utils/API.md` reads.
+
 Reply with a short summary: how many packages you changed, what you wrote into
-them, how you checked it, and anything you deliberately left alone.
+them, how you checked it, what you asked about `utils/` and what was decided,
+and anything you deliberately left alone.
 """
 
     return f"""\
@@ -158,12 +171,57 @@ packages, other projects, dex's own source, or anything else in the repository
 around you; the brief above is the whole job. A tool that writes where it is run — `manim` on
 its own is the usual one — writes inside your directory, which is correct. Reach
 for an absolute path outside it and you are somewhere you should not be.
+
+**The one exception is shared utilities.** If the project instructions above
+define a `utils/` protocol, follow it — it is the sanctioned way to write
+outside your directory, and it is narrow:
+
+- **Reading is always allowed.** The project's `utils/API.md` lists every
+  shared module's signatures and a line each, at about a tenth of the source;
+  dex rewrites it before you start, so it is never behind the code. Read that
+  rather than the modules, and open a module only when its signature genuinely
+  does not settle whether it fits.
+- **Writing happens only at the very end, and only after the operator says so.**
+  You build and prove the helper inside your own directory first. Once your
+  checks are green, you call `mcp__dex__utility_proposals_enabled`; if it
+  answers `disabled` the operator has switched this loop off, so you ask
+  nothing, change nothing outside your directory, and say in one line of your
+  summary what you would have proposed. Otherwise you call `mcp__dex__ask_user`
+  once with the two options the project instructions specify, and act on the
+  answer you get back.
+- If the answer is to promote it, write the module into the project's `utils/`
+  and give what you add a one-line docstring — that line is the interface the
+  next task reads out of the generated `utils/API.md`. No list is maintained by
+  hand. Propose mechanism, not policy: something that returns data the caller
+  decides about, with thresholds as defaults rather than rules. A utility that
+  needs a new argument for every caller will be edited by every task, and the
+  project instructions say more about that. The write lands outside your directory, so it comes back to the operator
+  for approval; that is the design working, not a wall. Wait for it rather than
+  abandoning the step.
+- **A "no" is recorded too.** If the answer is to keep it local, the helper
+  stays where it is, but the project's `AGENTS.md` gets a row saying so — that
+  is what stops the next task putting the same question to the operator all over
+  again. Only a real answer is recorded: if none arrives, keep it local and
+  write nothing to `AGENTS.md`.
+- Before you ask anything, check that the project instructions do not already
+  record this decision. A helper listed as kept local is settled; write it in
+  your package and say nothing at the end.
+
+Outside that protocol, and before that question is answered, nothing beyond
+`{task_dir}` is yours to write.
 {existing_note}{"" if manim_available else _ANIMATION_UNAVAILABLE}
 # Finish
 
 When everything the project instructions ask for exists and every check you can
-run is green, reply with a short summary of what you produced and how you
-verified it. Mention anything you could not complete and why.
+run is green, and before you write your summary, do the shared-utilities step if
+this project defines one. Look back over what you wrote: if a helper turned out
+to be generic and reusable, or a shared module you read nearly fitted and should
+gain something additive, ask the operator once and then act on the answer. It
+belongs here, at the end, because by now the code has actually run.
+
+Then reply with a short summary of what you produced and how you verified it.
+Say what you asked about `utils/`, what was decided, and where you recorded it,
+and mention anything you could not complete and why.
 """
 
 

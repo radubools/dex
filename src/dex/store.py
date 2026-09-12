@@ -27,7 +27,7 @@ TASK_COLUMNS = """
     extract(epoch from started_at)::float8 AS started_at,
     extract(epoch from finished_at)::float8 AS finished_at,
     error, cost_usd, turns, session_id, attempt, parent_id, resumed_from, output_slug,
-    model, cost_is_estimate, project, scope
+    model, cost_is_estimate, project, scope, held
 """
 
 
@@ -56,6 +56,7 @@ def task_from_row(row: asyncpg.Record) -> Task:
     task.cost_is_estimate = row["cost_is_estimate"]
     task.project = row["project"]
     task.scope = row["scope"]
+    task.held = row["held"]
     return task
 
 
@@ -209,12 +210,13 @@ class TaskStore:
         await self.db.pool.execute(
             """INSERT INTO tasks (id, thread_id, title, slug, problem, state, created_at,
                                   attempt, parent_id, session_id, output_slug, resumed_from,
-                                  model, project, scope)
+                                  model, project, scope, held)
                VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8, $9, $10, $11, $12, $13, $14,
-                       $15)""",
+                       $15, $16)""",
             task.id, task.thread_id, task.title, task.slug, task.problem,
             task.state.value, task.created_at, task.attempt, task.parent_id, task.session_id,
             task.output_slug, task.resumed_from, task.model, task.project, task.scope,
+            task.held,
         )
         return task
 
@@ -274,6 +276,14 @@ class TaskStore:
         return {row["slug"] for row in rows}
 
     async def set_state(self, task_id: str, state: TaskState, **fields: Any) -> None:
+        """Move a task to a state, unless it has been archived out from under it.
+
+        Archiving cancels whatever is running, and the run then writes its own
+        ending — a pause, usually, since it was cancelled rather than failed.
+        That write landed after the archive and undid it: the task reappeared,
+        waited for capacity, and started again. Archived is the one state a
+        late write may not overturn.
+        """
         assignments = ["state = $2"]
         values: list[Any] = [task_id, state.value]
         for column, value in fields.items():
@@ -283,8 +293,10 @@ class TaskStore:
             else:
                 values.append(value)
                 assignments.append(f"{column} = ${len(values)}")
+        # Archiving itself is always allowed; only moving *out* of it is not.
+        guard = "" if state is TaskState.ARCHIVED else " AND state <> 'archived'"
         await self.db.pool.execute(
-            f"UPDATE tasks SET {', '.join(assignments)} WHERE id = $1", *values
+            f"UPDATE tasks SET {', '.join(assignments)} WHERE id = $1{guard}", *values
         )
 
     async def set_cost(self, task_id: str, cost: float, *, estimate: bool) -> None:
@@ -340,16 +352,18 @@ class TaskStore:
         )
 
     async def paused(self, limit: int = 10) -> list[Task]:
-        """Tasks waiting to go again, oldest first — the order they resume in.
+        """Tasks dex paused and may start again, oldest first.
 
-        Only ones that actually started. A row can be paused without ever
+        Not the ones the operator paused: those are `held`, and starting them
+        again is exactly what the button was pressed to prevent. Only ones that
+        actually started. A row can be paused without ever
         having run — the tasks imported from the old file-backed store are
         marked that way — and starting those would build directories for
         packages that have since been superseded.
         """
         rows = await self.db.pool.fetch(
             f"""SELECT {TASK_COLUMNS} FROM tasks
-                WHERE state = 'paused' AND started_at IS NOT NULL
+                WHERE state = 'paused' AND started_at IS NOT NULL AND NOT held
                 ORDER BY seq LIMIT $1""",
             limit,
         )
@@ -550,7 +564,14 @@ class SettingsStore:
     LIMIT_PROBE = "limit_probe"
     TASK_CONCURRENCY = "task_concurrency"
     CHAT_CONCURRENCY = "chat_concurrency"
+    #: Whether a task may propose promoting a helper into the project's
+    #: `utils/`. Read at the moment a task is about to ask, so turning it off
+    #: silences runs already in flight rather than only the next ones.
+    UTILITY_PROPOSALS = "utility_proposals"
     MODEL = "model"
+    #: How long a task may think before acting. None defers to DEX_EFFORT, so
+    #: an operator who never touches it keeps whatever the deployment set.
+    EFFORT = "effort"
     ANIMATION_SPEED = "animation_speed"
 
     #: Applied when nothing is stored yet.
@@ -560,7 +581,11 @@ class SettingsStore:
         LIMIT_PAUSED: False,
         TASK_CONCURRENCY: DEFAULT_CONCURRENCY,
         CHAT_CONCURRENCY: DEFAULT_CONCURRENCY,
+        # On by default: the loop is the point, and an operator who does not
+        # want to be asked turns it off once.
+        UTILITY_PROPOSALS: True,
         MODEL: None,
+        EFFORT: None,
         ANIMATION_SPEED: 1.0,
     }
 
@@ -595,6 +620,15 @@ class SettingsStore:
 
     async def auto_approve(self) -> bool:
         return bool(await self.get(self.AUTO_APPROVE, False))
+
+    async def effort(self) -> str | None:
+        """The operator's thinking-effort choice, or None to use the default."""
+        value = await self.get(self.EFFORT)
+        return str(value) if value else None
+
+    async def utility_proposals(self) -> bool:
+        """Whether a task may ask about promoting a helper into `utils/`."""
+        return bool(await self.get(self.UTILITY_PROPOSALS, True))
 
     async def paused(self) -> bool:
         """Whether generation work is held. Chats and planning still run."""

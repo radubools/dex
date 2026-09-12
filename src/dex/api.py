@@ -52,6 +52,18 @@ MODEL_CHOICES = [
     {"id": "claude-haiku-4-5", "label": "Haiku 4.5", "note": "cheapest"},
 ]
 
+#: How hard a task thinks before it acts. More effort buys better work on a
+#: hard problem and spends both wall-clock and tokens on an easy one — a
+#: high-effort run put 122 seconds of thinking in front of its first token.
+EFFORT_CHOICES = [
+    {"id": "low", "label": "Low", "note": "fastest, least thinking"},
+    {"id": "medium", "label": "Medium", "note": "brief deliberation"},
+    {"id": "high", "label": "High", "note": "the usual default"},
+    {"id": "xhigh", "label": "Extra high", "note": "slower, harder problems"},
+    {"id": "max", "label": "Max", "note": "slowest and dearest"},
+]
+EFFORT_IDS = [choice["id"] for choice in EFFORT_CHOICES]
+
 #: Far above any real thread, but bounded: a runaway thread should not be able
 #: to make one request read the whole table.
 THREAD_TASK_LIMIT = 10_000
@@ -120,6 +132,10 @@ class SettingsRequest(BaseModel):
     task_concurrency: int | None = Field(default=None, ge=1, le=MAX_WORKERS)
     animation_speed: float | None = Field(default=None, ge=0.1, le=8.0)
     chat_concurrency: int | None = Field(default=None, ge=1, le=MAX_WORKERS)
+    #: Whether tasks may propose promoting a helper into a project's `utils/`.
+    utility_proposals: bool | None = None
+    #: One of EFFORT_IDS, or "" to fall back to the deployment default.
+    effort: Literal["low", "medium", "high", "xhigh", "max", ""] | None = None
     model: str | None = None
     #: Per-project override, e.g. {"algorithms": "claude-sonnet-5"}.
     project_models: dict[str, str] | None = None
@@ -398,6 +414,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "settings": await settings.all(),
             "costs": await CostStore(db).totals(),
             "models": MODEL_CHOICES,
+            "efforts": EFFORT_CHOICES,
+            "defaultEffort": config.effort,
             "project": config.project,
             "defaultModel": config.model,
             "running": len(tasks.live),
@@ -418,6 +436,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             released = await tasks.set_auto_approve(body.auto_approve)
         if body.paused is not None:
             moved = await tasks.set_paused(body.paused)
+        if body.utility_proposals is not None:
+            await settings.set(SettingsStore.UTILITY_PROPOSALS, body.utility_proposals)
+        if body.effort is not None:
+            # "" clears the override rather than storing an invalid effort.
+            await settings.set(SettingsStore.EFFORT, body.effort or None)
         if body.limit_paused is not None:
             # Recorded as an override, not just a value: the watcher runs every
             # five minutes and would otherwise undo the operator's decision on

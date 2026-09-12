@@ -14,7 +14,7 @@ export default defineConfig({
     // listed. `.ts.net` covers any tailnet MagicDNS name; `.local` covers
     // Bonjour. This is the dev server only — the Python server does no such
     // filtering, so a production build served from it needs none of this.
-    allowedHosts: ['.ts.net', '.local', 'macbook-pro-4'],
+    allowedHosts: ['.ts.net', '.local', 'macbook-pro-4', 'mac'],
     watch: {
       // Vite only watches its root (`web/`), so the Python sources and the
       // generated assets are already out of scope. `dist/` is not — without

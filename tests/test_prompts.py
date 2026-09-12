@@ -79,6 +79,93 @@ def test_the_algorithms_guide_asks_for_narration_and_captions(tmp_path: Path):
     assert "self.wait(0.6)" not in guide
 
 
+def test_the_brief_opens_a_door_for_shared_utilities():
+    """Confinement told the agent nothing outside its directory was ever its own.
+
+    The project guides now define a `utils/` protocol: prove a helper locally,
+    then ask the operator at the end whether it should be promoted. Without a
+    carve-out here the agent reads the confinement rule last and declines to
+    act on an answer the operator already gave.
+    """
+    text = brief(ALGORITHMS / "two-sum")
+    # The confinement itself has to survive -- the exception is narrow, not a
+    # replacement for the rule.
+    assert "Nothing outside" in text
+    assert "The one exception is shared utilities" in text
+    # The three things that make the loop actually run.
+    assert "Reading is always allowed" in text
+    assert "only at the very end, and only after the operator says so" in text
+    assert "comes back to the operator for approval" in text
+    # And it fires at the finish, not mid-task.
+    assert "before you write your summary" in text
+
+
+def test_a_project_wide_sweep_can_promote_a_utility_too():
+    """A sweep is the pass most likely to write one helper into a dozen packages."""
+    text = generation_prompt(
+        problem="tag everything",
+        task_dir=ALGORITHMS,
+        python=Path("/w/.venv/bin/python"),
+        manim_available=True,
+        project_wide=True,
+    )
+    assert "do not create directories" in text
+    assert "`utils/` is the one exception" in text
+    assert "utils/API.md" in text
+
+
+def test_the_guides_define_the_protocol_the_brief_points_at():
+    """The brief defers to the project instructions, so they must carry it."""
+    for project in ("algorithms", "yoga"):
+        guide = (REPO / "assets" / project / "AGENTS.md").read_text(encoding="utf-8")
+        # The generated index, not the modules: a tenth of the bytes.
+        assert "Shared utilities" in guide, project
+        assert "utils/API.md" in guide, project
+        assert "dex.tools.utils_api" in guide, project
+        # Ask at the end, with the operator's two options.
+        assert "prove it first, then ask at the end" in guide, project
+        assert "Keep it in the task directory" in guide, project
+        assert "Put it in the project `utils/`" in guide, project
+        # Utilities general enough that tasks are not forever editing them.
+        assert "Keep them general" in guide, project
+        assert "Return data, not verdicts or prose" in guide, project
+        assert "Prefer\ncomposing over changing" in guide, project
+        # A change to something already shared must not break its callers.
+        assert "backward-compatible" in guide, project
+        assert "already import that module and you cannot test them" in guide, project
+        # A "no" sticks, so the next task does not ask the same question again.
+        assert "Kept local" in guide, project
+        assert "Why it stays local" in guide, project
+        assert "do not ask about it again" in guide, project
+
+
+def test_declining_a_promotion_is_recorded_so_it_is_not_re_asked():
+    """A "no" that leaves no trace gets re-litigated by every task after it.
+
+    Without the *Kept local* table the operator answers "keep it local", the
+    next task writes the same helper, reaches the same conclusion, and asks
+    again.
+    """
+    text = brief(ALGORITHMS / "two-sum")
+    assert 'A "no" is recorded too' in text
+    assert "stops the next task putting the same question to the operator" in text
+    # Silence is not a decision, so it records nothing.
+    assert "if none arrives, keep it local and" in text
+    assert "write nothing to `AGENTS.md`" in text
+    # And a settled row is checked before asking, not after.
+    assert "record this decision" in text
+
+
+def test_a_new_project_starts_with_the_protocol():
+    from dex.projects import STARTER_GUIDE
+
+    guide = STARTER_GUIDE.format(name="Demo", description="A demo.")
+    assert "Shared utilities" in guide
+    assert "mcp__dex__ask_user" in guide
+    assert "Keep it in the task directory" in guide
+    assert "Kept local" in guide
+
+
 def test_narration_files_are_recognised_as_assets():
     """Otherwise the watcher ignores them and they never reach the UI."""
     from dex.watcher import KINDS, is_artifact

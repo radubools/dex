@@ -41,6 +41,215 @@ paths.
 Describe the deliverable for a task in this project here: the files, what each
 one is for, and how to tell when it is done.
 
+## Shared utilities — prove it first, then ask at the end
+
+Sometimes the useful thing you write is not part of the package at all: a
+helper that validates the deliverable, a build step, a check every package
+needs. That is **tooling**,
+and the next task will want it too. Copying it from package to package is how
+six subtly different versions of one function end up in the project.
+
+Shared tooling lives in `utils/` in the project directory — one level above your
+package — as a plain Python package that any package can import:
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils import helpers  # noqa: E402
+```
+
+Keep the deliverable itself self-contained — a person reads it. `utils/` is for
+the build side: checks, conversions, generation steps.
+
+### Before you write a helper, read the index
+
+Two tables at the end of this section are the whole search: *Shared utilities*,
+a line per module already in the project's `utils/`, and *Kept local*, the
+record of what the operator has already decided does **not** belong there. Both
+are in this guide, which you have been given — so finding out what exists costs
+you nothing. You do not have to list directories and you do not have to read
+the modules.
+
+**When a row looks like it might cover your case, read `utils/API.md`** — one
+level above your package. It is generated from the modules themselves: every
+public signature, constant, and one-line description, and none of the bodies.
+It is about a tenth of the source and it is normally all you need. Reach for a
+module's own source only when a signature and its line genuinely do not settle
+whether it fits — and then read that one module, not the directory.
+
+What you find lands in one of three places:
+
+- **It does the job.** Import it and carry on — no question, no new module,
+  nothing to propose. Writing a second version of a function already sitting
+  there is the exact thing this section exists to prevent.
+- **It nearly does the job** — right idea, wrong signature, a case it does not
+  handle. **Do not edit it now.** Call it for the part it does cover and do the
+  rest inside your package. Often that is the end of it; if a real gap remains,
+  the change gets proposed at the end, like anything else.
+- **Nothing covers it.** Write your own, locally, and carry on.
+
+Then read *Kept local*. **If what you are about to write is already listed
+there, the operator has settled it**: write it inside your package and do not
+raise it again at the end. That table exists so the same question is never put
+to them twice — treat a row in it as closed, not as an opening to re-argue.
+
+### Keep them general, or they will never stop changing
+
+A shared utility earns its place by outliving the package that wrote it. The
+ones that do are **mechanism**: they compute a value or answer a question and
+hand it back. The ones that do not are **policy** — they settle what counts as
+correct for the package that happened to need them first, and then every
+package after that needs them changed.
+
+So what you write, and what you propose, should:
+
+- **Return data, not verdicts or prose.** A list of problems the caller can
+  read, count, ignore, or print. The moment a helper formats a message or
+  decides that a package has failed, the next caller wants it to decide
+  differently, and the only way to get that is to edit it.
+- **Take a default, not a rule.** A threshold belongs in a keyword argument
+  with a sensible default, so a package that needs a different one passes it
+  and nobody touches the function.
+- **Do one thing.** Two small functions the caller composes beat one that takes
+  a mode flag: a caller who wants half of it can then take half.
+
+And the tripwire: **if you find yourself adding a second or third keyword
+argument for one caller, what you want is not this function.** Write yours
+locally. A utility that grows a knob per package is one that every task will
+keep editing, and a shared thing that changes every week is worse than no
+shared thing at all — nobody can rely on what it does.
+
+The same instinct settles the "nearly does the job" case above. **Prefer
+composing over changing.** If you can call the utility and do the remaining bit
+yourself inside your package, that is not a change worth proposing — that is
+the utility working as intended. Propose a change only when the gap is one
+every future caller would hit too.
+
+### While you work, keep it local
+
+Whatever you write stays **inside your task directory** and is used there. Do
+not reach for `utils/` mid-task. An untested module promoted into shared space
+is worse than no shared module at all, and stopping to ask halfway through
+interrupts work that has not yet shown the helper is worth sharing.
+
+### At the end, once everything is green, ask
+
+As the **last step before your summary** — after the deliverable is built and
+every check you can run has passed, so the code has actually run and done its
+job — look back at what you wrote. Two things are worth raising, and both use
+the same single question at the same moment:
+
+**A local module that should be shared.** It is **generic** — nothing in it is
+specific to this package — and **reusable**: you can name another package that
+would want it.
+
+**A shared module that should change.** You read one during the task, it nearly
+fit, and you worked around it. Propose the change now, but only an **additive,
+backward-compatible** one: a new function beside the existing one, or a new
+keyword argument whose default preserves today's behaviour. Packages you cannot
+see already import that module and you cannot test them, so a changed signature
+or an altered return value is not yours to propose. If what you need cannot be
+done additively, say so in the question and recommend keeping it local.
+
+Before you ask about either, two checks.
+
+**Is the loop switched on?** Call `mcp__dex__utility_proposals_enabled`. It is a
+global operator setting, read at the moment you call it, and it is on unless the
+operator has turned it off. If it answers `disabled`, **ask nothing**: leave the
+helper where it is, add no row to any table, and note in one line of your
+summary that you had something worth proposing and the setting was off. Do not
+work around it, and do not raise it as prose in the summary instead — off means
+not asked.
+
+**Is it already settled?** Read the *Kept local* table one more time. A row
+there is a decision already made; do not reopen it. If your case is genuinely
+different from what that row describes, say so in your summary instead of
+asking again.
+
+If the loop is on and nothing settles it, call `mcp__dex__ask_user` **once**,
+with exactly these two options:
+
+- **"Put it in the project `utils/`"** — write the module, or the added
+  function or argument, into the project's `utils/`; change your package to
+  import it from there; and **re-run your checks** so you know the move broke
+  nothing. Give whatever you add a **one-line docstring**, and the same for the
+  module if it is new: that line is what the next task reads, so it is the
+  interface, not a comment. Then regenerate the index:
+
+  ```
+  {{python}} -m dex.tools.utils_api <project directory>
+  ```
+
+  You do not hand-maintain a list anywhere — `utils/API.md` is generated from
+  the code, and dex rewrites it before every task besides. Those writes land
+  outside your task directory, so each comes back to the operator for approval.
+  That is expected; wait for it.
+- **"Keep it in the task directory"** — it stays local to this package and
+  `utils/` is untouched, but **add a row for it to the *Kept local* table
+  below**, naming the helper and the reason in a line. That row is the whole
+  point of the table: without it the next task writes the same helper, reaches
+  the same conclusion, and asks the operator the same question again. It is one
+  write to this file, so it comes back for approval like any other.
+
+Make the question concrete — name the module, say what it does in a line, say
+what you verified, and name the packages that would want it:
+
+> `validate_manifest(path)` checks a manifest against the schema above; run
+> here, and it caught two missing fields. Every package needs it. Put it in
+> the project `utils/`, or keep it local to this package?
+
+For a change to something that is already shared, say what is there now, what
+you need, and why your version is additive:
+
+> `utils/helpers.py` has `validate(obj)`, which does not cover the new field I
+> needed; I checked it locally. A `strict=False` keyword defaulting to
+> today's behaviour would cover it. Add it to `utils/helpers.py`, or keep it
+> local to this package?
+
+Ask **once**, at the end, and only about code that has actually run. If several
+things belong together, name them all in that one question. Do not ask about a
+three-line helper only your package will ever use. If no answer comes back,
+keep it local, add **no** row — nothing was decided, and a silence recorded as a
+decision would close the question for every task after you — and say so in your
+summary.
+
+A project-scoped task already has the project directory as its own, so its
+writes need no approval — it still asks, at the end, for the same reason.
+
+### Shared utilities
+
+Every module in the project's `utils/`, a line each. Both this roster and the
+fuller `utils/API.md` beside the modules are generated from the source and
+rewritten before your task starts, so neither can fall behind the code and
+neither is yours to edit by hand. To change what a row says, change the
+module's docstring.
+
+<!-- utils:begin -->
+<!-- Rows come from each module's first docstring line. Change the docstring, not the table. -->
+
+| Module | What it does |
+|---|---|
+| _(none yet)_ | |
+
+<!-- utils:end -->
+
+A row is enough to tell whether a module is worth a closer look. When one is,
+`utils/API.md` gives every public signature and constant at about a tenth of
+the source; the module itself is the last resort.
+
+### Kept local — already decided
+
+Helpers the operator has decided **not** to share, one row each. A row here is
+settled: write the helper inside your own package and do not ask about it again.
+Add a row whenever the answer to your question is "keep it in the task
+directory".
+
+| Helper | Why it stays local |
+|---|---|
+| _(none yet)_ | |
+
 ## Conventions
 
 Describe the naming, structure, and style a task in this project should follow.
