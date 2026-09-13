@@ -3,6 +3,66 @@
 Generates study material — algorithm packages and yoga poses — by driving the
 Claude Agent SDK, and serves it to a browser or a phone.
 
+## Setting it up from a clone
+
+Needs Python 3.11+, Node 20+, Postgres, and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+```
+
+That creates `.venv/` with the server and its `dex` entry point. Then the
+JavaScript side — one install at the repo root covers both the UI and the
+widgets, which share a workspace:
+
+```bash
+npm install
+```
+
+A database, which the server creates the schema in on every start, so there is
+no migration step:
+
+```bash
+createdb dex
+```
+
+Credentials for the agent, in your environment or in `.env`: one of
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN`
+(`claude setup-token` prints the last of these, and uses a subscription rather
+than API billing). Without one the UI loads and every task fails on its first
+turn; `/api/health` reports `authenticated: false`.
+
+### Build the widgets before you open anything
+
+Widgets are committed as source only — `dist/` is gitignored — and the server
+skips one whose bundle is missing, so on a fresh clone every file falls back to
+the markdown or code viewer with no error to explain why. Build the three that
+ship with the repo:
+
+```bash
+node widgets/build.mjs pose-3d && node widgets/build.mjs narrated-video && node widgets/build.mjs music-score
+```
+
+Nothing is loaded into the server process: a bundle is a file the browser
+fetches, so a build takes effect on the next page that asks for it, with no
+restart. The same command is what a project design chat runs when it writes a
+new one.
+
+```bash
+npx playwright install chromium
+```
+
+installs the browser the widget tests drive, if you intend to run them.
+
+### The empty directories
+
+`assets/`, `datasets/` and `widgets/<name>/dist/` hold generated material and
+are not in git; each keeps a `README.md` so the directory survives a clone.
+A clone therefore starts with no projects. Create the first one in the UI — it
+is seeded with a copy of [`AGENTS.template`](AGENTS.template) as its
+`AGENTS.md`, which is the brief every task in that project reads, and which the
+project's design chat then edits with you.
+
 ## Running the servers under pm2
 
 Both processes are defined in [`ecosystem.config.cjs`](ecosystem.config.cjs):
@@ -83,8 +143,12 @@ daemon does not otherwise see Postgres.app or `/opt/homebrew/bin`.
 - **Restarting kills work in flight.** The queue marks those tasks paused
   rather than failed and picks them up again, but it waits 30 seconds after a
   restart before starting anything, which is room to intervene.
-- **`dex-api` runs with `--reload` off.** Editing anything under `src/dex/`
-  while it runs is safe; the restart is yours to make when you want it.
+- **`dex-api` runs with `--reload`.** Saving anything under `src/dex/` restarts
+  the server, which is the same interruption as a manual restart — so a task in
+  flight is paused and requeued. Drop the flag from `ecosystem.config.cjs` if
+  you would rather edit while tasks run. pm2 does not re-read `args` on
+  `pm2 restart`; changing them needs `pm2 delete dex-api` then
+  `pm2 start ecosystem.config.cjs`.
 - **Rebuild the UI** after changing `web/` if you are viewing through
   `dex-api` rather than the Vite dev server:
 
