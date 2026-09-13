@@ -3,13 +3,18 @@ import { defineConfig } from '@playwright/test'
 /**
  * Widget tests.
  *
- *   npx playwright test --config widgets/playwright.config.ts
- *   npx playwright test --config widgets/playwright.config.ts pose-3d
+ *   node_modules/.bin/playwright test --config widgets/playwright.config.ts
+ *   node_modules/.bin/playwright test --config widgets/playwright.config.ts pose-3d
  *
  * The server is a plain static file server over the repository root, so a test
  * can reach `/widgets/<name>/dist/index.js` and any real file under `assets/`.
  * Nothing here talks to dex: a widget must work from the file it is handed, and
  * a test that needs the whole application running is testing the wrong thing.
+ *
+ * `cwd` is pinned so the server starts the same way wherever you ran the
+ * command from -- a task runs it from its own package directory. A spec must do
+ * the same for its fixtures: resolve them from `import.meta.url`, never from a
+ * bare relative path, which is read against whatever cwd happened to be.
  */
 export default defineConfig({
   testDir: '.',

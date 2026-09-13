@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, test, type Page } from '@playwright/test'
 
 /**
@@ -14,11 +15,17 @@ import { expect, test, type Page } from '@playwright/test'
  * package exists is a test nobody ever writes.
  */
 
-const FIXTURES = 'widgets/music-score/test/fixtures'
+/**
+ * Both roots are resolved from this file rather than from the working
+ * directory: a task runs the suite from its own package directory, where a
+ * path starting `assets/` or `widgets/` points at nothing.
+ */
+const REPO = fileURLToPath(new URL('../../../', import.meta.url))
+const FIXTURES = join(REPO, 'widgets/music-score/test/fixtures')
 
 /** The first real composition in the project, or the fixture standing in. */
 function composition(): { dir: string; sidecar: string } {
-  const root = 'assets/music'
+  const root = join(REPO, 'assets/music')
   if (existsSync(root)) {
     for (const entry of readdirSync(root).sort()) {
       const dir = join(root, entry)
