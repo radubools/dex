@@ -66,6 +66,13 @@ def main() -> None:
             log_level="info",
             reload=True,
             reload_dirs=[str(Path(__file__).resolve().parent)],
+            # Without this the reload never completes. The UI holds an SSE
+            # stream open for as long as the page is, uvicorn's graceful
+            # shutdown waits for open connections, and so a save under
+            # `src/dex/` left the server stopped — logging "Waiting for
+            # connections to close" and answering nothing — until someone
+            # noticed and killed it.
+            timeout_graceful_shutdown=3,
         )
     else:
         uvicorn.run(create_app(), host=CONFIG.host, port=CONFIG.port, log_level="info")
