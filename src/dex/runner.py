@@ -437,6 +437,7 @@ class TaskRunner:
                 python=Path(sys.executable),
                 manim_available=manim_available(),
                 project_wide=self.task.project_wide,
+                workspace=self.config.workspace,
             )
 
         try:

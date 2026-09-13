@@ -35,7 +35,9 @@ it for cosmetic choices.
 """
 
 
-def project_instructions(task_dir: Path, python: Path, project_wide: bool = False) -> str:
+def project_instructions(
+    task_dir: Path, python: Path, project_wide: bool = False, workspace: Path | None = None
+) -> str:
     """The project's own AGENTS.md, if it has one.
 
     A project is a subdirectory of the assets root; its AGENTS.md carries the
@@ -45,14 +47,25 @@ def project_instructions(task_dir: Path, python: Path, project_wide: bool = Fals
     A package task sits one level inside the project, a project-wide task at its
     root — so where the guide is depends on which this is.
     """
-    guide = (task_dir if project_wide else task_dir.parent) / "AGENTS.md"
+    project_dir = task_dir if project_wide else task_dir.parent
+    guide = project_dir / "AGENTS.md"
+    # Falling back to the layout — `<workspace>/assets/<project>/` — rather than
+    # demanding the argument, so the older call sites and the tests still work.
+    workspace = workspace or project_dir.parent.parent
     try:
         text = guide.read_text(encoding="utf-8")
     except OSError:
         return ""
     # The guide names paths and the interpreter it should be run with, neither
     # of which it can know when it is written.
-    filled = text.replace("{python}", str(python)).replace("{task_dir}", str(task_dir))
+    # `{workspace}` as well as `{python}` and `{task_dir}`: a guide that says
+    # `node widgets/build.mjs` is wrong from a task's own directory, and the
+    # repository root is not something a static guide can know.
+    filled = (
+        text.replace("{python}", str(python))
+        .replace("{task_dir}", str(task_dir))
+        .replace("{workspace}", str(workspace))
+    )
     return (
         "\n# Project instructions\n\n"
         "These define what this task must produce, and how. Follow them.\n\n"
@@ -166,7 +179,7 @@ and its files fall back to the code viewer, so build it before you say it is
 ready — and then prove it runs:
 
 ```
-npx playwright test --config {workspace}/widgets/playwright.config.ts
+{workspace}/node_modules/.bin/playwright test --config {workspace}/widgets/playwright.config.ts
 ```
 
 Playwright and Chromium are installed; do not reach for a headless Chrome of
@@ -174,6 +187,14 @@ your own or a screenshot script. Tests go in `widgets/<name>/test/*.spec.ts`,
 and the guide above describes the harness. Point them at a real file from this
 project rather than a fixture you invented — a widget that only handles the
 shape its author imagined is the failure that actually happens.
+
+Resolve every fixture path from `import.meta.url`, never from a bare relative
+path: you are run from `{project_dir}`, not the repository root, so a path
+beginning `assets/` or `widgets/` reads against the wrong directory.
+
+```ts
+const REPO = fileURLToPath(new URL('../../../', import.meta.url))
+```
 
 Use `{python}` for anything Python.
 
@@ -211,6 +232,7 @@ def generation_prompt(
     python: Path,
     manim_available: bool,
     project_wide: bool = False,
+    workspace: Path | None = None,
 ) -> str:
     """The full brief for one task.
 
@@ -239,7 +261,7 @@ def generation_prompt(
         if present
         else ""
     )
-    guide = project_instructions(task_dir, python, project_wide)
+    guide = project_instructions(task_dir, python, project_wide, workspace)
     # A project with no guide would otherwise leave the agent to invent a
     # format. Saying so is better than letting it guess, which is how a whole
     # project's output silently became whatever the prompt happened to imply.

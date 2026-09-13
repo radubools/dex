@@ -30,6 +30,13 @@ ALLOWED_COMMANDS = {
     "python", "python3", "pytest", "manim", "ls", "cat", "head", "tail", "wc",
     "mkdir", "cp", "mv", "echo", "pwd", "which", "find", "grep", "sed", "awk",
     "test", "true", "file", "ffmpeg", "ffprobe", "uv",
+    # Building a widget and testing it. Both are named in every project guide,
+    # and neither was allowed here: a design turn stopped for the operator on
+    # every build, which went unnoticed only because auto-approve was on.
+    # `node` runs local code, the same class of thing as `python`. `playwright`
+    # is matched by basename, so the guides name `node_modules/.bin/playwright`
+    # directly rather than `npx`, which downloads a package that is missing.
+    "node", "playwright",
 }
 
 #: Never auto-approved, however the command is spelled.

@@ -11,7 +11,8 @@ dependency.**
 | Need | Use |
 |---|---|
 | Anything Python | `{python}` — the interpreter named in your brief |
-| Test a widget | `npx playwright test --config widgets/playwright.config.ts` — Chromium is installed |
+| Build a widget | `node {workspace}/widgets/build.mjs <name>` — writes its `dist/index.js` |
+| Test a widget | `{workspace}/node_modules/.bin/playwright test --config {workspace}/widgets/playwright.config.ts` — Chromium is installed |
 
 Your shell runs one command at a time: no `&&`, no pipes, no `cd`. Pass absolute
 paths.
@@ -81,7 +82,7 @@ Inside `widgets/<widget-name>/` you are unconstrained: any layout, any
 dependency already in the repo, any amount of code. Bundle it with
 
 ```
-node widgets/build.mjs <widget-name>
+node {workspace}/widgets/build.mjs <widget-name>
 ```
 
 which produces the single ESM file the browser needs. Everything is bundled in,
@@ -119,13 +120,23 @@ A widget that builds is not a widget that works. Prove it against a real file
 from this project, in a real browser:
 
 ```
-npx playwright test --config widgets/playwright.config.ts
-npx playwright test --config widgets/playwright.config.ts pose-3d   # just one
+{workspace}/node_modules/.bin/playwright test --config {workspace}/widgets/playwright.config.ts
+{workspace}/node_modules/.bin/playwright test --config {workspace}/widgets/playwright.config.ts pose-3d   # just one
 ```
 
 Playwright and Chromium are installed. Do not reach for a headless Chrome of
 your own, Puppeteer, or a screenshot script — there is one browser here and one
 way to drive it.
+
+A spec reads its fixture files from disk, so resolve every one of them from
+`import.meta.url` — never from a bare relative path. You are run from your own
+package directory, not the repository root, and a path beginning `assets/` or
+`widgets/` is read against whatever the working directory happens to be:
+
+```ts
+const REPO = fileURLToPath(new URL('../../../', import.meta.url))
+const POSE = join(REPO, 'assets/yoga/some-pose/poses/some_pose.json')
+```
 
 Tests live in `widgets/<name>/test/*.spec.ts`. The harness mounts your widget
 the way dex does — the same `mount(el, ctx)`, the same `ctx` shape — and hands
