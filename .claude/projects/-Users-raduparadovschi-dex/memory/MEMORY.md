@@ -1,4 +1,0 @@
-- [Lunge hands land ahead of the front foot](yoga-lunge-hands-land-ahead-of-front-foot.md) — the front foot sits beside the elbow, not the hand; opening the knee only widens the stance.
-- [A hooked elbow lands below the knee](yoga-hooked-elbow-lands-below-the-knee.md) — the upper arm is what presses the knee; banding the elbow level with it fails a correct figure.
-- [Sacrum offset follows the pelvis](yoga-sacrum-offset-follows-the-pelvis.md) — step it back along the pelvis's facing, not the stance, or it sits off the midline and no shared check sees it.
-- [Full lotus shins cannot stack](yoga-full-lotus-shins-cannot-stack.md) — an adult tibia doesn't reach the opposite crease; build the crossed seat, ankle-first, and separate the shins with ankle rise.

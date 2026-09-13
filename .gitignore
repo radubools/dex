@@ -263,3 +263,21 @@ build/
 # Backed up to the external volume rather than versioned here.
 assets/
 datasets/
+
+# Terraform: state can contain secrets, tfvars does, and .terraform is 600MB+
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/*.tfstate
+infra/*.tfstate.*
+infra/terraform.tfvars
+infra/*.plan
+
+# Playwright output. Traces and screenshots are per-run debris.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Claude Code's own state for this checkout: session transcripts, settings and
+# the agent's memory. Local to this machine, not part of the project.
+.claude/
