@@ -9,6 +9,16 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "watchfiles>=0.24",
     "pydantic>=2.9",
+    # Every queue, store and event read goes through it. It was missing here
+    # while being imported by `dex.db`, so it only ever worked in a venv that
+    # had picked it up some other way: a clean `uv sync` produced a server that
+    # died on its first import. The Docker build is what surfaced that.
+    "asyncpg>=0.30",
+    # The Google token exchange. Declared rather than leaned on: it was only
+    # ever a dev dependency (fastapi's TestClient), so a --no-dev install would
+    # have had the login path import something that is not there -- exactly the
+    # asyncpg mistake again.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

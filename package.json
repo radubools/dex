@@ -3,10 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["web"],
+  "workspaces": [
+    "web"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace=web",
     "dev:ui": "npm run dev --workspace=web",
     "build": "npm run build --workspace=web"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }
