@@ -1,0 +1,5 @@
+{
+  "name": "pose-3d",
+  "title": "3D pose",
+  "description": "Draws a 20-landmark yoga pose as an orbitable skeleton with a floor grid."
+}

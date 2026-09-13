@@ -156,9 +156,9 @@ def test_declining_a_promotion_is_recorded_so_it_is_not_re_asked():
 
 
 def test_a_new_project_starts_with_the_protocol():
-    from dex.projects import STARTER_GUIDE
+    from dex.projects import starter_guide
 
-    guide = STARTER_GUIDE.format(name="Demo", description="A demo.")
+    guide = starter_guide(REPO, "Demo", "A demo.")
     assert "Shared utilities" in guide
     assert "mcp__dex__utility_proposals_enabled" in guide
     assert "Do not ask" in guide
@@ -194,3 +194,38 @@ def test_video_sections_become_seek_times():
     # Contiguous, and starting at zero: that is what makes looping exact.
     assert marks[0]["start"] == 0.0
     assert marks[0]["end"] == marks[1]["start"]
+
+
+def test_the_design_brief_makes_it_look_before_it_writes():
+    """A guide written from the pasted copy alone describes a project that isn't there.
+
+    The designer used to be a single tool-less call: it could not look at
+    anything even if it wanted to. Now it can, so it has to be told to.
+    """
+    from dex.prompts import DESIGN_SYSTEM, design_prompt
+
+    brief = design_prompt(
+        message="tags are inconsistent",
+        project="music",
+        project_dir=Path("/w/assets/music"),
+        python=Path("/w/.venv/bin/python"),
+        workspace=Path("/w"),
+        guide="# Project: Music",
+        history="(nothing yet)",
+    )
+    assert "Look before you write" in brief
+    assert "grep" in brief
+    # Reading is unrestricted; only writing is confined. Worth saying, because
+    # the generation brief says the opposite for ordinary tasks.
+    assert "read anywhere in the repository" in brief
+
+    assert "Check what you wrote" in brief
+    assert "Read the file back" in brief
+    # The failure mode that is silent: a broken registry is ignored, and every
+    # file in the project quietly falls back to the code viewer.
+    assert "valid JSON" in brief
+
+    # And the same expectation survives in the system prompt, which is what
+    # persists across a long conversation.
+    assert "Look before you write" in DESIGN_SYSTEM
+    assert "Check what you wrote" in DESIGN_SYSTEM

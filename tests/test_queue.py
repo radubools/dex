@@ -253,14 +253,30 @@ async def test_raising_the_limit_starts_queued_work_without_a_restart(manager):
     for slug in ("a", "b", "c"):
         await manager.submit(f"problem {slug}", title=slug, slug=slug)
 
-    await asyncio.wait_for(BlockingRunner.started["a"].wait(), 45)
-    await asyncio.sleep(0.2)
-    assert not BlockingRunner.started["b"].is_set()
+    async def running() -> set[str]:
+        return {slug for slug, event in BlockingRunner.started.items() if event.is_set()}
 
-    # Raised from the UI: idle workers pick the queue up on their next poll.
+    async def wait_for_count(n: int, timeout: float = 10) -> set[str]:
+        """Wait until `n` of the three have started, then return which."""
+        async with asyncio.timeout(timeout):
+            while len((live := await running())) < n:
+                await asyncio.sleep(0.05)
+        return live
+
+    # One task runs, but not necessarily `a`. The claim uses FOR UPDATE SKIP
+    # LOCKED, so a row locked for an instant by another statement is passed over
+    # and picked up on the next poll -- the queue is deliberately not strict
+    # FIFO. Asserting `a` specifically made this test fail whenever that
+    # happened, which is a property the queue never promised.
+    first = await wait_for_count(1)
+    assert len(first) == 1, f"the limit of 1 was not honoured: {first}"
+    await asyncio.sleep(0.2)
+    assert len(await running()) == 1, "a second task started while the limit was 1"
+
+    # Raised from the UI: the pool grows on the spot and idle workers are woken,
+    # rather than waiting out the supervisor's next two-second tick.
     await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 3)
-    await asyncio.wait_for(BlockingRunner.started["b"].wait(), 45)
-    await asyncio.wait_for(BlockingRunner.started["c"].wait(), 45)
+    assert await wait_for_count(3) == {"a", "b", "c"}
 
     for slug in ("a", "b", "c"):
         BlockingRunner.release[slug].set()

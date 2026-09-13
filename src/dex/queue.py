@@ -106,12 +106,18 @@ class TaskManager:
         orphans = await self.tasks.release_orphans(STALE_AFTER_S, socket.gethostname())
         for task_id in orphans:
             log.info("task %s was left running by a stopped server; it will go again", task_id)
+            # Looked up rather than carried: recovery starts from an id, and an
+            # untagged event would be invisible to every scoped subscriber.
+            orphan_project = await self.db.pool.fetchval(
+                "SELECT project FROM tasks WHERE id = $1", task_id
+            )
             self.bus.publish(
                 Event(
                     type="task_state",
                     task_id=task_id,
                     data={"state": TaskState.PAUSED.value, "activity": None,
                           "error": "The server stopped while this task was running."},
+                    project=orphan_project,
                 )
             )
         # Exactly as many workers as the limit allows, grown and retired by the
@@ -210,6 +216,7 @@ class TaskManager:
                 type="task_created",
                 task_id=task.id,
                 data={"task": task.to_json(self.config.assets_dir), "threadId": thread_id},
+                project=task.project,
             )
         )
         self._wake_workers()
@@ -459,7 +466,11 @@ class TaskManager:
         if live is not None:
             # Archiving something mid-run stops it: leaving it running would
             # keep spending on a task nobody is looking at any more.
-            live.preempted = True
+            #
+            # `archived` rather than `preempted`: preempted means "start this
+            # again when there is room", which is the opposite of what an
+            # archive asks for.
+            live.archived = True
             if live.runtime is not None:
                 live.runtime.cancel()
 
@@ -498,6 +509,16 @@ class TaskManager:
         """
         await self.settings.set(key, value)
         self._limit_cache = None
+        # Apply it now rather than on the supervisor's next tick. The docstring
+        # above has always claimed "immediately", but the pool only grew when
+        # `_supervise` next woke from its unconditional two-second sleep — so
+        # raising the limit in the UI did nothing visible for up to two seconds,
+        # and under load the queued work sat there longer still. `_scale` is
+        # idempotent and returns early while stopping, so calling it here is
+        # safe alongside the supervisor that will call it again.
+        if key == SettingsStore.TASK_CONCURRENCY and self._supervisor is not None:
+            await self._scale()
+            self._wake_workers()
 
     async def set_auto_approve(self, enabled: bool) -> int:
         """Persist the toggle and release anything already waiting on approval.

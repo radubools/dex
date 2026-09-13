@@ -310,3 +310,82 @@ async def test_an_archived_task_is_not_revived_by_a_late_write(manager):
 
     assert (await manager.tasks.get(task.id)).state is TaskState.ARCHIVED
     assert await manager.resume_paused(slots=10) == 0
+
+
+async def test_archiving_a_running_task_sticks(config, db, monkeypatch):
+    """Archiving used to look like it did nothing.
+
+    The archive cancels the run; the run then wrote its own ending -- a pause,
+    since it was cancelled rather than failed. The database refused that write,
+    but the *event* had already gone out, so the row said archived and the
+    screen said paused until someone reloaded. And a paused task is one dex
+    starts again on its own, which is the opposite of archiving.
+    """
+    import asyncio
+
+    from dex.bus import EventBus
+    from dex.models import Task, TaskState
+    from dex.runner import TaskRunner
+    from dex.store import SettingsStore, TaskStore
+
+    tasks = TaskStore(db)
+    task = Task(problem="p", title="t", slug="archive-me")
+    task.project = "algorithms"
+    await tasks.create(task)
+    await tasks.set_state(task.id, TaskState.RUNNING)
+
+    bus = EventBus(db)
+    await bus.start()
+    try:
+        runner = TaskRunner(task, config, bus, tasks, SettingsStore(db))
+        # What `archive()` does to a live task before cancelling it.
+        task.archived = True
+        runner._fail("agent reported an error")
+        await asyncio.sleep(0.3)
+
+        # The row keeps it...
+        assert (await tasks.get(task.id)).state is TaskState.ARCHIVED
+        # ...and so does the last thing the UI was told.
+        states = [
+            e.data["state"] for e in await bus.history() if e.type == "task_state"
+        ]
+        assert states[-1] == "archived", states
+    finally:
+        await bus.stop()
+
+
+async def test_an_archived_task_is_never_picked_up_again(db):
+    """`resume_paused` is what restarts work on its own; archived must be invisible to it."""
+    from dex.models import Task, TaskState
+    from dex.store import TaskStore
+
+    tasks = TaskStore(db)
+    task = Task(problem="p", title="t", slug="left-alone")
+    await tasks.create(task)
+    await tasks.set_state(task.id, TaskState.RUNNING, started_at=1.0)
+    await tasks.set_state(task.id, TaskState.ARCHIVED)
+
+    waiting = await tasks.paused(limit=50)
+    assert task.id not in [t.id for t in waiting]
+
+    # And a late write from the dying run cannot drag it back out.
+    applied = await tasks.set_state(task.id, TaskState.PAUSED)
+    assert applied is False
+    assert (await tasks.get(task.id)).state is TaskState.ARCHIVED
+
+
+async def test_archived_offers_rerun_but_not_restart(db, config):
+    """Manual rerun is the only way back, which is what archiving means."""
+    from dex.models import Task, TaskState
+    from dex.store import TaskStore
+
+    tasks = TaskStore(db)
+    task = Task(problem="p", title="t", slug="flags")
+    await tasks.create(task)
+    await tasks.set_state(task.id, TaskState.ARCHIVED)
+
+    shown = (await tasks.get(task.id)).to_json(config.assets_dir)
+    assert shown["canRerun"] is True, "a manual rerun must still be possible"
+    assert shown["canRestart"] is False, "restart would resurrect it in place"
+    assert shown["canArchive"] is False
+    assert shown["state"] == "archived"

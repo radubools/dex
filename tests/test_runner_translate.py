@@ -137,7 +137,8 @@ async def test_thinking_that_never_streamed_is_still_shown(runner):
     )
     await asyncio.sleep(0.2)
 
-    thinking = [e for e in await bus.history() if e.type == "thinking"]
+    thinking = [e for e in await bus.history()
+                if e.type == "thinking" and e.task_id == run.task.id]
     assert [e.data["text"] for e in thinking] == ["weighing the approach"]
 
 
@@ -159,7 +160,7 @@ async def test_streamed_thinking_is_not_repeated_as_a_whole_block(runner):
     )
     await asyncio.sleep(0.2)
 
-    history = await bus.history()
+    history = [e for e in await bus.history() if e.task_id == run.task.id]
     deltas = [e for e in history if e.type == "thinking_delta"]
     assert "".join(e.data["delta"] for e in deltas) == "weighing the approach"
     # The completed block adds nothing: the UI already has every word.
@@ -192,7 +193,7 @@ async def test_a_block_that_has_not_closed_yet_is_still_not_repeated(runner):
     stream(run, "u1", {"type": "content_block_stop", "index": 0})
     await asyncio.sleep(0.2)
 
-    history = await bus.history()
+    history = [e for e in await bus.history() if e.task_id == run.task.id]
     assert [e for e in history if e.type == "thinking"] == []
     assert "".join(e.data["delta"] for e in history if e.type == "thinking_delta") == (
         "weighing the approach"
@@ -217,7 +218,8 @@ async def test_a_later_block_is_not_repeated_either(runner):
         stream(run, turn, {"type": "content_block_stop", "index": 0})
     await asyncio.sleep(0.2)
 
-    assert [e for e in await bus.history() if e.type == "thinking"] == []
+    mine = [e for e in await bus.history() if e.task_id == run.task.id]
+    assert [e for e in mine if e.type == "thinking"] == []
 
 
 async def test_text_blocks_are_still_skipped_after_the_thinking_change(runner):

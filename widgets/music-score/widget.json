@@ -1,0 +1,5 @@
+{
+  "name": "music-score",
+  "title": "Music score",
+  "description": "Plays a composition's audio and draws its MIDI as staff notation with a cursor that tracks playback."
+}

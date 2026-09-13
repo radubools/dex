@@ -1,12 +1,14 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
 import { assetUrl, readAsset } from '../api'
 import type { AssetResponse } from '../types'
 import { isPose } from '../pose'
+import { resolveWidget, type WidgetInfo } from '../api'
 import { AnimationPlayer } from './AnimationPlayer'
 import { VideoPlayer } from './VideoPlayer'
 import { Diff } from './Diff'
+import { WidgetHost } from './WidgetHost'
 
 // mermaid + marked are ~600kB; only load them when markdown is opened.
 const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markdown })))
@@ -17,6 +19,8 @@ const PoseViewer3D = lazy(() =>
 
 /** Rendered by the media view rather than fetched as text. */
 const IMAGE = new Set(['gif', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'avif', 'mp4', 'webm', 'mov'])
+/** Playable by the browser unaided. `.mid` is not — it needs a synthesiser. */
+const AUDIO = new Set(['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac'])
 
 export type ViewerTarget =
   | { kind: 'asset'; path: string }
@@ -60,12 +64,26 @@ export function Viewer({
   )
 }
 
+/**
+ * How a package's files are grouped on its page.
+ *
+ * The last entry matches everything left over, and that matters more than the
+ * ones above it: this was an allowlist of five patterns, so a package with a
+ * `.mid`, a `.wav` and a `player.html` showed "16 files" in the list and then
+ * displayed six. The rest were not hidden on purpose — nothing claimed them, so
+ * they were dropped. A project produces what it produces; the viewer does not
+ * get to decide which of it exists.
+ */
 const ASSET_GROUPS: { label: string; icon: string; test: (name: string) => boolean }[] = [
-  { label: 'Animations', icon: '🎞', test: (n) => /\.(gif|mp4)$/i.test(n) },
-  { label: 'Narration', icon: '🔊', test: (n) => /\.(m4a|vtt)$/i.test(n) },
-  { label: 'Code', icon: '🐍', test: (n) => n.endsWith('.py') },
-  { label: 'Data', icon: '📋', test: (n) => n.endsWith('.json') },
-  { label: 'Documents', icon: '📘', test: (n) => n.endsWith('.md') },
+  { label: 'Animations', icon: '🎞', test: (n) => /\.(gif|mp4|webm|mov)$/i.test(n) },
+  { label: 'Audio', icon: '🔊', test: (n) => /\.(m4a|wav|mp3|ogg|flac|aac|vtt)$/i.test(n) },
+  { label: 'Score', icon: '🎼', test: (n) => /\.(mid|midi|abc|ly)$/i.test(n) },
+  { label: 'Pages', icon: '🌐', test: (n) => /\.html?$/i.test(n) },
+  { label: 'Images', icon: '🖼', test: (n) => /\.(png|jpe?g|svg|webp|avif)$/i.test(n) },
+  { label: 'Code', icon: '🐍', test: (n) => /\.(py|js|mjs|ts|tsx|css)$/i.test(n) },
+  { label: 'Data', icon: '📋', test: (n) => /\.(json|csv|tsv|ya?ml|toml)$/i.test(n) },
+  { label: 'Documents', icon: '📘', test: (n) => /\.(md|markdown|txt|rst)$/i.test(n) },
+  { label: 'Other', icon: '📄', test: () => true },
 ]
 
 /**
@@ -110,8 +128,12 @@ function PackageView({
   const shortName = (name: string) => name.slice(path.length + 1)
   const claimed = new Set<string>()
   // What to show when there is no explanation: the one asset worth reading,
-  // never the source code, and only when it is unambiguous.
-  const previewable = files.filter((n) => /\.(json|md|markdown|gif|png|jpg|jpeg|svg)$/i.test(n))
+  // never the source code, and only when it is unambiguous. A package's own
+  // deliverable counts — a rendered page, a score sidecar a widget opens — not
+  // just the formats dex happened to know about first.
+  const previewable = files.filter((n) =>
+    /\.(json|md|markdown|gif|png|jpe?g|svg|html?|mid|midi)$/i.test(n),
+  )
   const feature = previewable.length === 1 ? previewable[0] : null
 
   return (
@@ -171,12 +193,87 @@ function AssetView({ path }: { path: string }) {
     return () => { live = false }
   }, [path, ext])
 
+  // Parsed here, memoised on the text, because the result is a prop identity
+  // that matters: PoseViewer3D rebuilds its whole Three.js scene when `pose`
+  // changes. Parsing inline in the render handed it a new object on every
+  // render of this component — and an SSE event re-renders the app several
+  // times a second while tasks run — so the camera snapped back to its default
+  // mid-drag, every time.
+  const content =
+    state.s === 'ok' && 'content' in state.asset ? (state.asset.content as string) : ''
+  const parsedJson = useMemo<unknown>(() => {
+    if (ext !== 'json' || !content) return null
+    try {
+      return JSON.parse(content) as unknown
+    } catch {
+      return null
+    }
+  }, [ext, content])
+
+  // Which widget, if any, this project maps this filename to. Asked on every
+  // open rather than cached: a widget built a moment ago has to work without a
+  // reload, and the answer is one small request.
+  const [widget, setWidget] = useState<WidgetInfo | null>(null)
+  const [widgetFailed, setWidgetFailed] = useState(false)
+  useEffect(() => {
+    let live = true
+    setWidget(null)
+    setWidgetFailed(false)
+    resolveWidget(path)
+      .then((r) => live && setWidget(r.widget))
+      // A resolution failure is not an error the reader needs: it just means
+      // the built-in viewer handles this file, which is the common case.
+      .catch(() => live && setWidget(null))
+    return () => {
+      live = false
+    }
+  }, [path])
+
+  // Media first, and above the loading gate: the fetch is deliberately skipped
+  // for these (the browser loads them from a URL), so `state` never leaves
+  // 'loading' and anything placed after that check would be unreachable.
+  //
+  // A widget still wins over the built-in player. It did not, because `IMAGE`
+  // claimed `.mp4` here and returned before the widget branch below ever ran —
+  // so a project rule naming a video silently did nothing. The widget gets
+  // empty `text` and fetches its own bytes through `ctx.fetchAssetUrl`.
+  if (widget && !widgetFailed && (IMAGE.has(ext) || AUDIO.has(ext))) {
+    return (
+      <WidgetHost
+        widget={widget}
+        path={path}
+        text=""
+        onFallback={() => setWidgetFailed(true)}
+      />
+    )
+  }
   if (IMAGE.has(ext)) return <ImageView path={path} />
+  if (AUDIO.has(ext)) return <AudioView path={path} />
+
   if (state.s === 'loading') return <p className="muted">Loading…</p>
   if (state.s === 'error') return <p className="error">{state.message}</p>
   if (state.asset.kind === 'dir') {
     return <ul className="dir-list">{state.asset.entries.map((e) => <li key={e.name}>{e.name}</li>)}</ul>
   }
+
+  // A project rule wins over the built-in choice for everything else too.
+  // Binary reaches a widget as well, with empty `text`: that is what lets a
+  // `.mid` viewer exist, rather than forcing a rule onto a text sidecar the way
+  // the music project had to.
+  if (widget && !widgetFailed) {
+    return (
+      <WidgetHost
+        widget={widget}
+        path={path}
+        text={state.asset.kind === 'file' ? state.asset.content : ''}
+        onFallback={() => setWidgetFailed(true)}
+      />
+    )
+  }
+
+  // Binary with nothing to render it — a `.mid` and no widget. A link beats
+  // "415: .mid is binary — use /api/assets/raw", which is what this showed.
+  if (state.asset.kind === 'binary') return <BinaryView path={path} ext={ext} />
 
   if (ext === 'md' || ext === 'markdown') {
     return (
@@ -187,17 +284,10 @@ function AssetView({ path }: { path: string }) {
   }
   if (ext === 'json') {
     // A pose file is JSON, but it is a figure rather than a document.
-    const parsed = (() => {
-      try {
-        return JSON.parse(state.asset.content) as unknown
-      } catch {
-        return null
-      }
-    })()
-    if (isPose(parsed)) {
+    if (isPose(parsedJson)) {
       return (
         <Suspense fallback={<p className="muted">Loading the 3D viewer…</p>}>
-          <PoseViewer3D pose={parsed} />
+          <PoseViewer3D pose={parsedJson} />
         </Suspense>
       )
     }
@@ -259,6 +349,40 @@ function Json({ content }: { content: string }) {
 }
 
 /** GIFs autoplay once loaded; replay re-requests the image from frame one. */
+function AudioView({ path }: { path: string }) {
+  return (
+    <div className="audio-view">
+      <audio controls preload="metadata" src={assetUrl(path)} />
+      <p className="muted small">{path.split('/').pop()}</p>
+    </div>
+  )
+}
+
+/**
+ * A file the browser cannot render and no widget claimed.
+ *
+ * Says what it is and offers it, rather than reporting the server's 415 at the
+ * reader — which told them about an API they cannot call and nothing about
+ * their file.
+ */
+function BinaryView({ path, ext }: { path: string; ext: string }) {
+  const name = path.split('/').pop() ?? path
+  return (
+    <div className="binary-view">
+      <p>
+        <strong>{name}</strong>
+      </p>
+      <p className="muted small">
+        A .{ext} file — nothing in the browser can show this one. A project
+        widget could: see “Viewers for this project's files” in the guide.
+      </p>
+      <a className="ghost-btn small" href={assetUrl(path)} download={name}>
+        Download
+      </a>
+    </div>
+  )
+}
+
 function ImageView({ path }: { path: string }) {
   // GIFs get the player (speed, checkpoints, replay); stills are just shown.
   if (path.toLowerCase().endsWith('.gif')) {

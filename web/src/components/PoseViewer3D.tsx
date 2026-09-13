@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { Pose } from '../types'
@@ -28,6 +28,14 @@ export function PoseViewer3D({ pose }: { pose: Pose }) {
   const [labels, setLabels] = useState(false)
   const [hovered, setHovered] = useState<string | null>(null)
   const showLabels = useRef(labels)
+
+  // Rebuild on the figure, not on the object. A caller that re-parses the same
+  // file hands us an equal-but-new `pose`, and tearing the scene down for that
+  // threw the reader's camera away mid-orbit. The effect below reads only
+  // `pose.landmarks`, which is exactly what this covers, so an identity change
+  // with the same landmarks is genuinely nothing to redo. Twenty points, so
+  // stringifying it is cheaper than the rebuild it prevents.
+  const figure = useMemo(() => JSON.stringify(pose.landmarks), [pose])
   showLabels.current = labels
 
   useEffect(() => {
@@ -212,7 +220,8 @@ export function PoseViewer3D({ pose }: { pose: Pose }) {
       })
       mount.replaceChildren()
     }
-  }, [pose])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [figure])
 
   const missing = LANDMARKS.filter((name) => !pose.landmarks[name])
 

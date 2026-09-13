@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- instead of starting an empty one beside it.
     output_slug  TEXT,
     -- 'package' for the usual one-package task, 'project' for a small uniform
-    -- edit across the packages a project already has.
+    -- edit across the packages a project already has, 'design' for a turn of
+    -- the project design chat -- which is a task so that it inherits the whole
+    -- activity view rather than needing one of its own.
     scope        TEXT        NOT NULL DEFAULT 'package',
     -- Paused because the operator said so, rather than because dex made room.
     -- Both look like 'paused'; only dex's own are picked up again on their own.
@@ -169,3 +171,83 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'package'
 
 -- Older databases have no notion of a pause dex must not undo.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS held BOOLEAN NOT NULL DEFAULT false;
+
+-- Tokens, as the agent's own result reported them. Only dollars were kept
+-- before, which made "what did the thinking cost" unanswerable: thinking bills
+-- as output and is already inside `output_tokens`, so nothing was missing from
+-- the total -- it just could not be split out. `thinking_tokens` is that subset,
+-- from `output_tokens_details`, NOT an addition to it: summing the two
+-- double-counts every thought.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS input_tokens       BIGINT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cache_read_tokens  BIGINT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS output_tokens      BIGINT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS thinking_tokens    BIGINT;
+
+-- ---------------------------------------------------------------- identity ---
+-- Who may use this dex, and which projects they may see.
+--
+-- Three roles, and the third is the absence of one: 'admin' sees everything and
+-- assigns roles, 'user' sees the projects granted in `user_projects`, and NULL
+-- means signed in but not authorised -- deliberately a state rather than a
+-- rejection, so the operator can see who is knocking and grant them a role.
+CREATE TABLE IF NOT EXISTS users (
+    id         TEXT PRIMARY KEY,
+    -- Google's stable subject id. The email can change; `sub` cannot, so it is
+    -- what identity hangs on.
+    google_sub TEXT UNIQUE,
+    email      TEXT        NOT NULL UNIQUE,
+    name       TEXT,
+    picture    TEXT,
+    role       TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen  TIMESTAMPTZ,
+    CONSTRAINT users_role_known CHECK (role IS NULL OR role IN ('admin', 'user'))
+);
+CREATE INDEX IF NOT EXISTS users_email ON users (lower(email));
+
+-- Which projects a 'user' may see. An admin needs no rows here: their access is
+-- their role, so revoking admin does not leave stale grants behind.
+CREATE TABLE IF NOT EXISTS user_projects (
+    user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project    TEXT        NOT NULL REFERENCES projects(slug) ON DELETE CASCADE,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    granted_by TEXT        REFERENCES users(id) ON DELETE SET NULL,
+    PRIMARY KEY (user_id, project)
+);
+CREATE INDEX IF NOT EXISTS user_projects_project ON user_projects (project);
+
+-- Server-side sessions rather than a self-contained token, so that removing a
+-- role takes effect on the next request instead of whenever a JWT expires.
+CREATE TABLE IF NOT EXISTS sessions (
+    -- The cookie value is a hash of this, never the id itself, so a leaked
+    -- database row cannot be replayed as a cookie.
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions (expires_at);
+
+-- Short-lived OAuth state, so a callback cannot be replayed or forged and PKCE
+-- has somewhere to keep its verifier between the two legs of the flow.
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state         TEXT PRIMARY KEY,
+    code_verifier TEXT        NOT NULL,
+    redirect_to   TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The project an event belongs to, denormalised. The live fan-out happens in
+-- process with no database round trip, so filtering a subscriber's stream by
+-- the projects they may see needs the project on the event itself.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS project TEXT;
+CREATE INDEX IF NOT EXISTS events_project_seq ON events (project, seq);
+
+-- Backfill from the task that produced each event, so history filters the same
+-- way live events do. Cheap and idempotent: only rows that lack it.
+UPDATE events e SET project = t.project
+  FROM tasks t
+ WHERE e.task_id = t.id AND e.project IS NULL AND t.project IS NOT NULL;

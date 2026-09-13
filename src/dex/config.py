@@ -57,8 +57,42 @@ class Config:
     #: Replay a scripted run instead of calling the model — for UI work offline.
     fake_agent: bool = os.environ.get("DEX_FAKE_AGENT") == "1"
     #: Optional shared secret. Unset (the default) means no auth at all, which
-    #: is the sensible setting on a private network you trust.
+    #: is the sensible setting on a private network you trust. Still honoured
+    #: when Google sign-in is configured: it is the service credential for
+    #: health checks and the CLI, which have no browser to sign in with.
     token: str = os.environ.get("DEX_TOKEN", "")
+
+    # --- Google sign-in -----------------------------------------------------
+    #: From a Google Cloud OAuth 2.0 "Web application" client. Unset leaves
+    #: sign-in switched off and dex behaving exactly as it did before.
+    google_client_id: str = os.environ.get("DEX_GOOGLE_CLIENT_ID", "")
+    google_client_secret: str = os.environ.get("DEX_GOOGLE_CLIENT_SECRET", "")
+    #: The externally visible origin, e.g. https://d123.cloudfront.net. Google
+    #: matches the redirect URI exactly, so this cannot be inferred from the
+    #: request: a Host header is attacker-controlled and an origin guessed from
+    #: one would let a forged Host redirect the code somewhere else.
+    public_origin: str = os.environ.get("DEX_PUBLIC_ORIGIN", "http://localhost:4318")
+    #: Addresses promoted to admin on sign-in, comma-separated. Needed to get
+    #: the first admin in: with no admin, nobody can grant anyone a role.
+    admin_emails: str = os.environ.get("DEX_ADMIN_EMAILS", "")
+    #: Restrict sign-in to one Google Workspace domain, e.g. "example.com".
+    #: Empty allows any Google account -- which is fine, because a new account
+    #: lands with no role and can see nothing until granted one.
+    google_hd: str = os.environ.get("DEX_GOOGLE_HD", "")
+
+    @property
+    def google_enabled(self) -> bool:
+        """Whether sign-in is configured. Both halves or neither."""
+        return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        return {e.strip() for e in self.admin_emails.split(",") if e.strip()}
+
+    @property
+    def redirect_uri(self) -> str:
+        """What must be registered in the Google client, character for character."""
+        return f"{self.public_origin.rstrip('/')}/api/auth/google/callback"
 
     @property
     def project(self) -> str:

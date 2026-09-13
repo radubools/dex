@@ -105,6 +105,10 @@ class Event:
     task_id: str | None = None
     seq: int = 0
     ts: float = field(default_factory=time.time)
+    #: Which project this event belongs to. Carried on the event because the
+    #: live fan-out is in-process with no database round trip, so filtering a
+    #: subscriber's stream to the projects they may see cannot join to `tasks`.
+    project: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -149,6 +153,9 @@ class Task:
     #: True while `cost_usd` is a running estimate rather than the agent's own
     #: reported total.
     cost_is_estimate: bool = False
+    #: Token counts from the agent's result. `thinking_tokens` is the part of
+    #: `output_tokens` spent thinking, not an extra alongside it.
+    tokens: dict[str, int] = field(default_factory=dict)
     #: Files the watcher has seen appear under this task's output directory.
     artifacts: list[str] = field(default_factory=list)
     #: Set when the task is executing, so it can be cancelled.
@@ -161,6 +168,12 @@ class Task:
     #: Set just before dex cancels a run to make room, so the runner records it
     #: as paused rather than cancelled.
     preempted: bool = field(default=False, repr=False)
+    #: Set just before an *archive* cancels a run. Without it the runner writes
+    #: the ending it would have written anyway -- a pause -- and although the
+    #: database refuses to move a task out of `archived`, the event it emits
+    #: has already told the UI otherwise. The row said archived and the screen
+    #: said paused, which is what made archiving look like it did nothing.
+    archived: bool = field(default=False, repr=False)
     #: Human-readable note about what the agent is doing right now.
     activity: str | None = None
     #: What this task is allowed to touch. `package` is one package directory,
@@ -177,6 +190,41 @@ class Task:
     def project_wide(self) -> bool:
         return self.scope == "project"
 
+    def design_payload(self) -> dict[str, str]:
+        """The conversation a design turn carries, unpacked.
+
+        A task has one `problem` string and a design turn needs three things:
+        what was just said, the guide as it stands, and the history. They are
+        packed as JSON into `problem` rather than given columns of their own,
+        because only this one scope has them and a nullable column per field
+        would be three columns empty on every other row.
+        """
+        import json
+
+        try:
+            packed = json.loads(self.problem)
+            if isinstance(packed, dict) and "message" in packed:
+                return {
+                    "message": str(packed.get("message", "")),
+                    "guide": str(packed.get("guide", "")),
+                    "history": str(packed.get("history", "(nothing yet)")),
+                }
+        except (ValueError, TypeError):
+            pass
+        # A design task created before this format, or by hand: the whole
+        # problem is the message, which is still a usable turn.
+        return {"message": self.problem, "guide": "", "history": "(nothing yet)"}
+
+    @property
+    def is_design(self) -> bool:
+        """A turn of the project design chat, run as a task.
+
+        It is a task so that it gets the whole activity surface for free —
+        streamed text, collapsed thoughts, tool calls, diffs, and `ask_user` —
+        rather than a second, thinner viewer reimplementing them.
+        """
+        return self.scope == "design"
+
     def project_dir(self, assets_dir: Path, project: str | None = None) -> Path:
         """The project's own directory, which is where its guide lives."""
         chosen = self.project or project
@@ -189,7 +237,7 @@ class Task:
         are already there — so its directory is the project root.
         """
         root = self.project_dir(assets_dir, project)
-        if self.project_wide:
+        if self.project_wide or self.is_design:
             return root
         return root / (self.output_slug or self.slug)
 
@@ -222,8 +270,14 @@ class Task:
             "scope": self.scope,
             "held": self.held,
             "costIsEstimate": self.cost_is_estimate,
+            "tokens": self.tokens or None,
             "canResume": self.state.resumable,
             "canRerun": self.state.terminal,
+            # Restart resurrects this task in place; rerun makes a new one.
+            # Archiving is a decision to stop, so only the second is offered --
+            # `restart()` refuses an archived task, and a button that quietly
+            # does nothing is worse than no button.
+            "canRestart": self.state is not TaskState.ARCHIVED,
             "canPause": self.state.pausable,
             "canContinue": self.state.continuable,
             # Anything can be archived except what is already archived; a

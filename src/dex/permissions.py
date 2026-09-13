@@ -44,10 +44,15 @@ class PermissionPolicy:
         *,
         workspace: Path,
         task_dir: Path,
+        extra_writable: tuple[Path, ...] = (),
         escalate: Callable[[str, str, dict[str, Any], str | None], Awaitable[str]],
     ) -> None:
         self.workspace = workspace.resolve()
         self.task_dir = task_dir.resolve()
+        #: Directories this run may write to besides its own. Empty for an
+        #: ordinary task; a design turn adds `widgets/`, because widget code is
+        #: shared across projects and so cannot live inside any one of them.
+        self.extra_writable = tuple(p.resolve() for p in extra_writable)
         #: Called when a decision needs a human; resolves to "allow" or "deny".
         self.escalate = escalate
 
@@ -104,6 +109,8 @@ class PermissionPolicy:
         if tool_name in WRITE_TOOLS:
             path = input_data.get("file_path") or input_data.get("path") or input_data.get("notebook_path")
             if self._within(path, self.task_dir):
+                return None
+            if any(self._within(path, root) for root in self.extra_writable):
                 return None
             return f"writes outside the task directory ({path})"
         if tool_name == "Bash":

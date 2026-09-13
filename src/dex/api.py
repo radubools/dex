@@ -21,6 +21,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
 from .bus import EventBus
+from . import widgets
+from .authn import Access, build_access_dependency, build_admin_dependency, build_router
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation
@@ -68,7 +70,19 @@ EFFORT_IDS = [choice["id"] for choice in EFFORT_CHOICES]
 #: to make one request read the whole table.
 THREAD_TASK_LIMIT = 10_000
 
-TEXT_SUFFIXES = {".py", ".md", ".json", ".txt", ".toml", ".yaml", ".yml", ".cfg"}
+#: What `/api/assets` will return as text. Everything else is binary and goes
+#: through `/api/assets/raw`.
+#:
+#: This was eight suffixes, which meant a project producing a `player.html`
+#: could not open its own deliverable: the viewer asked for it as text and got
+#: 415. The rule is "would a person read this in an editor", not "did dex
+#: think of it".
+TEXT_SUFFIXES = {
+    ".py", ".md", ".markdown", ".json", ".txt", ".toml", ".yaml", ".yml", ".cfg",
+    ".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".csv", ".tsv", ".vtt", ".srt", ".xml", ".sql", ".sh", ".ini", ".rst",
+    ".abc", ".ly",  # music projects: ABC notation and LilyPond are both text
+}
 
 
 # --------------------------------------------------------------- request models
@@ -266,15 +280,51 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     app.state.watcher = watcher
     app.state.usage = usage
 
-    def require_token(request: Request) -> None:
-        """Shared secret for LAN exposure. Unset means localhost-only use."""
-        if not config.token:
-            return
-        provided = request.headers.get("x-dex-token") or request.query_params.get("t")
-        if provided != config.token:
-            raise HTTPException(status_code=401, detail="bad or missing token")
+    # One dependency behind every route. It resolves the caller to an `Access`:
+    # the service credential (DEX_TOKEN), a signed-in user with a role, or a
+    # rejection. `guard` therefore now means "may use dex at all" everywhere it
+    # already appeared, and project scoping is applied per route where the
+    # project is actually known.
+    access_dep = build_access_dependency(config, db)
+    admin_only = [Depends(build_admin_dependency(access_dep))]
+    guard = [Depends(access_dep)]
 
-    guard = [Depends(require_token)]
+    app.include_router(build_router(config, db, access_dep))
+
+    async def visible(access: Access) -> list[str]:
+        """The project slugs this caller may see, in listing order."""
+        return access.visible_projects([p.slug for p in await projects.list()])
+
+    # Path-aware guards. FastAPI injects a path parameter into a dependency the
+    # same way it does into a route, so these attach to `dependencies=[...]` and
+    # the route bodies need no changes at all -- which is what makes covering
+    # thirteen per-id routes a one-line edit each rather than thirteen new
+    # signatures to get wrong.
+    async def guard_task(task_id: str, access: Access = Depends(access_dep)) -> None:
+        project = await db.pool.fetchval("SELECT project FROM tasks WHERE id = $1", task_id)
+        if project is None:
+            # Missing, or a task from before projects existed. Either way this
+            # caller has no business with it unless they see everything.
+            if not access.is_admin:
+                raise HTTPException(status_code=404, detail="no such task")
+            return
+        access.check(project)
+
+    async def guard_thread(thread_id: str, access: Access = Depends(access_dep)) -> None:
+        project = await db.pool.fetchval("SELECT project FROM threads WHERE id = $1", thread_id)
+        if project is None:
+            if not access.is_admin:
+                raise HTTPException(status_code=404, detail="no such thread")
+            return
+        access.check(project)
+
+    async def guard_slug(slug: str, access: Access = Depends(access_dep)) -> None:
+        """For routes whose path carries the project slug itself."""
+        access.check(slug)
+
+    task_guard = [Depends(access_dep), Depends(guard_task)]
+    thread_guard = [Depends(access_dep), Depends(guard_thread)]
+    slug_guard = [Depends(access_dep), Depends(guard_slug)]
 
     # ---------------------------------------------------------------- status
 
@@ -312,7 +362,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     # ----------------------------------------------------------------- tasks
 
-    projects = ProjectStore(db, config.assets_dir)
+    projects = ProjectStore(db, config.assets_dir, config.workspace)
     package_tags = PackageTagStore(db)
 
     async def resolve_project(slug: str | None) -> str:
@@ -367,27 +417,70 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         log.exception("%s failed after %d attempts", what, CHAT_ATTEMPTS, exc_info=last)
         raise last
 
-    @app.get("/api/projects", dependencies=guard)
-    async def list_projects() -> dict[str, Any]:
+    @app.get("/api/widgets", dependencies=guard)
+    async def list_widgets(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """The widgets on disk, and this project's rules for using them.
+
+        Read fresh from disk on every call. That is what makes a newly built
+        widget appear without a restart, and the cost is a handful of small
+        file reads.
+        """
+        chosen = await resolve_project(project)
+        access.check(chosen)
         return {
-            "projects": [p.to_json() for p in await projects.list()],
-            "default": config.default_project,
+            "project": chosen,
+            "widgets": [w.to_json() for w in widgets.available(config.workspace)],
+            "rules": [r.to_json() for r in widgets.rules_for(config.assets_dir, chosen)],
         }
 
-    @app.post("/api/projects", dependencies=guard)
+    @app.get("/api/widgets/resolve", dependencies=guard)
+    async def resolve_widget(
+        path: str = Query(...), access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
+        """Which widget opens `path`, if any.
+
+        The project comes from the path's first segment rather than a parameter,
+        because that is how every asset is addressed here -- and it means the
+        same access check as the asset routes.
+        """
+        _check_asset_path(access, path)
+        project = path.strip("/").split("/")[0] if path.strip("/") else ""
+        widget = widgets.resolve(config.assets_dir, config.workspace, project, path)
+        return {"widget": widget.to_json() if widget else None}
+
+    @app.get("/api/projects", dependencies=guard)
+    async def list_projects(access: Access = Depends(access_dep)) -> dict[str, Any]:
+        allowed = set(await visible(access))
+        listed = [p for p in await projects.list() if p.slug in allowed]
+        # The default is only a default if the caller can actually open it;
+        # otherwise the UI would boot into a project it cannot read.
+        fallback = (
+            config.default_project
+            if config.default_project in allowed
+            else (listed[0].slug if listed else None)
+        )
+        return {
+            "projects": [p.to_json() for p in listed],
+            "default": fallback,
+        }
+
+    @app.post("/api/projects", dependencies=admin_only)
     async def create_project(body: ProjectCreateRequest) -> dict[str, Any]:
         """Creates the row, the directory, a starter guide, and a design thread."""
         project = await projects.create(body.name, body.description)
         await ensure_design_thread(db, projects, project.slug)
         return {"project": project.to_json()}
 
-    @app.delete("/api/projects/{slug}", dependencies=guard)
+    @app.delete("/api/projects/{slug}", dependencies=admin_only)
     async def delete_project(slug: str) -> dict[str, bool]:
         if slug == config.default_project:
             raise HTTPException(409, "the default project cannot be deleted")
         return {"ok": await projects.delete(slug)}
 
-    @app.get("/api/projects/{slug}/guide", dependencies=guard)
+    @app.get("/api/projects/{slug}/guide", dependencies=slug_guard)
     async def read_guide(slug: str) -> dict[str, Any]:
         project = await projects.get(slug)
         if project is None:
@@ -398,21 +491,36 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "text": projects.read_guide(slug),
         }
 
-    @app.put("/api/projects/{slug}/guide", dependencies=guard)
+    @app.put("/api/projects/{slug}/guide", dependencies=admin_only)
     async def write_guide(slug: str, body: GuideRequest) -> dict[str, Any]:
         """Replaces the guide. Every later task reads it, including resumes."""
         if await projects.get(slug) is None:
             raise HTTPException(404, "no such project")
         projects.write_guide(slug, body.text)
-        bus.publish(Event(type="guide", data={"project": slug}))
+        bus.publish(Event(type="guide", data={"project": slug}, project=slug))
         return {"ok": True, "text": projects.read_guide(slug)}
 
     @app.get("/api/settings", dependencies=guard)
-    async def read_settings() -> dict[str, Any]:
+    async def read_settings(access: Access = Depends(access_dep)) -> dict[str, Any]:
         settings = SettingsStore(db)
+        if not access.is_admin:
+            # Readable, but without the figures that describe projects they
+            # cannot see. The menu renders; the spend panel is simply absent.
+            return {
+                "settings": await settings.all(),
+                "costs": {},
+                "tokens": {},
+                "models": MODEL_CHOICES,
+                "efforts": EFFORT_CHOICES,
+                "project": config.project,
+                "defaultModel": config.model,
+                "defaultEffort": config.effort,
+                "readOnly": True,
+            }
         return {
             "settings": await settings.all(),
             "costs": await CostStore(db).totals(),
+            "tokens": await CostStore(db).token_totals(),
             "models": MODEL_CHOICES,
             "efforts": EFFORT_CHOICES,
             "defaultEffort": config.effort,
@@ -428,7 +536,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "limit": await _limit_status(settings),
         }
 
-    @app.put("/api/settings", dependencies=guard)
+    @app.put("/api/settings", dependencies=admin_only)
     async def write_settings(body: SettingsRequest) -> dict[str, Any]:
         settings = SettingsStore(db)
         released = moved = 0
@@ -489,9 +597,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         }
 
     @app.get("/api/feed", dependencies=guard)
-    async def feed(project: str | None = Query(default=None)) -> dict[str, Any]:
+    async def feed(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
         """Topics for the review feed, ordered by what is closest to due."""
         name = await resolve_project(project)
+        access.check(name)
         topics = await ReviewStore(db).order(name, discover(config.project_dir(name), name))
         return {
             "project": name,
@@ -501,13 +613,17 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     @app.post("/api/feed/{slug}/reviewed", dependencies=guard)
     async def reviewed(
-        slug: str, body: ReviewRequest, project: str | None = Query(default=None)
+        slug: str,
+        body: ReviewRequest,
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
     ) -> dict[str, Any]:
         """Record that a topic was shown, and reschedule it."""
         chosen = await resolve_project(project)
+        access.check(chosen)
         return {"review": await ReviewStore(db).record(chosen, slug, body.rating)}
 
-    @app.get("/api/costs", dependencies=guard)
+    @app.get("/api/costs", dependencies=admin_only)
     async def costs(
         period: str = Query(default="week"),
         granularity: str = Query(default="day"),
@@ -523,18 +639,25 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         }
 
     @app.get("/api/tasks", dependencies=guard)
-    async def list_tasks() -> dict[str, Any]:
+    async def list_tasks(access: Access = Depends(access_dep)) -> dict[str, Any]:
+        allowed = None if access.is_admin else set(await visible(access))
         return {
             "tasks": [
-                tasks.merge_live(t).to_json(config.assets_dir) for t in await tasks.tasks.list()
+                tasks.merge_live(t).to_json(config.assets_dir)
+                for t in await tasks.tasks.list()
+                if allowed is None or t.project in allowed
             ]
         }
 
     @app.post("/api/tasks", dependencies=guard)
-    async def submit(body: SubmitRequest) -> dict[str, Any]:
+    async def submit(
+        body: SubmitRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
+        chosen_project = await resolve_project(body.project)
+        access.check(chosen_project)
         task = await tasks.submit(
             body.problem, body.title, body.slug, body.thread_id,
-            project=await resolve_project(body.project),
+            project=chosen_project,
             output_slug=body.updates or None,
             scope=body.scope,
         )
@@ -542,14 +665,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await threads.touch(body.thread_id)
         return {"task": task.to_json(config.assets_dir)}
 
-    @app.get("/api/tasks/{task_id}", dependencies=guard)
+    @app.get("/api/tasks/{task_id}", dependencies=task_guard)
     async def get_task(task_id: str) -> dict[str, Any]:
         task = await tasks.tasks.get(task_id)
         if not task:
             raise HTTPException(404, "no such task")
         return {"task": tasks.merge_live(task).to_json(config.assets_dir)}
 
-    @app.post("/api/tasks/{task_id}/resume", dependencies=guard)
+    @app.post("/api/tasks/{task_id}/resume", dependencies=task_guard)
     async def resume_task(
         task_id: str,
         in_place: bool = Query(
@@ -578,8 +701,20 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         return {"task": resumed.to_json(config.assets_dir)}
 
     @app.post("/api/tasks/actions", dependencies=guard)
-    async def act_on_tasks(body: TaskActionRequest) -> dict[str, Any]:
+    async def act_on_tasks(
+        body: TaskActionRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
         """Pause, restart, or archive one task or a whole collapsed group."""
+        if not access.is_admin:
+            # The request carries a list of ids, not one -- the UI collapses
+            # tasks by status and acts on a whole group. Every project involved
+            # has to be one this caller may act in, or a group action becomes a
+            # way to reach past a grant.
+            owners = await db.pool.fetch(
+                "SELECT DISTINCT project FROM tasks WHERE id = ANY($1::text[])", body.ids
+            )
+            for row in owners:
+                access.check(row["project"])
         run = {
             "pause": tasks.pause_task,
             "resume": tasks.resume_in_place,
@@ -604,7 +739,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await tasks.rebalance()
         return {"action": body.action, "tasks": changed, "skipped": skipped}
 
-    @app.post("/api/tasks/{task_id}/rerun", dependencies=guard)
+    @app.post("/api/tasks/{task_id}/rerun", dependencies=task_guard)
     async def rerun_task(task_id: str) -> dict[str, Any]:
         """Run the same problem again, keeping the earlier output."""
         again = await tasks.rerun(task_id)
@@ -613,19 +748,19 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         await _announce(again, "Re-running")
         return {"task": again.to_json(config.assets_dir)}
 
-    @app.post("/api/tasks/{task_id}/answer", dependencies=guard)
+    @app.post("/api/tasks/{task_id}/answer", dependencies=task_guard)
     async def answer(task_id: str, body: AnswerRequest) -> dict[str, bool]:
         return {"ok": tasks.answer(task_id, body.id, body.answer)}
 
-    @app.post("/api/tasks/{task_id}/approve", dependencies=guard)
+    @app.post("/api/tasks/{task_id}/approve", dependencies=task_guard)
     async def approve(task_id: str, body: ApprovalRequest) -> dict[str, bool]:
         return {"ok": tasks.answer(task_id, body.id, body.decision)}
 
-    @app.get("/api/tasks/{task_id}/messages", dependencies=guard)
+    @app.get("/api/tasks/{task_id}/messages", dependencies=task_guard)
     async def read_task_messages(task_id: str) -> dict[str, Any]:
         return {"messages": await TaskMessageStore(db).pending(task_id)}
 
-    @app.post("/api/tasks/{task_id}/messages", dependencies=guard)
+    @app.post("/api/tasks/{task_id}/messages", dependencies=task_guard)
     async def post_task_message(task_id: str, body: TaskMessageRequest) -> dict[str, Any]:
         """Queue a follow-up for a task.
 
@@ -637,7 +772,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             raise HTTPException(404, "no such task")
         return {"message": message}
 
-    @app.post("/api/tasks/{task_id}/cancel", dependencies=guard)
+    @app.post("/api/tasks/{task_id}/cancel", dependencies=task_guard)
     async def cancel(task_id: str) -> dict[str, bool]:
         return {"ok": await tasks.cancel(task_id)}
 
@@ -657,9 +792,12 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # ------------------------------------------------------------------ chat
 
     @app.post("/api/chat/plan", dependencies=guard)
-    async def chat_plan(body: ChatRequest) -> dict[str, Any]:
+    async def chat_plan(
+        body: ChatRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
         """Propose a split into parallel tasks. Nothing is enqueued yet."""
         project_slug = await resolve_project(body.project)
+        access.check(project_slug)
         # Directories only. A task slug is not a package: listing them here
         # let the planner read `bit-insertion-narrate` — the name of the task
         # that narrated `bit-insertion` — as a package of its own, and write
@@ -685,10 +823,16 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         return {"plan": plan.to_json()}
 
     @app.post("/api/chat/confirm", dependencies=guard)
-    async def chat_confirm(body: ConfirmRequest) -> dict[str, Any]:
+    async def chat_confirm(
+        body: ConfirmRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
         """Enqueue an accepted plan. Tasks run in parallel up to the worker cap."""
         thread = await threads.get(body.thread_id) if body.thread_id else None
         project = thread.project if thread else config.default_project
+        # The project comes from the thread, which the caller may not own: this
+        # is the route that actually spends money, so it is checked even though
+        # the plan that produced it already was.
+        access.check(project)
         created = [
             await tasks.submit(
                 t.problem, t.title, t.slug, body.thread_id, project=project,
@@ -729,8 +873,12 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         )
 
     @app.get("/api/threads", dependencies=guard)
-    async def list_threads(project: str | None = Query(default=None)) -> dict[str, Any]:
+    async def list_threads(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
         chosen = await resolve_project(project)
+        access.check(chosen)
         await ensure_design_thread(db, projects, chosen)
         costs = await threads.costs_by_thread()
         return {
@@ -742,11 +890,15 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         }
 
     @app.post("/api/threads", dependencies=guard)
-    async def create_thread(body: ThreadCreateRequest) -> dict[str, Any]:
-        thread = await threads.create(body.title, project=await resolve_project(body.project))
+    async def create_thread(
+        body: ThreadCreateRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
+        chosen = await resolve_project(body.project)
+        access.check(chosen)
+        thread = await threads.create(body.title, project=chosen)
         return {"thread": thread.to_json()}
 
-    @app.get("/api/threads/{thread_id}", dependencies=guard)
+    @app.get("/api/threads/{thread_id}", dependencies=thread_guard)
     async def get_thread(thread_id: str) -> dict[str, Any]:
         thread = await threads.get(thread_id)
         if thread is None:
@@ -766,17 +918,17 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "tasks": [tasks.merge_live(t).to_json(config.assets_dir) for t in stored],
         }
 
-    @app.delete("/api/threads/{thread_id}", dependencies=guard)
+    @app.delete("/api/threads/{thread_id}", dependencies=thread_guard)
     async def hide_thread(thread_id: str) -> dict[str, bool]:
         """Hides rather than deletes. The route keeps its shape; the effect is
         now reversible, because deleting took the messages with it."""
         return {"ok": await threads.hide(thread_id)}
 
-    @app.post("/api/threads/{thread_id}/unhide", dependencies=guard)
+    @app.post("/api/threads/{thread_id}/unhide", dependencies=thread_guard)
     async def unhide_thread(thread_id: str) -> dict[str, bool]:
         return {"ok": await threads.unhide(thread_id)}
 
-    @app.post("/api/threads/{thread_id}/messages", dependencies=guard)
+    @app.post("/api/threads/{thread_id}/messages", dependencies=thread_guard)
     async def post_message(thread_id: str, body: ThreadMessageRequest) -> dict[str, Any]:
         """Say something in a thread.
 
@@ -798,43 +950,40 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             return await _design_turn_inner(thread, text)
 
     async def _design_turn_inner(thread: Any, text: str) -> dict[str, Any]:
+        """Run one design turn as a task.
+
+        It used to be a single tool-less call that returned the whole guide,
+        which meant it could not author anything and had nothing to show while
+        it worked. As a task it gets the tools it needs *and* the entire
+        activity surface — streamed text, collapsed thinking, tool calls,
+        diffs, questions — because that surface belongs to tasks and this is
+        now one.
+        """
         project_slug = thread.project or config.default_project
         project = await projects.get(project_slug)
         if project is None:
             raise HTTPException(404, "no such project")
 
-        history = [{"role": m.role, "text": m.text} for m in thread.messages]
-        try:
-            model = await SettingsStore(db).model_for(project_slug, config.planner_model)
-
-            async def attempt() -> Any:
-                async with tasks.chat_limiter:
-                    return await designer.draft(
-                        message=text, name=project.name,
-                        guide=projects.read_guide(project_slug),
-                        history=history, config=config, model=model,
-                    )
-
-            reply = await _with_retries("design turn", attempt)
-        except Exception as exc:
-            detail = f"{type(exc).__name__}: {exc}"
-            message = AUTH_HINT if is_auth_error(detail) else f"Design failed: {detail}"
-            await publish_message(
-                thread.id,
-                ThreadMessage(role="dex", kind="error", text=message, data={"detail": detail}),
-            )
-            raise HTTPException(503 if is_auth_error(detail) else 502, message) from exc
-
-        if reply.changed:
-            projects.write_guide(project_slug, reply.guide)
-            bus.publish(Event(type="guide", data={"project": project_slug}))
-
-        note = ThreadMessage(
-            role="dex", kind="text", text=reply.summary,
-            data={"guideChanged": reply.changed, "project": project_slug},
+        history = designer.history_text(
+            [{"role": m.role, "text": m.text} for m in thread.messages]
         )
-        await publish_message(thread.id, note)
-        return {"design": reply.to_json(), "message": note.to_json()}
+        payload = json.dumps({
+            "message": text,
+            "guide": projects.read_guide(project_slug),
+            "history": history,
+        })
+
+        task = await tasks.submit(
+            payload,
+            title=text.strip().splitlines()[0][:80] or "Design turn",
+            thread_id=thread.id,
+            project=project_slug,
+            scope="design",
+        )
+        # No summary message here: the task's own reply is the answer, and it
+        # arrives streamed. Posting a placeholder would leave two messages
+        # saying different things about the same turn.
+        return {"task": task.to_json(config.assets_dir), "design": {"queued": True}}
 
     #: A request can imply far more work than fits one reply, so planning runs in
     #: batches: each is a plan of its own in the thread, and the planner says in
@@ -918,7 +1067,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     # ---------------------------------------------------------------- events
 
-    @app.get("/api/tasks/{task_id}/events", dependencies=guard)
+    @app.get("/api/tasks/{task_id}/events", dependencies=task_guard)
     async def task_events(task_id: str, limit: int = Query(default=2000, le=10_000)) -> dict[str, Any]:
         """Everything one task did, however long ago.
 
@@ -935,10 +1084,18 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         request: Request,
         task: str | None = Query(default=None, description="filter to one task id"),
         after: int = Query(default=0, description="resume after this event seq"),
+        access: Access = Depends(access_dep),
     ) -> StreamingResponse:
+        # Resolved once, before the stream opens: a long-lived SSE connection
+        # cannot re-ask per event, and re-reading grants for every one of the
+        # ~3,000 events a second this carries would be a query storm. The cost
+        # is that a grant changed mid-stream applies on reconnect -- which is
+        # why removing a role also ends that user's sessions.
+        allowed = None if access.is_admin else await visible(access)
+
         async def stream() -> AsyncIterator[bytes]:
             yield b": connected\n\n"
-            subscription = bus.subscribe(task_id=task, after_seq=after)
+            subscription = bus.subscribe(task_id=task, after_seq=after, projects=allowed)
             pending = asyncio.ensure_future(subscription.__anext__())
             last_ping = time.monotonic()
             try:
@@ -982,8 +1139,10 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             default=None,
             description="glob, relative to path, to gather files from below it",
         ),
+        access: Access = Depends(access_dep),
     ) -> Any:
         """Directory listing or text file content, confined to the assets root."""
+        _check_asset_path(access, path)
         target = _resolve(config, path)
         if target.is_dir() and match:
             # A project's shared assets do not all live in one directory: each
@@ -1046,7 +1205,10 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         }
 
     @app.get("/api/packages", dependencies=guard)
-    async def list_packages(project: str | None = Query(default=None)) -> dict[str, Any]:
+    async def list_packages(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
         """Every package in a project, with the tags its manifest carries.
 
         Built here rather than in the browser because the tags live one file
@@ -1054,6 +1216,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         thirty manifests to draw its filter pills.
         """
         chosen = await resolve_project(project)
+        access.check(chosen)
         root = (config.assets_dir / chosen).resolve()
         if not root.is_dir():
             return {"packages": [], "tags": []}
@@ -1113,8 +1276,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         }
 
     @app.get("/api/assets/animation", dependencies=guard)
-    async def animation_info(path: str = Query(...)) -> dict[str, Any]:
+    async def animation_info(
+        path: str = Query(...), access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
         """Duration, and the checkpoints this animation can be stepped through."""
+        _check_asset_path(access, path)
         target = _resolve(config, path)
         if not target.is_file():
             raise HTTPException(404, "not a file")
@@ -1128,8 +1294,10 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         path: str = Query(...),
         speed: float | None = Query(default=None, ge=0.1, le=8.0),
         segment: int | None = Query(default=None, ge=0),
+        access: Access = Depends(access_dep),
     ) -> FileResponse:
         """The animation at a chosen speed, optionally just one checkpoint."""
+        _check_asset_path(access, path)
         target = _resolve(config, path)
         if not target.is_file():
             raise HTTPException(404, "not a file")
@@ -1153,8 +1321,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         )
 
     @app.get("/api/assets/raw", dependencies=guard)
-    async def raw_asset(path: str = Query(...)) -> FileResponse:
+    async def raw_asset(
+        path: str = Query(...), access: Access = Depends(access_dep)
+    ) -> FileResponse:
         """Serves generated GIFs and other binaries to the viewer."""
+        _check_asset_path(access, path)
         target = _resolve(config, path)
         if not target.is_file():
             raise HTTPException(404, "not a file")
@@ -1169,6 +1340,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     # In production the API and the built UI share an origin, so a phone only
     # needs the one URL the server prints. Mounted last so /api wins.
+    # Built widget bundles. `check_dir=False` so an install with no widgets
+    # still starts; the directory can appear later without a restart because
+    # StaticFiles resolves each request against the filesystem as it arrives.
+    widgets_root = widgets.widgets_dir(config.workspace)
+    widgets_root.mkdir(parents=True, exist_ok=True)
+    app.mount("/widgets", StaticFiles(directory=widgets_root, check_dir=False), name="widgets")
+
     web_dist = config.workspace / "web" / "dist"
     if (web_dist / "index.html").exists():
         app.mount("/", _SpaFiles(directory=web_dist, html=True), name="web")
@@ -1209,6 +1387,25 @@ class _SpaFiles(StaticFiles):
             ):
                 raise
             return await super().get_response("index.html", scope)
+
+
+def _check_asset_path(access: Access, path: str) -> None:
+    """Refuse an asset path outside the caller's projects.
+
+    Assets are addressed by path rather than by slug, and the first segment is
+    the project — `yoga/bird-of-paradise-pose/poses/x.json`. This is the one
+    surface where guessing a string is enough to reach another project's work,
+    so every asset route has to run it, not just the listing one.
+
+    An empty path is the assets root, which lists the projects themselves; only
+    a caller who can see everything gets that.
+    """
+    if access.unrestricted or access.is_admin:
+        return
+    first = path.strip("/").split("/")[0] if path.strip("/") else ""
+    if not first:
+        raise HTTPException(status_code=404, detail="not found")
+    access.check(first)
 
 
 def _resolve(config: Config, path: str) -> Path:

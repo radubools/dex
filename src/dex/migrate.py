@@ -27,7 +27,7 @@ async def adopt_existing_project(db: Database, config: Config) -> None:
     tasks have no project and its guide already sits on disk. Adopt them rather
     than leaving them stranded.
     """
-    projects = ProjectStore(db, config.assets_dir)
+    projects = ProjectStore(db, config.assets_dir, config.workspace)
     slug = config.default_project
 
     if await projects.get(slug) is None:

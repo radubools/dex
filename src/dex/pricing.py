@@ -10,6 +10,8 @@ Prices are US dollars per million tokens.
 
 from __future__ import annotations
 
+from typing import Any
+
 #: model id -> (input, output)
 PRICES: dict[str, tuple[float, float]] = {
     "claude-fable-5": (10.0, 50.0),
@@ -56,3 +58,46 @@ def estimate(model: str | None, usage: dict[str, float] | None) -> float:
         + cached_write * input_price * CACHE_WRITE_MULTIPLIER
         + output * output_price
     ) / 1_000_000
+
+
+#: The token counts worth keeping, in the order they are reported.
+TOKEN_FIELDS = (
+    "input_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+    "thinking_tokens",
+)
+
+
+def tokens(usage: dict[str, Any] | None) -> dict[str, int]:
+    """The counts from one usage payload, flattened to plain ints.
+
+    `thinking_tokens` lives under `output_tokens_details` and is a **subset** of
+    `output_tokens`, not an addition to it — the API bills thinking as output.
+    Only the agent's final result carries the detail; a per-message usage
+    generally does not, so a missing count reads as zero rather than an error.
+    """
+    if not usage:
+        return dict.fromkeys(TOKEN_FIELDS, 0)
+    details = usage.get("output_tokens_details") or {}
+    if not isinstance(details, dict):
+        details = {}
+
+    def count(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    output = count(usage.get("output_tokens"))
+    # A thinking count above the output it belongs to would be a report we do
+    # not understand; clamp rather than let a subset exceed its whole.
+    thinking = min(output, count(details.get("thinking_tokens")))
+    return {
+        "input_tokens": count(usage.get("input_tokens")),
+        "cache_read_tokens": count(usage.get("cache_read_input_tokens")),
+        "cache_write_tokens": count(usage.get("cache_creation_input_tokens")),
+        "output_tokens": output,
+        "thinking_tokens": thinking,
+    }

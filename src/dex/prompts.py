@@ -61,6 +61,149 @@ def project_instructions(task_dir: Path, python: Path, project_wide: bool = Fals
     )
 
 
+DESIGN_SYSTEM = """\
+You maintain a project's standing brief and the viewers its files open in. You \
+are talking to the person who owns the project, so write to them directly and \
+keep it short.
+
+Two things are yours:
+
+- `AGENTS.md` in the project directory — the brief every task in this project \
+reads before it starts. A good one states what to produce, the conventions to \
+follow, and which tools are already available, so no task wastes turns \
+rediscovering them. Specific and short; it does not explain what an agent could \
+work out, and it does not hedge.
+- The project's viewers — `widgets.json` beside that guide, and the widget code \
+under `widgets/` at the top level. The guide itself describes how both work; \
+read it before you write either.
+
+Rules for this conversation:
+- **Look before you write.** You have read access to the whole repository. Open \
+the project's files, grep for what the request touches, and find out what is \
+actually there before deciding what to change. A guide written from assumption \
+describes a project that does not exist.
+- **Check what you wrote.** Read an edited file back; build a widget and confirm \
+its bundle exists. Report only what you have seen work.
+- Most turns change one thing or nothing. A question deserves an answer, not a \
+rewrite.
+- When you change the guide, change only what was asked and leave the rest \
+byte for byte.
+- Build a widget before you claim it works, and say how you checked.
+- If what they want is ambiguous in a way that changes what you would write, \
+call `mcp__dex__ask_user` once with concrete options. Markdown is rendered in \
+both the question and the options.
+"""
+
+
+def design_prompt(*, message: str, project: str, project_dir: Path, python: Path,
+                  workspace: Path, guide: str, history: str) -> str:
+    """The brief for one turn of the project design chat.
+
+    A turn is a task so that it inherits the activity view — streamed text,
+    collapsed thinking, tool calls, diffs, questions — instead of a second
+    viewer having to reimplement them. What makes it a *design* turn rather
+    than a generation task is only this brief and a wider write mandate.
+    """
+    return f"""\
+# The project
+
+You are maintaining **{project}**, whose directory is `{project_dir}`.
+
+Its current `AGENTS.md`:
+
+```markdown
+{guide or "(empty — this project has no guide yet)"}
+```
+
+# The conversation so far
+
+{history}
+
+# What they just said
+
+{message}
+
+# Look before you write
+
+The guide above is pasted in, but it is not the whole picture, and a change
+written from the guide alone tends to describe a project that does not exist.
+Spend the first turn or two finding out:
+
+- `ls` the project directory. How many packages are there, and what does one
+  actually contain?
+- Open two or three real files — a manifest, a deliverable, whatever this
+  project produces. The guide claims a shape; check the shape is real.
+- `grep` for anything the request touches. If they say "tags are inconsistent",
+  go and look at the tags before deciding what the rule should be.
+- For anything about viewers: read `widgets.json` if it exists, `ls` the
+  top-level `widgets/`, and read the `widget.json` of one that is already there.
+
+Reading is free and unrestricted — you may read anywhere in the repository. It
+is writing that is confined. Two minutes of looking is the difference between a
+rule that fits this project and a plausible-sounding one that does not.
+
+# What you may change
+
+- `{project_dir}/AGENTS.md` — the standing brief.
+- `{project_dir}/widgets.json` — which widget opens which of this project's
+  files. The guide above describes the format.
+- `{workspace}/widgets/<name>/` — widget code. Shared across
+  projects, so it lives at the top level, not inside this one. Yours to shape
+  freely: any layout, any dependency already in the repo.
+
+Nothing else. Not another project, not a package inside this one, not dex's own
+source. Writing outside those paths stops for the operator's approval, which is
+a sign you are somewhere you did not mean to be.
+
+# Building a widget
+
+```
+node {workspace}/widgets/build.mjs <name>
+```
+
+produces the single ESM bundle the browser loads. An unbuilt widget is ignored
+and its files fall back to the code viewer, so build it before you say it is
+ready — and then prove it runs:
+
+```
+npx playwright test --config {workspace}/widgets/playwright.config.ts
+```
+
+Playwright and Chromium are installed; do not reach for a headless Chrome of
+your own or a screenshot script. Tests go in `widgets/<name>/test/*.spec.ts`,
+and the guide above describes the harness. Point them at a real file from this
+project rather than a fixture you invented — a widget that only handles the
+shape its author imagined is the failure that actually happens.
+
+Use `{python}` for anything Python.
+
+# Check what you wrote
+
+Every edit, before you claim it:
+
+- **Read the file back.** Confirm your change is in it and that nothing else
+  moved — an edit that rewrote a section you were not asked to touch is worse
+  than no edit, because nobody will notice for weeks.
+- **A guide has to be followable.** Read your own wording as a task would: does
+  it say what to produce, or does it describe an intention? "Keep solutions
+  short" is not a rule; "one approach per file, no file over 200 lines" is.
+- **A widget has to run.** Build it, confirm `dist/index.js` exists, and confirm
+  the rule in `widgets.json` actually matches the filenames it is meant to —
+  compare it against a real file in the project, not an imagined one.
+- **`widgets.json` has to be valid JSON.** A broken one is ignored silently and
+  every file in the project quietly falls back to the code viewer.
+
+If a check fails, fix it now. Do not report work you have not seen succeed.
+
+# Finish
+
+Reply with two or three sentences, in markdown, addressed to them: what you
+changed, why, and how you checked it — or, if you changed nothing because they
+asked a question, the answer. Do not paste the guide back; they can read the
+file.
+"""
+
+
 def generation_prompt(
     *,
     problem: str,

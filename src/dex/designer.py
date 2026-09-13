@@ -95,6 +95,11 @@ def parse(raw: str, current: str) -> DesignReply:
     return DesignReply(summary=text, guide=drafted if changed else current, changed=changed)
 
 
+def history_text(messages: list[dict[str, str]], limit: int = 12) -> str:
+    """The recent conversation, as the design brief embeds it."""
+    return _history(messages, limit)
+
+
 def _history(messages: list[dict[str, str]], limit: int = 12) -> str:
     recent = messages[-limit:]
     if not recent:

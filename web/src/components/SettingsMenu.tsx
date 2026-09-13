@@ -1,9 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { getSettings, putSettings, setLimitPaused, setPaused } from '../api'
+import { getSettings, logout, putSettings, setLimitPaused, setPaused, type Me } from '../api'
 import type { SettingsResponse } from '../types'
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`)
+
+/** Token counts run to millions; the exact digit has never mattered here. */
+const compact = (n: number) =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(1)}B`
+  : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
+  : n >= 1e3 ? `${(n / 1e3).toFixed(0)}k`
+  : `${n}`
 
 /**
  * The header menu: everything global in one place — auto-approve, the two
@@ -13,36 +20,26 @@ export function SettingsMenu({
   autoApprove,
   onAutoApprove,
   onOpenCosts,
+  me,
+  onOpenUsers,
 }: {
   autoApprove: boolean
   onAutoApprove: (enabled: boolean) => void
   onOpenCosts: () => void
+  /** Who is signed in, or null on an install with no sign-in configured. */
+  me?: Me | null
+  onOpenUsers?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<SettingsResponse | null>(null)
   const [busy, setBusy] = useState(false)
-  const panel = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
-  const [at, setAt] = useState<{ top: number; right: number } | null>(null)
 
-  // The panel is rendered into document.body rather than in place: the header
-  // has a backdrop-filter, which creates a stacking context that no z-index on
-  // a descendant can escape, so an in-place panel slid under the task panel and
-  // the viewer depending on what was open.
-  useLayoutEffect(() => {
-    if (!open) return
-    const place = () => {
-      const box = trigger.current?.getBoundingClientRect()
-      if (box) setAt({ top: box.bottom + 8, right: window.innerWidth - box.right })
-    }
-    place()
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
-  }, [open])
+  // Still rendered into document.body via a portal: the header has a
+  // backdrop-filter, which creates a stacking context no z-index on a
+  // descendant can escape, so an in-place sheet slid under the task panel and
+  // the viewer depending on what was open. It no longer needs positioning —
+  // it covers the screen — but it does still need to escape that context.
 
   const refresh = () => getSettings().then(setData).catch(() => {})
 
@@ -50,20 +47,13 @@ export function SettingsMenu({
     if (open) refresh()
   }, [open])
 
-  // Close on an outside click or Escape, like any menu.
+  // A full-screen sheet has no outside to click, so Escape and the ✕ are the
+  // ways out. Closing on any click would fire on every switch in it.
   useEffect(() => {
     if (!open) return
-    const away = (e: MouseEvent) => {
-      const node = e.target as Node
-      if (!panel.current?.contains(node) && !trigger.current?.contains(node)) setOpen(false)
-    }
     const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
-    document.addEventListener('mousedown', away)
     document.addEventListener('keydown', key)
-    return () => {
-      document.removeEventListener('mousedown', away)
-      document.removeEventListener('keydown', key)
-    }
+    return () => document.removeEventListener('keydown', key)
   }, [open])
 
   const patch = (body: Record<string, unknown>) => {
@@ -98,8 +88,17 @@ export function SettingsMenu({
   const projectModelKey = data ? `model:${data.project}` : ''
 
   const menu = (
-    <div className="menu-panel" role="dialog" aria-label="Settings" ref={panel}
-         style={at ? { top: at.top, right: at.right } : undefined}>
+    <div className="menu-sheet" role="dialog" aria-modal="true" aria-label="Settings">
+      <header className="viewer-bar">
+        <span className="viewer-path">Settings</span>
+        <button className="icon-btn" onClick={() => setOpen(false)} aria-label="Close settings">
+          ✕
+        </button>
+      </header>
+      <div className="menu-sheet-body">
+        {/* The rows stay a readable column rather than stretching across a
+            wide display; full screen is about room to scroll, not line length. */}
+        <div className="menu-sheet-inner">
           {/* First, because it is what you reach for when something is going
               wrong and you want it to stop now. */}
           <div className="menu-row">
@@ -304,6 +303,65 @@ export function SettingsMenu({
                 </div>
               ))}
             </div>
+            <div className="menu-row"><span>Output tokens</span></div>
+            <div className="cost-grid">
+              <div className="cost-cell">
+                <span className="cost-label">thinking</span>
+                <span className="cost-value">{data ? compact(data.tokens.thinking) : '—'}</span>
+              </div>
+              <div className="cost-cell">
+                <span className="cost-label">visible</span>
+                <span className="cost-value">{data ? compact(data.tokens.visible) : '—'}</span>
+              </div>
+              <div className="cost-cell">
+                <span className="cost-label">share</span>
+                <span className="cost-value">
+                  {data && data.tokens.output > 0
+                    ? `${Math.round((data.tokens.thinking / data.tokens.output) * 100)}%`
+                    : '—'}
+                </span>
+              </div>
+            </div>
+            {/* Tokens are recorded from a task's result, so runs that finished
+                before that existed have a cost and no counts. Saying so beats a
+                share that looks wrong. */}
+            {data && data.tokens.counted < data.tokens.with_cost && (
+              <div className="muted small">
+                from {data.tokens.counted} of {data.tokens.with_cost} priced tasks
+              </div>
+            )}
+            {/* Identity, at the bottom with the other operator-level things.
+                Absent entirely when sign-in is not configured, rather than
+                showing an empty account row. */}
+            {me?.user && (
+              <>
+                <div className="menu-row">
+                  <span>
+                    Signed in
+                    <small>
+                      {me.user.email} · {me.user.isAdmin ? 'admin' : 'user'}
+                    </small>
+                  </span>
+                  <button
+                    className="ghost-btn small"
+                    onClick={() => void logout().then(() => location.reload())}
+                  >
+                    Sign out
+                  </button>
+                </div>
+                {me.user.isAdmin && onOpenUsers && (
+                  <button
+                    className="ghost-btn small"
+                    onClick={() => {
+                      setOpen(false)
+                      onOpenUsers()
+                    }}
+                  >
+                    Users and access
+                  </button>
+                )}
+              </>
+            )}
             <button
               className="ghost-btn small"
               onClick={() => {
@@ -314,6 +372,8 @@ export function SettingsMenu({
               Open cost dashboard
             </button>
           </div>
+        </div>
+      </div>
     </div>
   )
 

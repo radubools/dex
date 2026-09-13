@@ -159,17 +159,14 @@ def test_tasks_inherit_the_project_of_their_thread(client):
     assert "/scoped/" in created[0]["outputDir"]
 
 
-def test_a_design_thread_redrafts_the_guide_instead_of_planning(client, monkeypatch):
-    """A design thread answers by changing the guide, not by proposing tasks."""
-    from dex.designer import DesignReply
+def test_a_design_thread_runs_a_task_rather_than_planning(client):
+    """A design turn is a task, so it inherits the whole activity view.
 
-    async def fake_draft(**kwargs):
-        assert "keep solutions short" in kwargs["message"]
-        return DesignReply(
-            summary="Added a **brevity** rule.", guide="# Guide\n\nKeep it short.\n", changed=True
-        )
-
-    monkeypatch.setattr("dex.designer.draft", fake_draft)
+    It was a single tool-less call that returned the guide as text: nothing to
+    stream, and no way to author a widget. Running it as a task is what gives
+    it tools *and* the streamed text, thinking, tool calls and diffs the task
+    panel already draws.
+    """
     client.post("/api/projects", json={"name": "Drafted"})
     design = client.get("/api/threads", params={"project": "drafted"}).json()["threads"][0]
 
@@ -177,28 +174,77 @@ def test_a_design_thread_redrafts_the_guide_instead_of_planning(client, monkeypa
         f"/api/threads/{design['id']}/messages", json={"text": "keep solutions short"}
     ).json()
 
-    assert body["design"]["changed"] is True
-    assert "brevity" in body["message"]["text"]
-    # The file on disk is what tasks read, so that is what must have changed.
-    assert client.get("/api/projects/drafted/guide").json()["text"] == "# Guide\n\nKeep it short.\n"
-    # And no plan was produced.
-    assert "plan" not in body
+    assert "plan" not in body, "a design thread must not propose tasks"
+    task = body["task"]
+    assert task["scope"] == "design"
+    assert task["project"] == "drafted"
+    # It works in the project directory, not in a package of its own.
+    assert task["outputDir"].rstrip("/").endswith("/drafted")
 
 
-def test_a_design_turn_that_changes_nothing_leaves_the_file_alone(client, monkeypatch):
-    from dex.designer import DesignReply
+def test_a_design_turn_carries_the_guide_and_the_conversation(client, config):
+    """The model needs all three, and a task has one prompt field to put them in."""
+    import json as _json
 
-    async def fake_draft(**kwargs):
-        return DesignReply(summary="Which language?", guide=kwargs["guide"], changed=False)
+    from dex.models import Task
 
-    monkeypatch.setattr("dex.designer.draft", fake_draft)
     client.post("/api/projects", json={"name": "Asking"})
-    before = client.get("/api/projects/asking/guide").json()["text"]
+    guide_before = client.get("/api/projects/asking/guide").json()["text"]
     design = client.get("/api/threads", params={"project": "asking"}).json()["threads"][0]
 
-    body = client.post(f"/api/threads/{design['id']}/messages", json={"text": "hello"}).json()
-    assert body["design"]["changed"] is False
-    assert client.get("/api/projects/asking/guide").json()["text"] == before
+    # The id from this turn's own response. Picking "the last design task" out
+    # of /api/tasks reads another test's task whenever the database is shared.
+    posted = client.post(
+        f"/api/threads/{design['id']}/messages", json={"text": "what language?"}
+    ).json()
+    packed = _json.loads(
+        client.get(f"/api/tasks/{posted['task']['id']}").json()["task"]["problem"]
+    )
+    assert packed["message"] == "what language?"
+    assert packed["guide"] == guide_before
+    # History is the conversation *before* this turn; what was just said
+    # travels separately as `message`, so it must not be duplicated into both.
+    assert "design thread" in packed["history"]
+    assert packed["history"].count("what language?") == 0
+
+    # And the payload unpacks the way the runner reads it.
+    task = Task(problem=_json.dumps(packed), title="t", slug="s")
+    task.scope = "design"
+    assert task.design_payload()["message"] == "what language?"
+    assert task.is_design
+
+
+def test_a_design_task_may_write_widgets_but_an_ordinary_task_may_not(config, tmp_path):
+    """Widget code is shared across projects, so it cannot live inside one."""
+    from dex.models import Task
+    from dex.permissions import PermissionPolicy
+    from dex import widgets
+
+    async def never(*args):
+        return "deny"
+
+    design = Task(problem="{}", title="t", slug="d")
+    design.scope = "design"
+    design.project = "p"
+    project_dir = config.assets_dir / "p"
+
+    allowed = PermissionPolicy(
+        workspace=config.workspace,
+        task_dir=project_dir,
+        extra_writable=(widgets.widgets_dir(config.workspace),),
+        escalate=never,
+    )
+    ordinary = PermissionPolicy(
+        workspace=config.workspace, task_dir=project_dir, escalate=never
+    )
+    widget_file = str(widgets.widgets_dir(config.workspace) / "new" / "src" / "index.ts")
+
+    # None means "no human needed"; a string is the reason one is.
+    assert allowed._auto_reason("Write", {"file_path": widget_file}) is None
+    assert ordinary._auto_reason("Write", {"file_path": widget_file}) is not None
+    # Neither may wander further than that.
+    outside = str(config.workspace / "src" / "dex" / "api.py")
+    assert allowed._auto_reason("Write", {"file_path": outside}) is not None
 
 
 def test_the_feed_is_scoped_to_the_project(client, config):

@@ -21,11 +21,32 @@ function readToken(): string {
 
 export const token = readToken()
 
+/** Raised when the server says who you are is the problem, not the request. */
+export class AuthError extends Error {
+  constructor(
+    readonly status: 401 | 403,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'AuthError'
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    // Sessions are cookies, so they ride along without being named here. The
+    // token header stays for a private install that uses DEX_TOKEN instead.
+    credentials: 'same-origin',
     headers: { 'content-type': 'application/json', 'x-dex-token': token, ...init?.headers },
   })
+  // Separated from other failures so the app can show a sign-in page or an
+  // unauthorised notice instead of a generic fatal error, which is what every
+  // request would have rendered before sign-in existed.
+  if (response.status === 401 || response.status === 403) {
+    const detail = await response.text().catch(() => '')
+    throw new AuthError(response.status as 401 | 403, detail || String(response.status))
+  }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
     throw new Error(detail ? `${response.status}: ${safeDetail(detail)}` : `${response.status}`)
@@ -175,11 +196,21 @@ export const answerQuestion = (taskId: string, id: string, answer: string) =>
 export const resolveApproval = (taskId: string, id: string, decision: 'allow' | 'deny') =>
   post<{ ok: boolean }>(`/api/tasks/${taskId}/approve`, { id, decision })
 
-export const readAsset = (path: string, match?: string) =>
+/**
+ * A 415 from `/api/assets` means the file is binary, which is an answer rather
+ * than an error — the viewer then plays it, or hands it to a widget, instead of
+ * showing "415: .mid is binary". Anything else still throws.
+ */
+export const readAsset = (path: string, match?: string): Promise<AssetResponse> =>
   request<AssetResponse>(
     `/api/assets?path=${encodeURIComponent(path)}` +
       (match ? `&match=${encodeURIComponent(match)}` : ''),
-  )
+  ).catch((error: unknown) => {
+    if (error instanceof Error && error.message.startsWith('415')) {
+      return { kind: 'binary', path } as AssetResponse
+    }
+    throw error
+  })
 
 /** Binary assets (the generated GIFs) are loaded by the browser directly. */
 /**
@@ -250,3 +281,78 @@ export function openStream(onEvent: (e: DexEvent) => void, onStatus: (up: boolea
     source?.close()
   }
 }
+
+
+// --- identity ---------------------------------------------------------------
+
+export type AuthState = 'open' | 'service' | 'anonymous' | 'unauthorised' | 'authorised'
+
+export type Me = {
+  state: AuthState
+  user: AuthUser | null
+  googleEnabled: boolean
+}
+
+export type AuthUser = {
+  id: string
+  email: string
+  name: string | null
+  picture: string | null
+  role: 'admin' | 'user' | null
+  projects: string[]
+  isAdmin: boolean
+  authorised: boolean
+  createdAt: number
+  lastSeen: number | null
+}
+
+/** Never throws on 401/403: the answer to "who am I" includes "nobody". */
+export const getMe = () => request<Me>('/api/auth/me')
+
+export const signInUrl = (next = '/') =>
+  `/api/auth/google?next=${encodeURIComponent(next)}`
+
+export const logout = () => request<void>('/api/auth/logout', { method: 'POST' })
+
+export const listUsers = () => request<{ users: AuthUser[] }>('/api/auth/users')
+
+export const setUserRole = (id: string, role: 'admin' | 'user' | null) =>
+  request<{ user: AuthUser }>(`/api/auth/users/${id}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  })
+
+export const setUserProjects = (id: string, projects: string[]) =>
+  request<{ user: AuthUser }>(`/api/auth/users/${id}/projects`, {
+    method: 'PUT',
+    body: JSON.stringify({ projects }),
+  })
+
+export const deleteUser = (id: string) =>
+  request<void>(`/api/auth/users/${id}`, { method: 'DELETE' })
+
+
+// --- widgets ----------------------------------------------------------------
+
+export type WidgetInfo = {
+  name: string
+  title: string
+  description: string
+  version: string
+  built: boolean
+  /** Versioned, because import()/fetch cache by URL for the life of the page. */
+  url: string
+}
+
+export type WidgetRule = { widget: string; extensions: string[]; filenames: string[] }
+
+export const listWidgets = (project: string) =>
+  request<{ project: string; widgets: WidgetInfo[]; rules: WidgetRule[] }>(
+    `/api/widgets?project=${encodeURIComponent(project)}`,
+  )
+
+/** Which widget opens this file, or null to use a built-in viewer. */
+export const resolveWidget = (path: string) =>
+  request<{ widget: WidgetInfo | null }>(
+    `/api/widgets/resolve?path=${encodeURIComponent(path)}`,
+  )

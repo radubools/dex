@@ -295,9 +295,13 @@ class TaskStore:
                 assignments.append(f"{column} = ${len(values)}")
         # Archiving itself is always allowed; only moving *out* of it is not.
         guard = "" if state is TaskState.ARCHIVED else " AND state <> 'archived'"
-        await self.db.pool.execute(
+        result = await self.db.pool.execute(
             f"UPDATE tasks SET {', '.join(assignments)} WHERE id = $1{guard}", *values
         )
+        # Whether the write landed. A caller that has already told the UI what
+        # it was about to do needs to know when the database disagreed, or the
+        # screen keeps showing a state that was never stored.
+        return result.rsplit(" ", 1)[-1] != "0"
 
     async def set_cost(self, task_id: str, cost: float, *, estimate: bool) -> None:
         """Record spend. An estimate never overwrites an authoritative figure."""
@@ -305,6 +309,24 @@ class TaskStore:
             """UPDATE tasks SET cost_usd = $2, cost_is_estimate = $3
                WHERE id = $1 AND ($3 = false OR cost_is_estimate = true OR cost_usd IS NULL)""",
             task_id, cost, estimate,
+        )
+
+    async def set_tokens(self, task_id: str, counts: dict[str, int]) -> None:
+        """Record the token counts the agent reported for a finished run.
+
+        Written once, from the result: the per-message usage carries no thinking
+        detail, so accumulating it would give a total that cannot be split.
+        """
+        await self.db.pool.execute(
+            """UPDATE tasks SET input_tokens = $2, cache_read_tokens = $3,
+                   cache_write_tokens = $4, output_tokens = $5, thinking_tokens = $6
+               WHERE id = $1""",
+            task_id,
+            counts.get("input_tokens", 0),
+            counts.get("cache_read_tokens", 0),
+            counts.get("cache_write_tokens", 0),
+            counts.get("output_tokens", 0),
+            counts.get("thinking_tokens", 0),
         )
 
     async def set_session(self, task_id: str, session_id: str) -> None:
@@ -490,6 +512,28 @@ class CostStore:
                FROM tasks"""
         )
         return {k: float(v) for k, v in dict(row).items()}
+
+    async def token_totals(self) -> dict[str, int]:
+        """Tokens over the same windows, with thinking split out of output.
+
+        `thinking_tokens` is the part of `output_tokens` the model spent
+        thinking, so `visible` is the remainder. The three never sum to more
+        than the output: thinking + visible = output, by construction.
+        """
+        row = await self.db.pool.fetchrow(
+            """SELECT
+                 COALESCE(sum(input_tokens), 0)       AS input,
+                 COALESCE(sum(cache_read_tokens), 0)  AS cache_read,
+                 COALESCE(sum(cache_write_tokens), 0) AS cache_write,
+                 COALESCE(sum(output_tokens), 0)      AS output,
+                 COALESCE(sum(thinking_tokens), 0)    AS thinking,
+                 count(*) FILTER (WHERE output_tokens IS NOT NULL) AS counted,
+                 count(*) FILTER (WHERE cost_usd IS NOT NULL)      AS with_cost
+               FROM tasks"""
+        )
+        totals = {k: int(v) for k, v in dict(row).items()}
+        totals["visible"] = max(0, totals["output"] - totals["thinking"])
+        return totals
 
     async def by_thread(self, thread_id: str) -> float:
         """A thread costs what the tasks it started cost."""

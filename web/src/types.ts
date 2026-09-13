@@ -37,6 +37,7 @@ export type Task = {
   costIsEstimate: boolean
   canResume: boolean
   canRerun: boolean
+  canRestart: boolean
   canPause: boolean
   /** Stopped short — paused, failed or cancelled — so it can go again. */
   canContinue: boolean
@@ -130,6 +131,12 @@ export type AssetEntry = { name: string; dir: boolean; kind: AssetKind; bytes: n
 export type AssetResponse =
   | { kind: 'dir'; path: string; entries: AssetEntry[] }
   | { kind: 'file'; path: string; ext: string; content: string }
+  /**
+   * The server refused to send it as text. Not a failure: a `.mid` or a `.wav`
+   * is opened by playing it or by handing it to a widget, both of which fetch
+   * the bytes from `/api/assets/raw` instead.
+   */
+  | { kind: 'binary'; path: string }
 
 export type Health = {
   ok: boolean
@@ -186,6 +193,7 @@ export type ModelChoice = { id: string; label: string; note: string }
 export type SettingsResponse = {
   settings: Settings
   costs: CostTotals
+  tokens: TokenTotals
   models: ModelChoice[]
   efforts: ModelChoice[]
   project: string
@@ -297,4 +305,23 @@ export type PackageEntry = {
 export type TagCount = {
   name: string
   count: number
+}
+
+/**
+ * Tokens across every task, with thinking split out.
+ *
+ * `thinking` is the part of `output` the model spent thinking, not an extra
+ * beside it — `thinking + visible === output`. Adding thinking to output
+ * double-counts every thought.
+ */
+export type TokenTotals = {
+  input: number
+  cache_read: number
+  cache_write: number
+  output: number
+  thinking: number
+  visible: number
+  /** Tasks whose tokens were recorded, vs. those with only a cost. */
+  counted: number
+  with_cost: number
 }

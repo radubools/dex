@@ -712,7 +712,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 
 .menu-panel {
   /* Rendered into document.body via a portal and positioned from the
-     trigger's rect, so no ancestor stacking context can bury it. */
+     trigger's rect, so no ancestor stacking context can bury it. Still used by
+     the project picker, which is small enough to stay a dropdown. */
   position: fixed; right: 12px; top: 60px;
   width: min(92vw, 330px); z-index: 200;
   display: flex; flex-direction: column;
@@ -720,6 +721,28 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
   padding: 6px;
 }
+
+/* Settings outgrew a dropdown: it is a full-screen sheet now, scrolling in its
+   own body, with a ✕ and Escape as the ways out. Still portaled into
+   document.body so the header's backdrop-filter cannot bury it. */
+.menu-sheet {
+  position: fixed; inset: 0; z-index: 200;
+  display: grid; grid-template-rows: auto minmax(0, 1fr);
+  background: var(--bg);
+}
+.menu-sheet-body {
+  overflow: auto; -webkit-overflow-scrolling: touch;
+  padding: 10px calc(12px + env(safe-area-inset-right))
+           calc(24px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+}
+/* A readable column, centred: the rows were written for a 330px panel and look
+   broken stretched across a desktop. */
+.menu-sheet-inner {
+  width: min(100%, 520px); margin: 0 auto;
+  display: flex; flex-direction: column;
+}
+.menu-sheet-inner > .menu-row,
+.menu-sheet-inner > label.menu-row { border-radius: 10px; }
 .menu-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 9px 10px; border-radius: 8px; font-size: 13px;
@@ -1315,3 +1338,84 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   border-top: 1px solid var(--line);
 }
 .now-running .card-kind { color: var(--accent); }
+
+/* ---------------- sign-in and access gates ---------------- */
+/* Full-screen because they replace the app rather than sitting beside it:
+   there is nothing behind them to see. */
+.gate {
+  position: fixed; inset: 0; display: grid; place-items: center;
+  background: var(--bg); padding: 24px; z-index: 300;
+}
+.gate-card {
+  width: min(100%, 420px); display: flex; flex-direction: column; gap: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 24px;
+}
+.gate-card h1 { margin: 0; font-size: 20px; }
+.gate-card p { margin: 0; }
+.gate-error { margin-bottom: 4px; }
+.gate-btn {
+  display: block; text-align: center; text-decoration: none;
+  min-height: 44px; line-height: 44px; border-radius: 10px;
+  background: var(--accent); color: #06212e; font-weight: 600;
+}
+.gate-actions { display: flex; gap: 8px; }
+
+/* ---------------- users and access ---------------- */
+.user-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.user-row {
+  display: grid; gap: 10px; padding: 12px;
+  grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1.6fr) auto;
+  align-items: center;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+}
+/* An account with no role is the only row that needs the operator to act, so
+   it is the only one that draws attention to itself. */
+.user-row.pending { border-color: var(--accent); }
+.user-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.user-who span { display: flex; flex-direction: column; min-width: 0; }
+.user-who strong, .user-who small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-who small { color: var(--muted); }
+.user-avatar { width: 28px; height: 28px; border-radius: 50%; flex: none; }
+.user-avatar.placeholder { background: var(--line); }
+.user-projects { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.project-check {
+  display: flex; align-items: center; gap: 6px; font-size: 13px;
+  /* 44px hit targets elsewhere, but these are dense by nature: a project list
+     can run to a dozen checkboxes in one row. */
+  min-height: 28px;
+}
+.ghost-btn.danger { color: var(--del); }
+
+/* Narrow screens: the four-column row becomes a stack. */
+@media (max-width: 720px) {
+  .user-row { grid-template-columns: 1fr; }
+  .user-actions { justify-self: start; }
+}
+
+/* ---------------- project widgets ---------------- */
+/* Sandboxed, so it has no styles of ours: it brings its own and reports the
+   height it needs. Transparent because the frame paints its own background. */
+.widget-frame {
+  display: block; width: 100%; border: 0; background: transparent;
+  color-scheme: normal;
+}
+.widget-failed { padding: 12px 0; }
+
+/* ---------------- archived ---------------- */
+/* Grey, and quieter than everything else. An archived task is a decision to
+   stop looking at it: it should read as set aside, not as another outcome
+   competing for attention beside succeeded and failed. */
+.state-dot.archived { background: var(--muted); opacity: 0.55; }
+.badge.archived { color: var(--muted); }
+.progress-fill.archived { background: var(--muted); opacity: 0.4; }
+/* The whole row recedes, so a thread of finished work does not read as a wall
+   of equally live things. */
+.task-chip.archived, .plan-row.archived { opacity: 0.55; }
+.task-chip.archived:hover, .plan-row.archived:hover { opacity: 0.85; }
+
+/* ---------------- audio and unrenderable files ---------------- */
+.audio-view { display: flex; flex-direction: column; gap: 8px; }
+.audio-view audio { width: 100%; }
+.binary-view { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.binary-view p { margin: 0; }

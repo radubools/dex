@@ -1,9 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import {
-  confirmPlan, createProject, createThread, deleteThread, getHealth, getSettings,
+  confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads, openStream,
   sendMessage,
   setAutoApprove,
+  type Me,
 } from './api'
 import { initialState, reduce } from './store'
 import type { Health, PlannedTask, Project, ThreadSummary } from './types'
@@ -11,6 +12,8 @@ import { Chat } from './components/Chat'
 import { Composer } from './components/Composer'
 import { ProjectPicker } from './components/ProjectPicker'
 import { SettingsMenu } from './components/SettingsMenu'
+import { SignIn, Unauthorized } from './components/SignIn'
+import { UserAdmin } from './components/UserAdmin'
 import { TaskPanel } from './components/TaskPanel'
 import type { ViewerTarget } from './components/Viewer'
 
@@ -57,6 +60,9 @@ export default function App() {
   const [threadId, setThreadId] = useState<string | null>(urlState().thread)
   const [health, setHealth] = useState<Health | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
+  /** Who the caller is. null while the first /api/auth/me is in flight. */
+  const [me, setMe] = useState<Me | null>(null)
+  const [showUsers, setShowUsers] = useState(false)
   const [planning, setPlanning] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [viewing, setViewing] = useState<ViewerTarget | null>(null)
@@ -105,6 +111,16 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Identity first: an unauthenticated visitor must not trigger a wall of
+    // failing requests, and /api/auth/me answers for everyone including nobody.
+    getMe()
+      .then(setMe)
+      .catch(() =>
+        // Cannot reach the server at all: fall back to treating the install as
+        // open so the existing "can't reach the server" screen is what shows,
+        // rather than a sign-in page that would also fail.
+        setMe({ state: 'open', user: null, googleEnabled: false }),
+      )
     getHealth().then(setHealth).catch((err: Error) => setFatal(err.message))
     getSettings()
       .then((s) => dispatch({ type: 'autoApprove', enabled: s.settings.auto_approve }))
@@ -267,6 +283,19 @@ export default function App() {
     if (threadId === id) setThreadId(remaining[0]?.id ?? (await createThread(project ?? undefined)).id)
   }
 
+  // Resolved before anything else renders. `state` distinguishes the three
+  // cases a 401 alone could not: nobody signed in, signed in without a role,
+  // and an install with no sign-in configured at all.
+  if (me === null) {
+    return <div className="gate" aria-busy="true" />
+  }
+  if (me.state === 'anonymous') {
+    return <SignIn />
+  }
+  if (me.state === 'unauthorised') {
+    return <Unauthorized user={me.user} onSignedOut={() => location.reload()} />
+  }
+
   if (fatal) {
     return (
       <div className="fatal">
@@ -285,7 +314,7 @@ export default function App() {
   return (
     <div
       className={`app ${activeTask ? 'with-panel' : ''} ${
-        viewing || showCosts || showGuide ? 'with-viewer' : ''
+        viewing || showCosts || showGuide || showUsers ? 'with-viewer' : ''
       }`}
     >
       <aside className={`threads ${drawerOpen ? 'open' : ''}`}>
@@ -418,6 +447,8 @@ export default function App() {
           <SettingsMenu
             autoApprove={state.autoApprove}
             onOpenCosts={() => setShowCosts(true)}
+            me={me}
+            onOpenUsers={() => setShowUsers(true)}
             onAutoApprove={(enabled) => {
               // Optimistic: the server echoes the change back over the stream.
               dispatch({ type: 'autoApprove', enabled })
@@ -498,7 +529,7 @@ export default function App() {
         />
       )}
 
-      {viewing && !showCosts && !showGuide && (
+      {viewing && !showCosts && !showGuide && !showUsers && (
         <Suspense fallback={null}>
           <Viewer
             target={viewing}
@@ -559,6 +590,16 @@ export default function App() {
         <Suspense fallback={null}>
           <CostDashboard onClose={() => setShowCosts(false)} />
         </Suspense>
+      )}
+      {/* Only reachable for an admin, and gated again here: a non-admin who
+          reached this state would see an empty list anyway, because the
+          endpoint refuses them. */}
+      {showUsers && me.user?.isAdmin && (
+        <UserAdmin
+          projects={projects}
+          me={me.user}
+          onClose={() => setShowUsers(false)}
+        />
       )}
     </div>
   )

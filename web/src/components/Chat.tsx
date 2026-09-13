@@ -615,7 +615,10 @@ function TaskActions({
         : ['pause']
   const available: ActionName[] = [
     ...goStop,
-    'restart',
+    // Not offered for an archived task: archiving is a decision to stop, and
+    // the server refuses a restart on one, so the button would do nothing.
+    // Re-running it is still possible from the task's own ↻.
+    ...(tasks.some((t) => t.canRestart) ? (['restart'] as const) : []),
     ...(tasks.some((t) => t.canArchive) ? (['archive'] as const) : []),
   ]
   if (!tasks.length) return null

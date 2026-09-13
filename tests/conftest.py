@@ -71,6 +71,10 @@ async def db(dsn: str):
     await database.pool.execute(
         "DELETE FROM events; DELETE FROM task_messages; DELETE FROM tasks; "
         "DELETE FROM threads; DELETE FROM settings; DELETE FROM topic_reviews; "
+        # Identity too, or users accumulate across tests and anything counting
+        # them -- "is this the last admin?" -- sees the previous test's people.
+        "DELETE FROM sessions; DELETE FROM user_projects; DELETE FROM users; "
+        "DELETE FROM oauth_states; "
         "DELETE FROM projects;"
     )
     # Every task belongs to a project, and startup guarantees the default one

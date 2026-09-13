@@ -53,14 +53,15 @@ class EventBus:
             event = await self._pending.get()
             try:
                 seq = await self.db.pool.fetchval(
-                    """INSERT INTO events (task_id, thread_id, type, data, ts)
-                       VALUES ($1, $2, $3, $4::jsonb, to_timestamp($5))
+                    """INSERT INTO events (task_id, thread_id, type, data, ts, project)
+                       VALUES ($1, $2, $3, $4::jsonb, to_timestamp($5), $6)
                        RETURNING seq""",
                     event.task_id,
                     event.data.get("threadId"),
                     event.type,
                     Database.dump(event.data),
                     event.ts,
+                    event.project,
                 )
                 event.seq = int(seq)
                 for queue in self._subscribers:
@@ -74,7 +75,11 @@ class EventBus:
                 self._pending.task_done()
 
     async def history(
-        self, task_id: str | None = None, after_seq: int = 0, limit: int = REPLAY_LIMIT
+        self,
+        task_id: str | None = None,
+        after_seq: int = 0,
+        limit: int = REPLAY_LIMIT,
+        projects: list[str] | None = None,
     ) -> list[Event]:
         """Events after `after_seq`, newest-biased.
 
@@ -83,23 +88,30 @@ class EventBus:
         permanently behind: it would replay ancient history, set its cursor
         there, and then discard every live event as "already seen".
         """
+        scoped = projects is not None
         if task_id:
             rows = await self.db.pool.fetch(
                 """SELECT * FROM (
-                       SELECT seq, task_id, type, data, extract(epoch from ts)::float8 AS ts
-                       FROM events WHERE task_id = $1 AND seq > $2
+                       SELECT seq, task_id, type, data, project,
+                              extract(epoch from ts)::float8 AS ts
+                       FROM events
+                       WHERE task_id = $1 AND seq > $2
+                         AND (NOT $4::bool OR project = ANY($5::text[]))
                        ORDER BY seq DESC LIMIT $3
                    ) recent ORDER BY seq""",
-                task_id, after_seq, limit,
+                task_id, after_seq, limit, scoped, list(projects or []),
             )
         else:
             rows = await self.db.pool.fetch(
                 """SELECT * FROM (
-                       SELECT seq, task_id, type, data, extract(epoch from ts)::float8 AS ts
-                       FROM events WHERE seq > $1
+                       SELECT seq, task_id, type, data, project,
+                              extract(epoch from ts)::float8 AS ts
+                       FROM events
+                       WHERE seq > $1
+                         AND (NOT $3::bool OR project = ANY($4::text[]))
                        ORDER BY seq DESC LIMIT $2
                    ) recent ORDER BY seq""",
-                after_seq, limit,
+                after_seq, limit, scoped, list(projects or []),
             )
         return [
             Event(
@@ -108,18 +120,35 @@ class EventBus:
                 task_id=row["task_id"],
                 seq=row["seq"],
                 ts=row["ts"],
+                project=row["project"],
             )
             for row in rows
         ]
 
     async def subscribe(
-        self, task_id: str | None = None, after_seq: int = 0
+        self,
+        task_id: str | None = None,
+        after_seq: int = 0,
+        projects: list[str] | None = None,
     ) -> AsyncIterator[Event]:
-        """Replay what was missed from Postgres, then stream live events."""
+        """Replay what was missed from Postgres, then stream live events.
+
+        `projects` restricts the stream to those projects. None means no
+        restriction, which is what an admin and the service credential get; a
+        list is applied to both the replay and the live fan-out, because a
+        subscriber who may not see a project must not receive its events by
+        either route.
+
+        An event with no project reaches nobody who is restricted. Those are
+        dex's own (settings changes, thread-level chatter on an unassigned
+        thread), and leaking them to a scoped user would be a small hole with no
+        upside.
+        """
         queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=1000)
         self._subscribers.add(queue)
+        allowed = set(projects) if projects is not None else None
         try:
-            replayed = await self.history(task_id, after_seq)
+            replayed = await self.history(task_id, after_seq, projects=projects)
             last_seq = replayed[-1].seq if replayed else after_seq
             for event in replayed:
                 yield event
@@ -127,7 +156,10 @@ class EventBus:
                 event = await queue.get()
                 if event.seq <= last_seq:
                     continue  # already delivered during replay
-                if task_id is None or event.task_id == task_id:
-                    yield event
+                if task_id is not None and event.task_id != task_id:
+                    continue
+                if allowed is not None and event.project not in allowed:
+                    continue
+                yield event
         finally:
             self._subscribers.discard(queue)

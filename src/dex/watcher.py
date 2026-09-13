@@ -30,6 +30,11 @@ KINDS = {
     ".gif": "animation", ".png": "image", ".mp4": "video", ".svg": "image",
     # Narration and its captions, produced alongside an animation.
     ".m4a": "audio", ".vtt": "captions",
+    # Music projects: a score, what it sounds like, and the page that plays it.
+    ".mid": "midi", ".midi": "midi",
+    ".wav": "audio", ".mp3": "audio", ".ogg": "audio", ".flac": "audio",
+    ".html": "page", ".css": "code", ".js": "code", ".ts": "code",
+    ".csv": "data", ".tsv": "data",
 }
 
 

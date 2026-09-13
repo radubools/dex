@@ -38,8 +38,9 @@ from .config import Config
 from .store import SettingsStore, TaskStore
 from .diffs import preview_change
 from .models import Event, Task, TaskState
+from . import widgets
 from .permissions import PermissionPolicy
-from .prompts import GENERATION_SYSTEM, generation_prompt
+from .prompts import DESIGN_SYSTEM, GENERATION_SYSTEM, design_prompt, generation_prompt
 
 
 log = logging.getLogger("dex.runner")
@@ -157,7 +158,11 @@ class TaskRunner:
     # ---------------------------------------------------------------- events
 
     def emit(self, type_: str, **data: Any) -> None:
-        self.bus.publish(Event(type=type_, data=data, task_id=self.task.id))  # type: ignore[arg-type]
+        self.bus.publish(
+            # Tagged with the project so a scoped subscriber's stream can be
+            # filtered without a database round trip per event.
+            Event(type=type_, data=data, task_id=self.task.id, project=self.task.project)  # type: ignore[arg-type]
+        )
 
     def set_state(self, state: TaskState, **extra: Any) -> None:
         self.task.state = state
@@ -165,6 +170,25 @@ class TaskRunner:
         # Persisted in the background: a state change must not block the agent
         # loop, but it must survive the process.
         asyncio.create_task(self._persist_state(state, extra))
+
+    async def _correct_state(self) -> None:
+        """Tell the UI what the database actually holds.
+
+        `set_state` emits before it writes, because a state change must not
+        block the agent loop. When the write is then refused -- archiving is the
+        case that exists -- the screen is left showing something that was never
+        stored, and only a reload fixes it. So the row is read back and the real
+        state re-emitted.
+        """
+        try:
+            actual = await self.store.get(self.task.id)
+            if actual is None or actual.state is self.task.state:
+                return
+            self.task.state = actual.state
+            self.task.activity = None
+            self.emit("task_state", state=actual.state.value, activity=None)
+        except Exception:
+            log.exception("could not re-read the state of %s", self.task.id)
 
     async def _persist_state(self, state: TaskState, extra: dict[str, Any]) -> None:
         fields: dict[str, Any] = {"activity": self.task.activity}
@@ -176,7 +200,12 @@ class TaskRunner:
             fields["cost_usd"] = self.task.cost_usd
             fields["turns"] = self.task.turns
         try:
-            await self.store.set_state(self.task.id, state, **fields)
+            applied = await self.store.set_state(self.task.id, state, **fields)
+            if not applied:
+                # The row would not take this state -- it has been archived out
+                # from under the run. The UI was already told otherwise, so put
+                # it right rather than leaving a stale screen until a reload.
+                await self._correct_state()
         except Exception:  # a reporting failure must not kill the run
             log.exception("could not persist state %s for %s", state.value, self.task.id)
 
@@ -333,6 +362,12 @@ class TaskRunner:
         policy = PermissionPolicy(
             workspace=self.config.workspace,
             task_dir=self.task_dir,
+            # A design turn also authors widgets, which are shared across
+            # projects and therefore live at the top level rather than inside
+            # the project it is editing.
+            extra_writable=(
+                (widgets.widgets_dir(self.config.workspace),) if self.task.is_design else ()
+            ),
             escalate=self._escalate,
         )
         decide = self._with_diffs(policy.build())
@@ -351,7 +386,11 @@ class TaskRunner:
             # source. Created just above, so it exists to start in.
             cwd=str(self.task_dir),
             model=self.task.model or self.config.model,
-            system_prompt={"type": "preset", "preset": "claude_code", "append": GENERATION_SYSTEM},
+            system_prompt={
+                "type": "preset",
+                "preset": "claude_code",
+                "append": DESIGN_SYSTEM if self.task.is_design else GENERATION_SYSTEM,
+            },
             permission_mode="default",
             # Stream token deltas so the UI can render text as it arrives
             # instead of a block at a time.
@@ -377,13 +416,28 @@ class TaskRunner:
         )
 
         self._refresh_utils_index()
-        prompt = generation_prompt(
-            problem=self.task.problem,
-            task_dir=self.task_dir,
-            python=Path(sys.executable),
-            manim_available=manim_available(),
-            project_wide=self.task.project_wide,
-        )
+        if self.task.is_design:
+            # A design turn carries its conversation in `problem`, packed by the
+            # API, because a task has one prompt field and the chat has a
+            # history the model needs.
+            payload = self.task.design_payload()
+            prompt = design_prompt(
+                message=payload["message"],
+                project=self.task.project or self.config.default_project,
+                project_dir=self.task_dir,
+                python=Path(sys.executable),
+                workspace=self.config.workspace,
+                guide=payload["guide"],
+                history=payload["history"],
+            )
+        else:
+            prompt = generation_prompt(
+                problem=self.task.problem,
+                task_dir=self.task_dir,
+                python=Path(sys.executable),
+                manim_available=manim_available(),
+                project_wide=self.task.project_wide,
+            )
 
         try:
             async with asyncio.timeout(self.config.task_timeout_s):
@@ -396,7 +450,12 @@ class TaskRunner:
             self.task.activity = None
             # Told apart by who cancelled it: dex making room is a pause it will
             # undo, a person pressing Stop is a cancellation it will not.
-            self.set_state(TaskState.PAUSED if self.task.preempted else TaskState.CANCELLED)
+            if self.task.archived:
+                self.set_state(TaskState.ARCHIVED)
+            else:
+                self.set_state(
+                    TaskState.PAUSED if self.task.preempted else TaskState.CANCELLED
+                )
             raise
         except TimeoutError:
             self._fail(f"timed out after {self.config.task_timeout_s:.0f}s")
@@ -447,6 +506,38 @@ class TaskRunner:
             await self.store.set_cost(self.task.id, cost, estimate=estimate)
         except Exception:
             log.exception("could not record cost for %s", self.task.id)
+
+    async def _post_design_reply(self, thread_id: str, summary: str) -> None:
+        """Append a design turn's answer to its thread.
+
+        Written through the same store the API uses, so a reload shows it; the
+        event is what puts it on screen without one.
+        """
+        try:
+            from .models import ThreadMessage
+            from .store import ThreadStore
+
+            message = ThreadMessage(
+                role="dex", kind="text", text=summary.strip()[:4000],
+                data={"project": self.task.project, "taskId": self.task.id},
+            )
+            await ThreadStore(self.store.db).append(thread_id, message)
+            self.bus.publish(
+                Event(
+                    type="thread_message",
+                    data={"threadId": thread_id, "message": message.to_json()},
+                    project=self.task.project,
+                )
+            )
+        except Exception:
+            # The run itself succeeded; failing to echo it must not undo that.
+            log.exception("could not post the design reply for %s", self.task.id)
+
+    async def _store_tokens(self, counts: dict[str, int]) -> None:
+        try:
+            await self.store.set_tokens(self.task.id, counts)
+        except Exception:
+            log.exception("could not record tokens for %s", self.task.id)
 
     async def _store_session(self, session_id: str) -> None:
         try:
@@ -505,6 +596,13 @@ class TaskRunner:
                 self.emit("block_end", id=block_id)
 
     def _fail(self, message: str) -> None:
+        if self.task.archived:
+            # Archived out from under the run. The SDK reports the vanished
+            # subprocess as an error; there is nothing wrong and nothing to
+            # resume.
+            self.task.activity = None
+            self.set_state(TaskState.ARCHIVED)
+            return
         if self.task.preempted:
             # dex stopped this itself — a restart, or making room. The agent
             # reports that as an error because its subprocess vanished, but
@@ -628,7 +726,21 @@ class TaskRunner:
                     self._store_cost(message.total_cost_usd, estimate=False)
                 )
                 self.emit("cost", costUsd=message.total_cost_usd, estimate=False)
+            # Tokens come from the result rather than the streamed messages:
+            # only this payload carries `output_tokens_details`, which is the
+            # one place thinking is reported apart from the output it is part of.
+            counts = pricing.tokens(getattr(message, "usage", None))
+            if any(counts.values()):
+                self.task.tokens = counts
+                asyncio.create_task(self._store_tokens(counts))
             self.task.turns = message.num_turns
+            if self.task.is_design and self.task.thread_id and message.result:
+                # The design thread is a conversation, so it needs the reply in
+                # line. The task panel still holds the whole run; this is the
+                # part somebody reading the thread should not have to dig for.
+                asyncio.create_task(
+                    self._post_design_reply(self.task.thread_id, message.result)
+                )
             self.emit(
                 "result",
                 ok=not message.is_error,
