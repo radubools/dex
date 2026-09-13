@@ -1,0 +1,105 @@
+# dex in containers: Postgres of its own, and one app container running the
+# API and the built UI under pm2.
+#
+#   cp .env.docker.example .env && $EDITOR .env     # set the two secrets
+#   docker compose up -d --build
+#   open http://localhost:4318
+#
+# Read DEPLOY.md before putting this on a public address. The short version:
+# set DEX_TOKEN, or anyone who can reach the port can run an agent on your
+# account.
+
+name: dex
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dex
+      POSTGRES_USER: dex
+      # Required: compose fails to start rather than defaulting to something
+      # guessable.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Postgres is initdb'd once; the app applies its own schema on every
+      # start, so there is nothing to mount into /docker-entrypoint-initdb.d.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Not published. The app reaches it over the compose network; exposing 5432
+    # on a public instance is how a database gets found.
+    expose:
+      - "5432"
+    healthcheck:
+      # `-U dex -d dex` rather than a bare pg_isready: the latter answers true
+      # while initdb is still creating the role, and the app then fails its
+      # first connection and restart-loops for a minute.
+      test: ["CMD-SHELL", "pg_isready -U dex -d dex"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      args:
+        # manim + piper roughly quadruple the image. Set to "manim,voice" if a
+        # project here renders animations.
+        EXTRAS: ${DEX_EXTRAS:-}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DEX_DATABASE_URL: postgresql://dex:${POSTGRES_PASSWORD}@postgres:5432/dex
+      DEX_WORKSPACE: /app
+      DEX_ASSETS: /data/assets
+      DEX_STATE: /data/state
+      DEX_PROJECT: ${DEX_PROJECT:-algorithms}
+      DEX_PORT: "4317"
+      DEX_WEB_PORT: "4318"
+      # Shared secret for the API and UI. Empty means no auth at all.
+      DEX_TOKEN: ${DEX_TOKEN:-}
+      DEX_MODEL: ${DEX_MODEL:-claude-opus-5}
+      DEX_EFFORT: ${DEX_EFFORT:-high}
+      # Comma-separated Host allow-list for the UI server. Unset allows any,
+      # which is right behind a load balancer and wrong when 4318 faces the
+      # internet directly.
+      DEX_ALLOWED_HOSTS: ${DEX_ALLOWED_HOSTS:-}
+      # How the agent authenticates. Without one of these, tasks fail on their
+      # first turn and /api/health says so.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # "1" replays a scripted run instead of calling the model. Set it to
+      # smoke-test a deployment without spending anything.
+      DEX_FAKE_AGENT: ${DEX_FAKE_AGENT:-}
+    ports:
+      # Host ports are separate vars so this can run beside a local dex (which
+      # already holds 4317/4318) and so a proxy in front can take 80/443.
+      - "${DEX_BIND:-127.0.0.1}:${DEX_WEB_HOST_PORT:-4318}:4318"   # the UI
+      - "${DEX_BIND:-127.0.0.1}:${DEX_HOST_PORT:-4317}:4317"       # the API, for curl and health checks
+    volumes:
+      # Everything the agent produces. Without these, a redeploy throws away
+      # every generated package and every thread.
+      - dex-assets:/data/assets
+      - dex-state:/data/state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4317/api/health > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      # The first start applies the schema and indexes the assets tree, which
+      # takes longer than a steady-state check.
+      start_period: 60s
+      retries: 3
+    # Each concurrent task spawns a ~300MB agent subprocess, so the ceiling has
+    # to allow for `task_concurrency` of them plus the two servers. 6 tasks
+    # measured at ~2.7GB. Raise both together, or lower Tasks at once.
+    mem_limit: ${DEX_MEM_LIMIT:-6g}
+    # The agent writes files and runs builds; it is not a static workload.
+    stop_grace_period: 30s
+
+volumes:
+  postgres-data:
+  dex-assets:
+  dex-state:

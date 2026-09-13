@@ -1,0 +1,34 @@
+# Build context hygiene. `assets/` is deliberately NOT ignored — it is copied
+# in as a seed so a fresh volume starts with the project guides rather than an
+# empty tree. Everything below is either rebuilt in the image, host-specific,
+# or large enough to slow every build.
+
+.git
+.gitignore
+**/node_modules
+**/dist
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.pm2-logs
+.dex
+.claude
+*.log
+
+# Generated media: large, reproducible, and not needed to run the server.
+assets/**/media
+assets/**/*.mp4
+assets/**/*.gif
+assets/**/*.m4a
+assets/**/*.wav
+assets/**/.cues
+
+# Local-only compose state and secrets.
+.env
+docker-compose.override.yml
+
+# Terraform state holds secrets and provider binaries are large.
+infra/.terraform
+infra/*.tfstate*
+infra/terraform.tfvars

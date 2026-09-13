@@ -1,0 +1,25 @@
+# cp terraform.tfvars.example terraform.tfvars
+
+region = "us-east-1"
+
+# Must match the image you push. A Docker build on an Apple Silicon Mac is
+# arm64, and arm64 on an Intel instance is `exec format error`.
+architecture = "arm64"
+
+# t4g.large: $0.0672/hr, ~$49/mo, 2 vCPU / 8 GiB, Graviton2.
+# For x86_64 instead, use "m7i-flex.large" ($0.0958/hr, ~$70/mo) and build with
+# `docker build --platform linux/amd64`.
+# 8 GiB is generous: measured need is ~0.7 GB at concurrency 1, ~2.2 GB at 6.
+# t4g.small (2 GiB, ~$12/mo) is fine if you stay at concurrency 1-2.
+instance_type = "t4g.large"
+
+root_volume_gb = 50
+dex_project    = "algorithms"
+dex_effort     = "high"
+
+# `Tasks at once` is a database setting, not an environment one: it starts at
+# dex's default of 3 and you change it in the UI. On 8 GiB, stay at or below 6.
+
+# Leave empty unless you want to curl the API directly, bypassing CloudFront.
+# A shell does not need it: use `aws ssm start-session`.
+# admin_cidr = "203.0.113.4/32"

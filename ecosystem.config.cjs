@@ -9,18 +9,57 @@
  * require().
  */
 const path = require('path')
+const fs = require('fs')
 
 const root = __dirname
 const python = path.join(root, '.venv', 'bin', 'dex')
+
+/**
+ * Secrets from a gitignored file rather than from this one, which is committed.
+ * Absent is fine: dex then runs with no sign-in, exactly as it did before.
+ */
+function secrets(name) {
+  const file = path.join(root, name)
+  if (!fs.existsSync(file)) return {}
+  return Object.fromEntries(
+    fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+      .map((line) => {
+        const at = line.indexOf('=')
+        return [line.slice(0, at).trim(), line.slice(at + 1).trim()]
+      })
+      .filter(([key]) => key),
+  )
+}
+
+// `.env.google.off` is the parked state. Renaming it to `.env.google` is the
+// whole switch: with credentials present dex demands a sign-in, and with none
+// it behaves exactly as it always has. Kept explicit because a restart for any
+// unrelated reason would otherwise have turned authentication on by surprise.
+const google = secrets('.env.google')
 
 module.exports = {
   apps: [
     {
       name: 'dex-api',
       script: python,
+      // Restart the server when src/dex changes. uvicorn's own reloader, not
+      // pm2's: it watches only `src/dex` and rebuilds the app in a child
+      // process, so an edit to assets/ or web/ does not bounce the server.
+      //
+      // The cost is real and worth knowing: a reload kills whatever is running.
+      // A task mid-flight is lost, and because dex's shutdown race can record a
+      // killed task as `failed` rather than `paused`, editing backend code
+      // while tasks run will leave failures behind. Pause work first, or drop
+      // this argument while a long run matters.
+      args: '--reload',
       cwd: root,
       interpreter: 'none', // it is a console-script shebang, not a JS file
       env: {
+        ...google,
         DEX_DATABASE_URL: 'postgresql://127.0.0.1/dex',
         DEX_PORT: '4317',
         // Postgres.app and homebrew are not on a daemon's default PATH.

@@ -1,0 +1,103 @@
+#!/bin/bash
+# Brings dex up on a fresh Amazon Linux 2023 instance. Runs once at first boot;
+# after that the containers' own restart policy handles reboots.
+set -euxo pipefail
+exec > >(tee -a /var/log/dex-bootstrap.log) 2>&1
+
+dnf -y update
+dnf -y install docker
+# The compose plugin is not in the AL2023 repos; install it where docker looks.
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-$(uname -m)"
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+systemctl enable --now docker
+
+REGION="${region}"
+PREFIX="${param_prefix}"
+IMAGE="${image}"
+
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "${registry}"
+
+# Secrets stay out of the shell history and out of the compose file.
+get() { aws ssm get-parameter --region "$REGION" --name "$PREFIX/$1" --with-decryption --query Parameter.Value --output text; }
+CLAUDE_TOKEN="$(get CLAUDE_CODE_OAUTH_TOKEN)"
+DEX_TOKEN="$(get DEX_TOKEN)"
+PG_PASSWORD="$(get POSTGRES_PASSWORD)"
+
+install -d -m 750 /opt/dex
+cd /opt/dex
+
+# 0600: the file holds the Claude token and the database password.
+umask 077
+cat > .env <<ENVEOF
+POSTGRES_PASSWORD=$PG_PASSWORD
+CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOKEN
+DEX_TOKEN=$DEX_TOKEN
+DEX_PROJECT=${dex_project}
+DEX_EFFORT=${dex_effort}
+ENVEOF
+
+cat > docker-compose.yml <<'COMPOSEEOF'
+name: dex
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dex
+      POSTGRES_USER: dex
+      POSTGRES_PASSWORD: $${POSTGRES_PASSWORD:?}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dex -d dex"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+  app:
+    image: IMAGE_PLACEHOLDER
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DEX_DATABASE_URL: postgresql://dex:$${POSTGRES_PASSWORD}@postgres:5432/dex
+      DEX_WORKSPACE: /app
+      DEX_ASSETS: /data/assets
+      DEX_STATE: /data/state
+      DEX_PROJECT: $${DEX_PROJECT}
+      DEX_EFFORT: $${DEX_EFFORT}
+      DEX_PORT: "4317"
+      DEX_WEB_PORT: "4318"
+      DEX_TOKEN: $${DEX_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: $${CLAUDE_CODE_OAUTH_TOKEN}
+      # CloudFront forwards whatever Host the viewer sent, so the UI server
+      # must not second-guess it. The security boundary is the security group,
+      # which only admits CloudFront's own edges.
+      DEX_ALLOWED_HOSTS: ""
+    ports:
+      # Bound to all interfaces because CloudFront reaches it from outside;
+      # the security group is what keeps everyone else out.
+      - "4318:4318"
+      - "127.0.0.1:4317:4317"
+    volumes:
+      - dex-assets:/data/assets
+      - dex-state:/data/state
+    stop_grace_period: 30s
+volumes:
+  postgres-data:
+  dex-assets:
+  dex-state:
+COMPOSEEOF
+
+sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|" docker-compose.yml
+
+docker compose pull
+docker compose up -d
+
+echo "dex bootstrap finished"
