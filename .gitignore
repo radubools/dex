@@ -261,8 +261,13 @@ build/
 # Generated study material and the construction dataset: large binaries
 # (video, audio) that churn with every run, and reproducible from the agents.
 # Backed up to the external volume rather than versioned here.
-assets/
-datasets/
+# Generated work and data, not source. The directory itself is kept — with a
+# README explaining what belongs in it — so a fresh clone has somewhere to put
+# a first project rather than relying on the server to invent it.
+assets/*
+!assets/README.md
+datasets/*
+!datasets/README.md
 
 # Terraform: state can contain secrets, tfvars does, and .terraform is 600MB+
 infra/.terraform/
