@@ -1,0 +1,55 @@
+<!doctype html>
+<!--
+  A page for testing one widget on its own.
+
+  It mounts the widget the way dex does — same `mount(el, ctx)` contract, same
+  ctx shape — but without the sandbox. The sandbox is dex's concern and is
+  tested once, in the app; a widget's own tests are about whether it draws the
+  right thing from the right file, and fighting an opaque origin to assert that
+  only makes them flaky.
+
+    /widgets/harness.html?widget=pose-3d
+
+  The test supplies the file with `window.__mount({path, text, assets})`.
+-->
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; font: 14px system-ui, sans-serif; }
+  #root { min-height: 40px; }
+  #error { color: #c00; font-family: ui-monospace, monospace; white-space: pre-wrap; padding: 8px; }
+</style>
+<div id="root"></div>
+<pre id="error" hidden></pre>
+<script type="module">
+  const name = new URLSearchParams(location.search).get('widget')
+  const mod = await import(`/widgets/${name}/dist/index.js`)
+
+  /** Mount the widget. Resolves when it has finished, or rejects with its error. */
+  window.__mount = async ({ path, text, assets = {}, theme = 'dark' }) => {
+    const ctx = {
+      path,
+      text,
+      theme,
+      // The host resolves these against the opened file's directory and refuses
+      // to leave it; here the test just says what exists.
+      fetchAsset: async (name) => {
+        if (!(name in assets)) throw new Error(`no such sibling: ${name}`)
+        return assets[name]
+      },
+      fetchAssetUrl: async (name) => {
+        if (!(name in assets)) throw new Error(`no such sibling: ${name}`)
+        return URL.createObjectURL(new Blob([assets[name]]))
+      },
+    }
+    try {
+      window.__cleanup = await mod.mount(document.getElementById('root'), ctx)
+      return true
+    } catch (err) {
+      const box = document.getElementById('error')
+      box.hidden = false
+      box.textContent = String(err && err.stack || err)
+      throw err
+    }
+  }
+  window.__ready = true
+</script>
