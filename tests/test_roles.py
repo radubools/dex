@@ -97,13 +97,30 @@ def test_every_role_can_read_and_only_admin_can_do_everything():
     )
 
 
-def test_the_roles_are_not_a_hierarchy():
-    """Author and operator are different jobs, not different amounts of one."""
+def test_the_roles_form_a_ladder():
+    """Read, then run, then design, then administer — each adds to the last.
+
+    Asserted as strict containment rather than by listing each set, so a
+    capability granted to a lower role and forgotten higher up fails here
+    instead of becoming a role that can do less than the one beneath it.
+    """
+    rungs = [ROLE_VIEWER, ROLE_OPERATOR, ROLE_AUTHOR, ROLE_ADMIN]
+    for lower, upper in zip(rungs, rungs[1:]):
+        assert capabilities_for(lower) < capabilities_for(upper), f"{upper} vs {lower}"
+
+
+def test_designing_is_what_separates_an_author_from_an_operator():
     author = capabilities_for(ROLE_AUTHOR)
     operator = capabilities_for(ROLE_OPERATOR)
     assert CAP_DESIGN in author and CAP_DESIGN not in operator
-    assert CAP_RUN_TASKS in operator and CAP_RUN_TASKS not in author
-    # Neither administers anything, which is the whole point of separating them.
+    # An author runs tasks too: designing a project and being unable to try
+    # what you designed is not a job anybody does.
+    assert CAP_RUN_TASKS in author and CAP_RUN_TASKS in operator
+    assert author - operator == {CAP_DESIGN}
+
+
+def test_nobody_below_admin_administers():
+    """The line that matters: the three lower rungs change no accounts."""
     for role in (ROLE_AUTHOR, ROLE_OPERATOR, ROLE_VIEWER):
         assert CAP_MANAGE_USERS not in capabilities_for(role), role
         assert CAP_MANAGE_PROJECTS not in capabilities_for(role), role
@@ -296,23 +313,23 @@ async def test_a_password_reset_ends_every_session_the_user_had(roles):
 # ------------------------------------------------- what each role may do ------
 
 
-async def test_an_author_designs_and_does_not_queue_work(roles, db, config):
+async def test_an_author_both_designs_and_runs(roles, db, config):
+    """An author has to be able to try the project they just described."""
     client, as_role, _ = roles
     await ProjectStore(db, config.assets_dir).create("Alpha", slug="alpha")
     await as_role(ROLE_AUTHOR, projects=["alpha"])
 
-    # Reading, and rewriting the project's standing guide: their job.
     assert client.get("/api/projects").status_code == 200
     assert client.put(
         "/api/projects/alpha/guide", json={"text": "# Alpha\n\nBuild things.\n"}
     ).status_code == 200
-
-    # Queueing a task is not.
-    queued = client.post(
+    assert client.post(
         "/api/tasks", json={"problem": "please build something", "project": "alpha"}
-    )
-    assert queued.status_code == 403
-    assert "run_tasks" in queued.json()["detail"]
+    ).status_code in (200, 201)
+
+    # Still not an admin, which is the boundary that did not move.
+    assert client.post("/api/projects", json={"name": "Nope"}).status_code == 403
+    assert client.get("/api/auth/users").status_code == 403
 
 
 async def test_an_operator_queues_work_and_does_not_redesign_the_project(roles, db, config):
@@ -466,4 +483,6 @@ async def test_the_capabilities_reach_the_browser(roles, db, config):
     await as_role(ROLE_AUTHOR, projects=["alpha"])
     me = client.get("/api/auth/me").json()
     assert me["state"] == "authorised"
-    assert sorted(me["user"]["capabilities"]) == sorted([CAP_DESIGN, CAP_VIEW])
+    # Compared against the table rather than a list written out here, so
+    # widening a role does not need this test edited to agree with it.
+    assert sorted(me["user"]["capabilities"]) == sorted(capabilities_for(ROLE_AUTHOR))

@@ -90,7 +90,7 @@ existing account that happens to be called `admin`.
 | Role | May |
 | --- | --- |
 | `admin` | Everything: create projects and users, assign roles and project access, reset passwords, change settings. Sees every project, including ones created later. |
-| `author` | Design a project — its `AGENTS.md` guide and its UI widgets. |
+| `author` | Design a project — its `AGENTS.md` guide and its UI widgets — **and** run tasks. Designing a project and being unable to try what you designed is not a job anybody does. |
 | `operator` | Run tasks and write project utilities. |
 | `viewer` | Read the library of generated material. |
 
@@ -99,15 +99,20 @@ and nothing else. That is the absence of a role rather than a role of its own,
 so it is stored as `NULL` and is never a value you can assign — "No access" in
 the admin UI clears the column.
 
-The roles are **not a hierarchy.** An author cannot queue a task and an operator
-cannot rewrite the guide, because those are different jobs rather than different
-amounts of the same one. Only `admin` is cumulative, on the grounds that an
-installation nobody can unblock is worse than one broad role.
+They form a **ladder** — read, then run, then design, then administer — each
+adding to the one below. Designing is the only thing that separates an author
+from an operator.
+
+Nothing in the code relies on that shape, though: a route asks for the
+capability it needs (`view`, `run_tasks`, `design`, `manage_projects`,
+`manage_users`) and one table says which roles have it. That is what let
+`author` gain task-running by editing a single line, rather than hunting down
+the checks that assumed it could not.
 
 **A role says what; a project grant says where.** Both have to allow an action.
-An author granted `music` may rewrite that project's guide and is told a
-project they were not granted does not exist — 404 rather than 403, so the
-admin UI does not leak a list of project names. An admin needs no grants at all;
+An author granted `music` may rewrite that project's guide and run tasks in it,
+and is told a project they were not granted does not exist — 404 rather than
+403, so the admin UI does not leak a list of project names. An admin needs no grants at all;
 their access is the role, which is why demoting one does not leave stale rows
 behind.
 

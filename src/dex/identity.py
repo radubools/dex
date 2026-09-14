@@ -7,7 +7,10 @@ Four roles, and no role at all:
                  project settings. Sees every project, including ones made
                  after they were granted anything.
 - ``author``   — shapes what a project *is*: its standing guide and its UI
-                 widgets. Design work, not production work.
+                 widgets. Also runs tasks, because designing a project and
+                 then being unable to try the thing you designed is not a job
+                 anybody does — an author needs to see a task use the guide
+                 they just wrote.
 - ``operator`` — runs the work: queues tasks in the projects they are granted,
                  answers their questions, and writes project utilities.
 - ``viewer``   — reads the library of generated material and nothing else.
@@ -18,12 +21,11 @@ in ``ROLES``. It is deliberately a state rather than a rejection: an admin has
 to see who has knocked before they can grant anything, and a silent 403 leaves
 them nothing to act on.
 
-Roles are not a hierarchy. An author cannot queue a generation task and an
-operator cannot rewrite the project guide, because those are different jobs
-rather than different amounts of the same one. What every role does share is
-the ability to read, so `capabilities` below grants `view` to all of them.
-Only ``admin`` is cumulative, because an installation with nobody able to
-unblock it is worse than one where a single role is broad.
+So the four are a ladder, each adding to the one below: read, then run, then
+design, then administer. Nothing in the code relies on that — every route asks
+for the capability it needs and the table below answers — which is what lets a
+role be widened, as ``author`` was, by editing one line rather than hunting for
+the checks that assumed it could not run anything.
 
 Project grants apply to all three non-admin roles: a role says what you may
 do, `user_projects` says where. Both have to allow an action.
@@ -81,7 +83,7 @@ CAPABILITIES = (
 
 ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     ROLE_ADMIN: frozenset(CAPABILITIES),
-    ROLE_AUTHOR: frozenset({CAP_VIEW, CAP_DESIGN}),
+    ROLE_AUTHOR: frozenset({CAP_VIEW, CAP_RUN_TASKS, CAP_DESIGN}),
     ROLE_OPERATOR: frozenset({CAP_VIEW, CAP_RUN_TASKS}),
     ROLE_VIEWER: frozenset({CAP_VIEW}),
 }
@@ -91,8 +93,8 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
 ROLE_DESCRIPTIONS: dict[str, str] = {
     ROLE_ADMIN: "Creates projects and users, assigns roles and project access, "
                 "resets passwords, overrides settings. Sees every project.",
-    ROLE_AUTHOR: "Designs a project's guide and its UI widgets, in the projects "
-                 "they are given.",
+    ROLE_AUTHOR: "Designs a project's guide and its UI widgets, and runs tasks, "
+                 "in the projects they are given.",
     ROLE_OPERATOR: "Runs tasks and writes project utilities, in the projects "
                    "they are given.",
     ROLE_VIEWER: "Reads the library of generated material.",
