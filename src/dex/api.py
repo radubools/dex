@@ -22,7 +22,20 @@ from pydantic import BaseModel, Field
 
 from .bus import EventBus
 from . import widgets
-from .authn import Access, build_access_dependency, build_admin_dependency, build_router
+from .authn import (
+    Access,
+    build_access_dependency,
+    build_admin_dependency,
+    build_capability_dependency,
+    build_router,
+)
+from .identity import (
+    CAP_DESIGN,
+    CAP_MANAGE_PROJECTS,
+    CAP_RUN_TASKS,
+    CAP_VIEW,
+    IdentityStore,
+)
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation
@@ -256,6 +269,19 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         await db.connect()
         await import_json_threads(db, config.threads_dir)
         await adopt_existing_project(db, config)
+        if config.password_auth:
+            # Something has to get the first admin in, and with password
+            # sign-in on there is no env-var equivalent of DEX_ADMIN_EMAILS.
+            # A no-op once any admin exists.
+            seeded = await IdentityStore(db).ensure_seed_admin(
+                config.seed_admin_username, config.seed_admin_password
+            )
+            if seeded is not None:
+                log.warning(
+                    "created the first admin: username %r, password %r — "
+                    "dex will require a new password at first sign-in",
+                    config.seed_admin_username, config.seed_admin_password,
+                )
         await bus.start()
         await tasks.start()
         await watcher.start()
@@ -287,7 +313,22 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # project is actually known.
     access_dep = build_access_dependency(config, db)
     admin_only = [Depends(build_admin_dependency(access_dep))]
-    guard = [Depends(access_dep)]
+    # One dependency per capability. A route needs both halves: the capability
+    # says *what* the caller may do, and `access.check(project)` in the body
+    # says *where*. Neither implies the other -- an operator granted `music`
+    # may queue a task there and may not rewrite its guide.
+    view_dep = build_capability_dependency(access_dep, CAP_VIEW)
+    run_dep = build_capability_dependency(access_dep, CAP_RUN_TASKS)
+    design_dep = build_capability_dependency(access_dep, CAP_DESIGN)
+    projects_dep = build_capability_dependency(access_dep, CAP_MANAGE_PROJECTS)
+
+    # Reading is the floor: every role has `view`, so this is what `guard` has
+    # always meant -- "signed in, with a role" -- said in terms of capability
+    # rather than of nothing in particular.
+    guard = [Depends(view_dep)]
+    can_run = [Depends(run_dep)]
+    can_design = [Depends(design_dep)]
+    can_manage_projects = [Depends(projects_dep)]
 
     app.include_router(build_router(config, db, access_dep))
 
@@ -325,6 +366,12 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     task_guard = [Depends(access_dep), Depends(guard_task)]
     thread_guard = [Depends(access_dep), Depends(guard_thread)]
     slug_guard = [Depends(access_dep), Depends(guard_slug)]
+    # The same path guards, but for a caller who must also hold a capability.
+    # A task's project scopes *which* tasks; the capability decides whether
+    # acting on one at all is this person's job.
+    task_run_guard = [Depends(run_dep), Depends(guard_task)]
+    thread_run_guard = [Depends(run_dep), Depends(guard_thread)]
+    slug_design_guard = [Depends(design_dep), Depends(guard_slug)]
 
     # ---------------------------------------------------------------- status
 
@@ -467,14 +514,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "default": fallback,
         }
 
-    @app.post("/api/projects", dependencies=admin_only)
+    @app.post("/api/projects", dependencies=can_manage_projects)
     async def create_project(body: ProjectCreateRequest) -> dict[str, Any]:
         """Creates the row, the directory, a starter guide, and a design thread."""
         project = await projects.create(body.name, body.description)
         await ensure_design_thread(db, projects, project.slug)
         return {"project": project.to_json()}
 
-    @app.delete("/api/projects/{slug}", dependencies=admin_only)
+    @app.delete("/api/projects/{slug}", dependencies=can_manage_projects)
     async def delete_project(slug: str) -> dict[str, bool]:
         if slug == config.default_project:
             raise HTTPException(409, "the default project cannot be deleted")
@@ -491,7 +538,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "text": projects.read_guide(slug),
         }
 
-    @app.put("/api/projects/{slug}/guide", dependencies=admin_only)
+    @app.put("/api/projects/{slug}/guide", dependencies=slug_design_guard)
     async def write_guide(slug: str, body: GuideRequest) -> dict[str, Any]:
         """Replaces the guide. Every later task reads it, including resumes."""
         if await projects.get(slug) is None:
@@ -503,7 +550,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     @app.get("/api/settings", dependencies=guard)
     async def read_settings(access: Access = Depends(access_dep)) -> dict[str, Any]:
         settings = SettingsStore(db)
-        if not access.is_admin:
+        if not access.can(CAP_MANAGE_PROJECTS):
             # Readable, but without the figures that describe projects they
             # cannot see. The menu renders; the spend panel is simply absent.
             return {
@@ -536,7 +583,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "limit": await _limit_status(settings),
         }
 
-    @app.put("/api/settings", dependencies=admin_only)
+    @app.put("/api/settings", dependencies=can_manage_projects)
     async def write_settings(body: SettingsRequest) -> dict[str, Any]:
         settings = SettingsStore(db)
         released = moved = 0
@@ -611,7 +658,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "topics": [t.to_json() for t in topics],
         }
 
-    @app.post("/api/feed/{slug}/reviewed", dependencies=guard)
+    @app.post("/api/feed/{slug}/reviewed", dependencies=can_run)
     async def reviewed(
         slug: str,
         body: ReviewRequest,
@@ -649,7 +696,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             ]
         }
 
-    @app.post("/api/tasks", dependencies=guard)
+    @app.post("/api/tasks", dependencies=can_run)
     async def submit(
         body: SubmitRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
@@ -672,7 +719,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             raise HTTPException(404, "no such task")
         return {"task": tasks.merge_live(task).to_json(config.assets_dir)}
 
-    @app.post("/api/tasks/{task_id}/resume", dependencies=task_guard)
+    @app.post("/api/tasks/{task_id}/resume", dependencies=task_run_guard)
     async def resume_task(
         task_id: str,
         in_place: bool = Query(
@@ -700,7 +747,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         await _announce(resumed, "Resuming")
         return {"task": resumed.to_json(config.assets_dir)}
 
-    @app.post("/api/tasks/actions", dependencies=guard)
+    @app.post("/api/tasks/actions", dependencies=can_run)
     async def act_on_tasks(
         body: TaskActionRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
@@ -739,7 +786,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await tasks.rebalance()
         return {"action": body.action, "tasks": changed, "skipped": skipped}
 
-    @app.post("/api/tasks/{task_id}/rerun", dependencies=task_guard)
+    @app.post("/api/tasks/{task_id}/rerun", dependencies=task_run_guard)
     async def rerun_task(task_id: str) -> dict[str, Any]:
         """Run the same problem again, keeping the earlier output."""
         again = await tasks.rerun(task_id)
@@ -748,11 +795,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         await _announce(again, "Re-running")
         return {"task": again.to_json(config.assets_dir)}
 
-    @app.post("/api/tasks/{task_id}/answer", dependencies=task_guard)
+    @app.post("/api/tasks/{task_id}/answer", dependencies=task_run_guard)
     async def answer(task_id: str, body: AnswerRequest) -> dict[str, bool]:
         return {"ok": tasks.answer(task_id, body.id, body.answer)}
 
-    @app.post("/api/tasks/{task_id}/approve", dependencies=task_guard)
+    @app.post("/api/tasks/{task_id}/approve", dependencies=task_run_guard)
     async def approve(task_id: str, body: ApprovalRequest) -> dict[str, bool]:
         return {"ok": tasks.answer(task_id, body.id, body.decision)}
 
@@ -760,7 +807,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     async def read_task_messages(task_id: str) -> dict[str, Any]:
         return {"messages": await TaskMessageStore(db).pending(task_id)}
 
-    @app.post("/api/tasks/{task_id}/messages", dependencies=task_guard)
+    @app.post("/api/tasks/{task_id}/messages", dependencies=task_run_guard)
     async def post_task_message(task_id: str, body: TaskMessageRequest) -> dict[str, Any]:
         """Queue a follow-up for a task.
 
@@ -772,7 +819,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             raise HTTPException(404, "no such task")
         return {"message": message}
 
-    @app.post("/api/tasks/{task_id}/cancel", dependencies=task_guard)
+    @app.post("/api/tasks/{task_id}/cancel", dependencies=task_run_guard)
     async def cancel(task_id: str) -> dict[str, bool]:
         return {"ok": await tasks.cancel(task_id)}
 
@@ -791,7 +838,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     # ------------------------------------------------------------------ chat
 
-    @app.post("/api/chat/plan", dependencies=guard)
+    @app.post("/api/chat/plan", dependencies=can_run)
     async def chat_plan(
         body: ChatRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
@@ -822,7 +869,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             raise HTTPException(502, f"planning failed: {detail}") from exc
         return {"plan": plan.to_json()}
 
-    @app.post("/api/chat/confirm", dependencies=guard)
+    @app.post("/api/chat/confirm", dependencies=can_run)
     async def chat_confirm(
         body: ConfirmRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
@@ -889,7 +936,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             ],
         }
 
-    @app.post("/api/threads", dependencies=guard)
+    @app.post("/api/threads", dependencies=can_run)
     async def create_thread(
         body: ThreadCreateRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
@@ -918,30 +965,43 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "tasks": [tasks.merge_live(t).to_json(config.assets_dir) for t in stored],
         }
 
-    @app.delete("/api/threads/{thread_id}", dependencies=thread_guard)
+    @app.delete("/api/threads/{thread_id}", dependencies=thread_run_guard)
     async def hide_thread(thread_id: str) -> dict[str, bool]:
         """Hides rather than deletes. The route keeps its shape; the effect is
         now reversible, because deleting took the messages with it."""
         return {"ok": await threads.hide(thread_id)}
 
-    @app.post("/api/threads/{thread_id}/unhide", dependencies=thread_guard)
+    @app.post("/api/threads/{thread_id}/unhide", dependencies=thread_run_guard)
     async def unhide_thread(thread_id: str) -> dict[str, bool]:
         return {"ok": await threads.unhide(thread_id)}
 
     @app.post("/api/threads/{thread_id}/messages", dependencies=thread_guard)
-    async def post_message(thread_id: str, body: ThreadMessageRequest) -> dict[str, Any]:
+    async def post_message(
+        thread_id: str, body: ThreadMessageRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
         """Say something in a thread.
 
         What happens next depends on the thread: a chat thread answers with a
         plan of tasks to confirm, a design thread answers by redrafting the
         project's guide.
+
+        Which is why the capability is checked here rather than in
+        `dependencies`: the two branches are different jobs. Speaking in a
+        design thread rewrites the guide and authors widgets, which is the
+        author's work; speaking in a chat thread produces tasks to run, which
+        is the operator's. One route, and the thread decides which it is.
         """
         thread = await threads.get(thread_id)
         if thread is None:
             raise HTTPException(404, "no such thread")
 
+        design = thread.kind == "project_design"
+        access.require(CAP_DESIGN if design else CAP_RUN_TASKS)
+
+        # Published only once the capability has been confirmed, or a viewer's
+        # refused message would still be sitting in the transcript.
         await publish_message(thread_id, ThreadMessage(role="user", kind="text", text=body.text))
-        if thread.kind == "project_design":
+        if design:
             return await _design_turn(thread, body.text)
         return await _plan_turn(thread, body.text)
 
