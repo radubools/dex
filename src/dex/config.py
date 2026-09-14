@@ -80,10 +80,32 @@ class Config:
     #: lands with no role and can see nothing until granted one.
     google_hd: str = os.environ.get("DEX_GOOGLE_HD", "")
 
+    # --- Username and password sign-in --------------------------------------
+    #: Off unless asked for, the same as Google: switching it on turns an open
+    #: install into one that demands a login, which is not something an
+    #: upgrade should do by itself.
+    password_auth: bool = os.environ.get("DEX_PASSWORD_AUTH", "") in {"1", "true", "yes", "on"}
+    #: The account created when password sign-in is on and no admin exists yet.
+    #: Something has to get the first admin in; a Google install does it with
+    #: `DEX_ADMIN_EMAILS`, and this is the equivalent. dex forces a new password
+    #: on first sign-in, so the default pair is a door, not a credential.
+    seed_admin_username: str = os.environ.get("DEX_SEED_ADMIN_USERNAME", "admin")
+    seed_admin_password: str = os.environ.get("DEX_SEED_ADMIN_PASSWORD", "admin")
+
     @property
     def google_enabled(self) -> bool:
         """Whether sign-in is configured. Both halves or neither."""
         return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def auth_enabled(self) -> bool:
+        """Whether anyone has to sign in at all.
+
+        Either mechanism is enough. This is what the access dependency asks,
+        so that adding password sign-in to a Google install -- or running with
+        only one of the two -- needs no further thought at the call sites.
+        """
+        return self.google_enabled or self.password_auth
 
     @property
     def admin_email_set(self) -> set[str]:

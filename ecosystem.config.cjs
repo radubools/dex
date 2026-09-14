@@ -35,11 +35,17 @@ function secrets(name) {
   )
 }
 
-// `.env.google.off` is the parked state. Renaming it to `.env.google` is the
-// whole switch: with credentials present dex demands a sign-in, and with none
-// it behaves exactly as it always has. Kept explicit because a restart for any
-// unrelated reason would otherwise have turned authentication on by surprise.
+// `.env.google.off` and `.env.auth.off` are the parked states. Renaming one to
+// drop the `.off` is the whole switch: with a mechanism configured dex demands
+// a sign-in, and with neither it behaves exactly as it always has. Kept
+// explicit because a restart for any unrelated reason would otherwise have
+// turned authentication on by surprise.
+//
+// Two files rather than one because the two mechanisms are independent and
+// either can be on alone: `.env.google` holds the OAuth client, `.env.auth`
+// turns on username and password sign-in.
 const google = secrets('.env.google')
+const localAuth = secrets('.env.auth')
 
 module.exports = {
   apps: [
@@ -60,6 +66,7 @@ module.exports = {
       interpreter: 'none', // it is a console-script shebang, not a JS file
       env: {
         ...google,
+        ...localAuth,
         DEX_DATABASE_URL: 'postgresql://127.0.0.1/dex',
         DEX_PORT: '4317',
         // Postgres.app and homebrew are not on a daemon's default PATH.
