@@ -24,7 +24,10 @@ export const token = readToken()
 /** Raised when the server says who you are is the problem, not the request. */
 export class AuthError extends Error {
   constructor(
-    readonly status: 401 | 403,
+    // 428 is "your password must be replaced before anything else works". A
+    // separate code from 403 because the two need opposite UI: one says ask an
+    // admin, the other says fill in this one form.
+    readonly status: 401 | 403 | 428,
     message: string,
   ) {
     super(message)
@@ -43,9 +46,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Separated from other failures so the app can show a sign-in page or an
   // unauthorised notice instead of a generic fatal error, which is what every
   // request would have rendered before sign-in existed.
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401 || response.status === 403 || response.status === 428) {
     const detail = await response.text().catch(() => '')
-    throw new AuthError(response.status as 401 | 403, detail || String(response.status))
+    throw new AuthError(response.status as 401 | 403 | 428, safeDetail(detail) || String(response.status))
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
@@ -285,12 +288,29 @@ export function openStream(onEvent: (e: DexEvent) => void, onStatus: (up: boolea
 
 // --- identity ---------------------------------------------------------------
 
-export type AuthState = 'open' | 'service' | 'anonymous' | 'unauthorised' | 'authorised'
+export type AuthState =
+  | 'open'
+  | 'service'
+  | 'anonymous'
+  | 'unauthorised'
+  /** Signed in, has a role, and cannot use it until the password is replaced. */
+  | 'password_change'
+  | 'authorised'
+
+/** The four roles. No role is `null` — the absence of one, never a value. */
+export type Role = 'admin' | 'author' | 'operator' | 'viewer'
+
+/**
+ * What a route needs. The server sends the caller's set, and the UI hides what
+ * is not in it — a button that only ever answers 403 is worse than no button.
+ */
+export type Capability = 'view' | 'run_tasks' | 'design' | 'manage_projects' | 'manage_users'
 
 export type Me = {
   state: AuthState
   user: AuthUser | null
   googleEnabled: boolean
+  passwordEnabled: boolean
 }
 
 export type AuthUser = {
@@ -298,13 +318,28 @@ export type AuthUser = {
   email: string
   name: string | null
   picture: string | null
-  role: 'admin' | 'user' | null
+  role: Role | null
   projects: string[]
+  username: string | null
   isAdmin: boolean
   authorised: boolean
+  capabilities: Capability[]
+  mustChangePassword: boolean
   createdAt: number
   lastSeen: number | null
 }
+
+export type AuthConfig = {
+  googleEnabled: boolean
+  passwordEnabled: boolean
+  open: boolean
+  roles: { role: Role; description: string }[]
+  minPasswordLength: number
+}
+
+/** Whether this person may do `capability`. Absent user means no. */
+export const can = (user: AuthUser | null | undefined, capability: Capability): boolean =>
+  !!user?.capabilities?.includes(capability)
 
 /** Never throws on 401/403: the answer to "who am I" includes "nobody". */
 export const getMe = () => request<Me>('/api/auth/me')
@@ -316,7 +351,42 @@ export const logout = () => request<void>('/api/auth/logout', { method: 'POST' }
 
 export const listUsers = () => request<{ users: AuthUser[] }>('/api/auth/users')
 
-export const setUserRole = (id: string, role: 'admin' | 'user' | null) =>
+export const getAuthConfig = () => request<AuthConfig>('/api/auth/config')
+
+export const login = (username: string, password: string) =>
+  request<{ user: AuthUser }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+
+/** Change my own password. The one thing a `password_change` session may do. */
+export const changePassword = (current: string, next: string) =>
+  request<{ user: AuthUser }>('/api/auth/password', {
+    method: 'POST',
+    body: JSON.stringify({ current, new: next }),
+  })
+
+export const createUser = (body: {
+  username: string
+  password: string
+  role: Role | null
+  name?: string
+  email?: string
+  projects?: string[]
+}) =>
+  request<{ user: AuthUser }>('/api/auth/users', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/** Always temporary: the holder must replace it before dex lets them in. */
+export const resetUserPassword = (id: string, password: string) =>
+  request<{ user: AuthUser }>(`/api/auth/users/${id}/password`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  })
+
+export const setUserRole = (id: string, role: Role | null) =>
   request<{ user: AuthUser }>(`/api/auth/users/${id}/role`, {
     method: 'PUT',
     body: JSON.stringify({ role }),

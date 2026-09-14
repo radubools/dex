@@ -1360,6 +1360,30 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   background: var(--accent); color: #06212e; font-weight: 600;
 }
 .gate-actions { display: flex; gap: 8px; }
+/* The sign-in and password forms. `gate-card` is already a column, so these
+   only have to space the fields and label them. */
+.gate-form { display: flex; flex-direction: column; gap: 10px; }
+.gate-form label { display: flex; flex-direction: column; gap: 4px; }
+.gate-form label span { font-size: 12px; color: var(--muted); }
+.gate-form input {
+  min-height: 44px; padding: 0 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+}
+.gate-form input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.gate-form .gate-btn { border: 0; cursor: pointer; margin-top: 2px; }
+.gate-form .gate-btn:disabled { opacity: 0.5; cursor: default; }
+/* The second method, when an install offers both. Quieter than the first so
+   there is one obvious way in rather than two competing ones. */
+.gate-btn.secondary {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+}
+.gate-or {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: var(--muted); text-transform: uppercase;
+}
+.gate-or::before, .gate-or::after {
+  content: ''; flex: 1; height: 1px; background: var(--line);
+}
 
 /* ---------------- users and access ---------------- */
 .user-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
@@ -1386,11 +1410,48 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   min-height: 28px;
 }
 .ghost-btn.danger { color: var(--del); }
+.user-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* What each role means, collapsed. Four roles is more than anyone holds in
+   their head, and the alternative is guessing from the name. */
+.role-key { margin-bottom: 12px; font-size: 13px; }
+.role-key summary { cursor: pointer; color: var(--muted); min-height: 28px; }
+.role-key dl { display: grid; gap: 8px; margin: 10px 0 0; }
+.role-key dl > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; }
+.role-key dd { margin: 0; color: var(--muted); }
+.role-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel-2);
+  font-size: 12px; text-transform: capitalize;
+}
+/* Only admin is coloured. The other three are peers, and tinting all of them
+   would suggest a ranking the model deliberately does not have. */
+.role-pill.admin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.role-pill.none { color: var(--muted); border-style: dashed; }
+
+/* The new-account form, inside the same panel as the list. */
+.new-user {
+  display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; padding: 12px;
+  border: 1px solid var(--accent); border-radius: 10px; background: var(--panel-2);
+}
+.new-user h3 { margin: 0; font-size: 14px; }
+.new-user-fields {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.new-user label { display: flex; flex-direction: column; gap: 4px; }
+.new-user label span { font-size: 12px; color: var(--muted); }
+.new-user input, .new-user select {
+  min-height: 36px; padding: 0 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+}
+.new-user-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 /* Narrow screens: the four-column row becomes a stack. */
 @media (max-width: 720px) {
   .user-row { grid-template-columns: 1fr; }
-  .user-actions { justify-self: start; }
+  .user-actions { justify-self: start; justify-content: flex-start; }
+  .role-key dl > div { grid-template-columns: 1fr; gap: 2px; }
 }
 
 /* ---------------- project widgets ---------------- */

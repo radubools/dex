@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import {
-  confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
+  can, confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads, openStream,
   sendMessage,
   setAutoApprove,
@@ -12,7 +12,7 @@ import { Chat } from './components/Chat'
 import { Composer } from './components/Composer'
 import { ProjectPicker } from './components/ProjectPicker'
 import { SettingsMenu } from './components/SettingsMenu'
-import { SignIn, Unauthorized } from './components/SignIn'
+import { ChangePassword, SignIn, Unauthorized } from './components/SignIn'
 import { UserAdmin } from './components/UserAdmin'
 import { TaskPanel } from './components/TaskPanel'
 import type { ViewerTarget } from './components/Viewer'
@@ -63,6 +63,8 @@ export default function App() {
   /** Who the caller is. null while the first /api/auth/me is in flight. */
   const [me, setMe] = useState<Me | null>(null)
   const [showUsers, setShowUsers] = useState(false)
+  /** The change-my-password form, opened from the settings menu. */
+  const [showPassword, setShowPassword] = useState(false)
   const [planning, setPlanning] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [viewing, setViewing] = useState<ViewerTarget | null>(null)
@@ -119,7 +121,7 @@ export default function App() {
         // Cannot reach the server at all: fall back to treating the install as
         // open so the existing "can't reach the server" screen is what shows,
         // rather than a sign-in page that would also fail.
-        setMe({ state: 'open', user: null, googleEnabled: false }),
+        setMe({ state: 'open', user: null, googleEnabled: false, passwordEnabled: false }),
       )
     getHealth().then(setHealth).catch((err: Error) => setFatal(err.message))
     getSettings()
@@ -290,11 +292,30 @@ export default function App() {
     return <div className="gate" aria-busy="true" />
   }
   if (me.state === 'anonymous') {
-    return <SignIn />
+    return <SignIn onSignedIn={() => location.reload()} />
   }
   if (me.state === 'unauthorised') {
     return <Unauthorized user={me.user} onSignedOut={() => location.reload()} />
   }
+  if (me.state === 'password_change') {
+    // A role they cannot use yet. Every other request answers 428, so this is
+    // a gate rather than a banner over an app that would be a wall of errors.
+    return (
+      <ChangePassword
+        user={me.user}
+        onChanged={() => location.reload()}
+        onSignedOut={() => location.reload()}
+      />
+    )
+  }
+
+  // What this person may do, decided once from what the server sent. An
+  // `open` install or a service token has no user and may do everything, which
+  // is the pre-auth behaviour these flags must not change.
+  const unrestricted = me.state === 'open' || me.state === 'service'
+  const mayRun = unrestricted || can(me.user, 'run_tasks')
+  const mayDesign = unrestricted || can(me.user, 'design')
+  const mayManageProjects = unrestricted || can(me.user, 'manage_projects')
 
   if (fatal) {
     return (
@@ -408,6 +429,7 @@ export default function App() {
               setProjects((all) => [...all, created])
               setProject(created.slug)
             }}
+            canCreate={mayManageProjects}
           />
 
           {/* One toggle for what the canvas shows. Icons rather than words so
@@ -449,6 +471,7 @@ export default function App() {
             onOpenCosts={() => setShowCosts(true)}
             me={me}
             onOpenUsers={() => setShowUsers(true)}
+            onChangePassword={() => setShowPassword(true)}
             onAutoApprove={(enabled) => {
               // Optimistic: the server echoes the change back over the stream.
               dispatch({ type: 'autoApprove', enabled })
@@ -506,7 +529,20 @@ export default function App() {
         )}
 
         {view === 'chat' && (
-          <Composer onSend={(text) => void send(text)} disabled={planning || !threadId} />
+          <Composer
+            onSend={(text) => void send(text)}
+            // Which capability this needs depends on the thread, exactly as it
+            // does on the server: speaking in a design thread rewrites the
+            // guide and authors widgets, speaking in a chat thread queues
+            // tasks. A viewer can open either and send in neither.
+            disabled={
+              planning ||
+              !threadId ||
+              !(threads.find((x) => x.id === threadId)?.kind === 'project_design'
+                ? mayDesign
+                : mayRun)
+            }
+          />
         )}
       </main>
 
@@ -591,14 +627,25 @@ export default function App() {
           <CostDashboard onClose={() => setShowCosts(false)} />
         </Suspense>
       )}
-      {/* Only reachable for an admin, and gated again here: a non-admin who
-          reached this state would see an empty list anyway, because the
-          endpoint refuses them. */}
-      {showUsers && me.user?.isAdmin && (
+      {/* Only reachable for an admin, and gated again here: a caller without
+          the capability would see an empty list anyway, because the endpoint
+          refuses them. */}
+      {showUsers && can(me.user, 'manage_users') && (
         <UserAdmin
           projects={projects}
           me={me.user}
           onClose={() => setShowUsers(false)}
+        />
+      )}
+      {showPassword && (
+        <ChangePassword
+          user={me.user}
+          // Chosen, not forced: this one closes rather than reloading, because
+          // nothing else about the session has changed.
+          voluntary
+          onChanged={() => setShowPassword(false)}
+          onCancel={() => setShowPassword(false)}
+          onSignedOut={() => location.reload()}
         />
       )}
     </div>

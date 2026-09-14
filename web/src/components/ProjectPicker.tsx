@@ -12,11 +12,14 @@ export function ProjectPicker({
   current,
   onSelect,
   onCreate,
+  canCreate = true,
 }: {
   projects: Project[]
   current: string | null
   onSelect: (slug: string) => void
   onCreate: (name: string) => Promise<void>
+  /** False for a role that cannot create projects — only an admin can. */
+  canCreate?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -88,15 +91,20 @@ export function ProjectPicker({
           </button>
         ))}
       </div>
-      <div className="freeform new-project">
-        <input
-          value={name}
-          placeholder="New project…"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && void create()}
-        />
-        <button disabled={!name.trim() || busy} onClick={() => void create()}>Add</button>
-      </div>
+      {/* Hidden rather than disabled for a role that cannot create projects:
+          a greyed-out field invites an explanation this menu has no room for,
+          and switching project is the thing everyone came here to do. */}
+      {canCreate && (
+        <div className="freeform new-project">
+          <input
+            value={name}
+            placeholder="New project…"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void create()}
+          />
+          <button disabled={!name.trim() || busy} onClick={() => void create()}>Add</button>
+        </div>
+      )}
     </div>
   )
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { getSettings, logout, putSettings, setLimitPaused, setPaused, type Me } from '../api'
+import { can, getSettings, logout, putSettings, setLimitPaused, setPaused, type Me } from '../api'
 import type { SettingsResponse } from '../types'
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`)
@@ -22,6 +22,7 @@ export function SettingsMenu({
   onOpenCosts,
   me,
   onOpenUsers,
+  onChangePassword,
 }: {
   autoApprove: boolean
   onAutoApprove: (enabled: boolean) => void
@@ -29,6 +30,8 @@ export function SettingsMenu({
   /** Who is signed in, or null on an install with no sign-in configured. */
   me?: Me | null
   onOpenUsers?: () => void
+  /** Offered only to an account that signs in with a password. */
+  onChangePassword?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<SettingsResponse | null>(null)
@@ -339,7 +342,12 @@ export function SettingsMenu({
                   <span>
                     Signed in
                     <small>
-                      {me.user.email} · {me.user.isAdmin ? 'admin' : 'user'}
+                      {/* The identifier they signed in with, and their actual
+                          role. This said "admin" or "user" for everyone, which
+                          with four roles would have described two of them
+                          wrongly. */}
+                      {me.user.username ? `@${me.user.username}` : me.user.email} ·{' '}
+                      {me.user.role ?? 'no role'}
                     </small>
                   </span>
                   <button
@@ -349,7 +357,7 @@ export function SettingsMenu({
                     Sign out
                   </button>
                 </div>
-                {me.user.isAdmin && onOpenUsers && (
+                {can(me.user, 'manage_users') && onOpenUsers && (
                   <button
                     className="ghost-btn small"
                     onClick={() => {
@@ -358,6 +366,17 @@ export function SettingsMenu({
                     }}
                   >
                     Users and access
+                  </button>
+                )}
+                {onChangePassword && me.user.username && (
+                  <button
+                    className="ghost-btn small"
+                    onClick={() => {
+                      setOpen(false)
+                      onChangePassword()
+                    }}
+                  >
+                    Change my password
                   </button>
                 )}
               </>
