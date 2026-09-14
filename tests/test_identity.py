@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dex.api import create_app
-from dex.identity import ROLE_ADMIN, ROLE_USER, SESSION_COOKIE, IdentityStore, decode_id_token, pkce_pair
+from dex.identity import ROLE_ADMIN, ROLE_OPERATOR, SESSION_COOKIE, IdentityStore, decode_id_token, pkce_pair
 
 
 def claims(sub: str, email: str, **extra):
@@ -100,19 +100,19 @@ async def test_bootstrap_promotes_but_never_restores_a_demotion(db):
     identity = IdentityStore(db)
     user = await identity.upsert_google_user(claims("s3", "b@e.com"), {"b@e.com"})
     assert user.role == ROLE_ADMIN
-    await identity.set_role(user.id, ROLE_USER)
+    await identity.set_role(user.id, ROLE_OPERATOR)
     again = await identity.upsert_google_user(claims("s3", "b@e.com"), {"b@e.com"})
-    assert again.role == ROLE_USER
+    assert again.role == ROLE_OPERATOR
 
 
 async def test_a_session_resolves_to_the_live_role_not_a_snapshot(db):
     identity = IdentityStore(db)
     user = await identity.upsert_google_user(claims("s4", "u@e.com"), set())
     secret = await identity.create_session(user.id, "pytest")
-    await identity.set_role(user.id, ROLE_USER)
+    await identity.set_role(user.id, ROLE_OPERATOR)
 
     # The whole reason sessions are rows: the change is visible now.
-    assert (await identity.user_for_session(secret)).role == ROLE_USER
+    assert (await identity.user_for_session(secret)).role == ROLE_OPERATOR
     await identity.set_role(user.id, None)
     assert (await identity.user_for_session(secret)).authorised is False
 
@@ -139,7 +139,7 @@ async def test_promoting_to_admin_clears_stale_grants(db):
     """An admin's access is the role; leftover grants would survive a demotion."""
     identity = IdentityStore(db)
     user = await identity.upsert_google_user(claims("s6", "u6@e.com"), set())
-    await identity.set_role(user.id, ROLE_USER)
+    await identity.set_role(user.id, ROLE_OPERATOR)
     await identity.set_projects(user.id, ["algorithms"], user.id)
     await identity.set_role(user.id, ROLE_ADMIN)
     assert (await identity.get(user.id)).projects == []
@@ -170,7 +170,7 @@ async def test_a_user_sees_only_the_projects_granted_to_them(signed_in, config, 
     await store.create("Alpha", slug="alpha")
     await store.create("Beta", slug="beta")
 
-    _, secret = await sign_in("scoped@e.com", ROLE_USER, projects=["alpha"])
+    _, secret = await sign_in("scoped@e.com", ROLE_OPERATOR, projects=["alpha"])
     client.cookies.set(SESSION_COOKIE, secret)
 
     listed = client.get("/api/projects").json()
@@ -193,7 +193,7 @@ async def test_assets_cannot_be_reached_by_typing_another_projects_path(signed_i
     (config.assets_dir / "beta" / "secret" / "x.md").write_text("private")
 
     client, sign_in, _ = signed_in
-    _, secret = await sign_in("scoped2@e.com", ROLE_USER, projects=["alpha"])
+    _, secret = await sign_in("scoped2@e.com", ROLE_OPERATOR, projects=["alpha"])
     client.cookies.set(SESSION_COOKIE, secret)
 
     for url in (
@@ -209,7 +209,7 @@ async def test_assets_cannot_be_reached_by_typing_another_projects_path(signed_i
 
 async def test_only_an_admin_may_create_a_project_or_touch_users(signed_in):
     client, sign_in, _ = signed_in
-    _, secret = await sign_in("plain@e.com", ROLE_USER)
+    _, secret = await sign_in("plain@e.com", ROLE_OPERATOR)
     client.cookies.set(SESSION_COOKIE, secret)
     assert client.post("/api/projects", json={"name": "Nope"}).status_code == 403
     assert client.get("/api/auth/users").status_code == 403
@@ -232,7 +232,7 @@ async def test_the_last_admin_cannot_be_demoted(signed_in):
     client, sign_in, identity = signed_in
     admin, secret = await sign_in("solo@e.com", ROLE_ADMIN)
     client.cookies.set(SESSION_COOKIE, secret)
-    response = client.put(f"/api/auth/users/{admin.id}/role", json={"role": "user"})
+    response = client.put(f"/api/auth/users/{admin.id}/role", json={"role": "operator"})
     assert response.status_code == 409
     assert (await identity.get(admin.id)).is_admin
 
@@ -241,7 +241,7 @@ async def test_removing_a_role_ends_that_users_sessions(signed_in):
     """Otherwise they keep a cookie that now resolves to the unauthorised page."""
     client, sign_in, identity = signed_in
     admin, admin_secret = await sign_in("boss2@e.com", ROLE_ADMIN)
-    victim, victim_secret = await sign_in("victim@e.com", ROLE_USER)
+    victim, victim_secret = await sign_in("victim@e.com", ROLE_OPERATOR)
 
     client.cookies.set(SESSION_COOKIE, admin_secret)
     assert client.put(f"/api/auth/users/{victim.id}/role", json={"role": None}).status_code == 200
@@ -256,7 +256,7 @@ async def test_grants_are_replaced_not_merged(signed_in, config, db):
     for slug in ("alpha", "beta"):
         await store.create(slug.title(), slug=slug)
     admin, admin_secret = await sign_in("boss3@e.com", ROLE_ADMIN)
-    target, _ = await sign_in("t@e.com", ROLE_USER, projects=["alpha", "beta"])
+    target, _ = await sign_in("t@e.com", ROLE_OPERATOR, projects=["alpha", "beta"])
 
     client.cookies.set(SESSION_COOKIE, admin_secret)
     body = client.put(f"/api/auth/users/{target.id}/projects", json={"projects": ["beta"]})
@@ -267,7 +267,7 @@ async def test_grants_are_replaced_not_merged(signed_in, config, db):
 async def test_an_unknown_project_is_refused_rather_than_stored(signed_in):
     client, sign_in, _ = signed_in
     admin, admin_secret = await sign_in("boss4@e.com", ROLE_ADMIN)
-    target, _ = await sign_in("t2@e.com", ROLE_USER)
+    target, _ = await sign_in("t2@e.com", ROLE_OPERATOR)
     client.cookies.set(SESSION_COOKIE, admin_secret)
     response = client.put(
         f"/api/auth/users/{target.id}/projects", json={"projects": ["does-not-exist"]}
@@ -295,7 +295,7 @@ async def test_per_id_routes_refuse_another_projects_task(signed_in, config, db)
     await TaskStore(db).create(hidden)
 
     client, sign_in, _ = signed_in
-    _, secret = await sign_in("scoped3@e.com", ROLE_USER, projects=["alpha"])
+    _, secret = await sign_in("scoped3@e.com", ROLE_OPERATOR, projects=["alpha"])
     client.cookies.set(SESSION_COOKIE, secret)
 
     assert client.get(f"/api/tasks/{hidden.id}").status_code == 404
@@ -315,7 +315,7 @@ async def test_a_user_cannot_enqueue_work_in_a_project_they_lack(signed_in, conf
     await store.create("Beta", slug="beta")
 
     client, sign_in, _ = signed_in
-    _, secret = await sign_in("scoped4@e.com", ROLE_USER, projects=["alpha"])
+    _, secret = await sign_in("scoped4@e.com", ROLE_OPERATOR, projects=["alpha"])
     client.cookies.set(SESSION_COOKIE, secret)
 
     # `problem` has a min_length, so a too-short one is rejected as invalid
@@ -337,7 +337,7 @@ async def test_a_user_cannot_enqueue_work_in_a_project_they_lack(signed_in, conf
 async def test_global_controls_are_admin_only(signed_in):
     """Concurrency and effort apply to everyone's work, not just the caller's."""
     client, sign_in, _ = signed_in
-    _, secret = await sign_in("scoped5@e.com", ROLE_USER)
+    _, secret = await sign_in("scoped5@e.com", ROLE_OPERATOR)
     client.cookies.set(SESSION_COOKIE, secret)
 
     assert client.put("/api/settings", json={"task_concurrency": 16}).status_code == 403
