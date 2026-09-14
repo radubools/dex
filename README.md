@@ -63,6 +63,70 @@ is seeded with a copy of [`AGENTS.template`](AGENTS.template) as its
 `AGENTS.md`, which is the brief every task in that project reads, and which the
 project's design chat then edits with you.
 
+## Sign-in and roles
+
+Off by default. With neither mechanism configured dex is open to anyone who can
+reach the port, which is the right setting on a private machine and the wrong
+one on anything public.
+
+Two ways in, and they can both be on at once:
+
+```bash
+DEX_PASSWORD_AUTH=1                      # username and password
+DEX_GOOGLE_CLIENT_ID=… DEX_GOOGLE_CLIENT_SECRET=…   # Google
+```
+
+With password sign-in on and no admin in the database, dex creates one at
+startup — `admin` / `admin` by default, overridable with
+`DEX_SEED_ADMIN_USERNAME` and `DEX_SEED_ADMIN_PASSWORD`. It is logged as a
+warning, and it is a **door, not a credential**: the account holds a role it
+cannot use until the password is replaced, so the first sign-in goes straight to
+a password form and every other request answers `428` until it is done. Seeding
+happens only when there are no admins at all, and it refuses to promote an
+existing account that happens to be called `admin`.
+
+### The four roles
+
+| Role | May |
+| --- | --- |
+| `admin` | Everything: create projects and users, assign roles and project access, reset passwords, change settings. Sees every project, including ones created later. |
+| `author` | Design a project — its `AGENTS.md` guide and its UI widgets. |
+| `operator` | Run tasks and write project utilities. |
+| `viewer` | Read the library of generated material. |
+
+A user with **no role** is signed in and not authorised: they see a holding page
+and nothing else. That is the absence of a role rather than a role of its own,
+so it is stored as `NULL` and is never a value you can assign — "No access" in
+the admin UI clears the column.
+
+The roles are **not a hierarchy.** An author cannot queue a task and an operator
+cannot rewrite the guide, because those are different jobs rather than different
+amounts of the same one. Only `admin` is cumulative, on the grounds that an
+installation nobody can unblock is worse than one broad role.
+
+**A role says what; a project grant says where.** Both have to allow an action.
+An author granted `music` may rewrite that project's guide and is told a
+project they were not granted does not exist — 404 rather than 403, so the
+admin UI does not leak a list of project names. An admin needs no grants at all;
+their access is the role, which is why demoting one does not leave stale rows
+behind.
+
+Roles and grants live in the database and are read on **every request**, so
+removing someone's role takes effect on their next click rather than whenever a
+token would have expired. Removing a role, or resetting a password, also ends
+every session that person had open.
+
+Manage all of it from **Settings → Users and access**: the role dropdown, the
+per-project checkboxes, account creation, and password resets. A password an
+admin types is always temporary, because two people then know it.
+
+An install upgrading from the earlier two-role model has its `user` accounts
+migrated to `operator`, which is what that role could already do.
+
+`DEX_TOKEN` is unchanged and independent: it is the service credential for
+health checks and the CLI, which have no browser, and it bypasses roles
+entirely.
+
 ## Running the servers under pm2
 
 Both processes are defined in [`ecosystem.config.cjs`](ecosystem.config.cjs):
