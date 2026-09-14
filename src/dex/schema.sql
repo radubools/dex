@@ -201,13 +201,35 @@ CREATE TABLE IF NOT EXISTS users (
     picture    TEXT,
     role       TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen  TIMESTAMPTZ,
-    CONSTRAINT users_role_known CHECK (role IS NULL OR role IN ('admin', 'user'))
+    last_seen  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS users_email ON users (lower(email));
 
--- Which projects a 'user' may see. An admin needs no rows here: their access is
--- their role, so revoking admin does not leave stale grants behind.
+-- Username and password sign-in, for an installation with no Google client. A
+-- Google-only account has neither column set and is identified by its email;
+-- one account can have both, and then either way in works.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username      TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+-- Set while a password somebody else chose is still in place. Every route but
+-- "change my password" refuses until it clears, so a temporary password cannot
+-- quietly become a permanent one.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users (username);
+
+-- The two-role model became four. `user` could queue work in the projects it
+-- was granted, which is exactly `operator`, so that is what it becomes; nothing
+-- any existing account could do is taken away. Run before the constraint below,
+-- which would otherwise reject the rows this fixes.
+UPDATE users SET role = 'operator' WHERE role = 'user';
+
+-- Dropped and recreated rather than added: a CHECK has no IF NOT EXISTS, and
+-- the old two-role version is still on databases created before this.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_known;
+ALTER TABLE users ADD  CONSTRAINT users_role_known
+    CHECK (role IS NULL OR role IN ('admin', 'author', 'operator', 'viewer'));
+
+-- Which projects a non-admin may work in. An admin needs no rows here: their
+-- access is their role, so revoking admin does not leave stale grants behind.
 CREATE TABLE IF NOT EXISTS user_projects (
     user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     project    TEXT        NOT NULL REFERENCES projects(slug) ON DELETE CASCADE,
