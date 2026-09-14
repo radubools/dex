@@ -162,8 +162,7 @@ questions — because that surface belongs to tasks. What makes a turn a design
 turn is only its brief and a wider write mandate.
 
 > `designer.py` still contains the old one-shot `draft()` and `parse()`. Only
-> `history_text()` is used now. The top-level `DESIGN.md` also still describes
-> the one-shot design; this document supersedes it.
+> `history_text()` is used now.
 
 ### Packing the conversation into one field
 

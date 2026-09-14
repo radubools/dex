@@ -292,5 +292,6 @@ Check `.pm2-logs/backup-assets.log` for a `copied:` line rather than `FAILED:`.
 | `src/dex/` | the server: queue, runner, API, usage watcher |
 | `web/` | the React UI |
 | `assets/<project>/` | generated packages, one directory each, and the project's `AGENTS.md` |
+| `design/` | design docs, one per feature — start at [`00_overview.md`](design/00_overview.md) |
 | `tests/` | pytest, against a real Postgres |
 | `datasets/` | unrelated to dex — a construction-costs dataset |
