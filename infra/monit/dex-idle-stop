@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Decide whether the dex VM may power itself off, and do it.
+#
+#   install -o root -g root -m 0755 dex-idle-stop /usr/local/sbin/dex-idle-stop
+#
+# Called by monit (as root) once system memory has sat below the threshold for
+# thirty consecutive cycles. Memory is a cheap trigger, not a decision: this
+# script re-checks what "idle" actually means for dex and refuses if anything
+# disagrees. Every refusal is logged with a reason, so the log is the record of
+# why the box did or did not go down.
+#
+# Ships inert. DRY_RUN=1 logs the decision and powers nothing off. Run it that
+# way for a week, read the log, and only then set DRY_RUN=0 in the override
+# file. Deploying this the other way round means finding out it was wrong by
+# losing a machine mid-task.
+
+set -euo pipefail
+
+# monit runs `exec` with a near-empty environment, so nothing here can rely on
+# an inherited PATH. runuser in particular lives in /usr/sbin, which is not on
+# a stripped-down PATH, and the failure would look like "cannot query dex" --
+# i.e. it would silently refuse forever rather than error.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# Overrides live outside the script so an upgrade does not revert them.
+# shellcheck source=/dev/null
+[[ -r /etc/default/dex-idle-stop ]] && source /etc/default/dex-idle-stop
+
+DRY_RUN="${DRY_RUN:-1}"
+DEX_USER="${DEX_USER:-bools}"
+DEX_DB="${DEX_DB:-dex}"
+MIN_UPTIME_S="${MIN_UPTIME_S:-2700}"      # 45 min: matches monit's start delay
+QUIET_EVENTS_MIN="${QUIET_EVENTS_MIN:-30}"
+HOLD_FILE="${HOLD_FILE:-/run/dex-hold}"
+LOG="${LOG:-/var/log/dex-idle-stop.log}"
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOG"; }
+
+# Refuse and exit. Monit does not care about the exit status -- the log is the
+# only channel that carries the reason, so every path through here writes one.
+refuse() { log "HOLD  $*"; exit 0; }
+
+log "---- triggered (dry_run=$DRY_RUN) ----"
+
+# 1. Too soon after boot. You powered this on to use it; do not let a box that
+#    has not been given any work yet decide it is unwanted. Belt and braces
+#    with monit's `start delay`, which only covers monit's own restarts.
+uptime_s=$(cut -d. -f1 /proc/uptime)
+(( uptime_s >= MIN_UPTIME_S )) || refuse "uptime ${uptime_s}s < ${MIN_UPTIME_S}s"
+
+# 2. Manual hold. `touch /run/dex-hold` pins the box up; it lives on tmpfs, so
+#    the hold clears itself on the next boot and cannot be left on by accident
+#    across a power cycle.
+[[ -e "$HOLD_FILE" ]] && refuse "hold file $HOLD_FILE present"
+
+# 3. Somebody is logged in. An operator reading logs over SSH is using the
+#    machine even when it is doing nothing measurable. Note that `who` lists
+#    interactive sessions only -- a one-shot `ssh dex <command>` allocates no
+#    TTY and leaves no utmp entry, so it is invisible here. Guard 5 is what
+#    covers automated access that is actually doing something.
+sessions=$(who 2>/dev/null | grep -cve '^$' || true)
+(( sessions == 0 )) || refuse "$sessions interactive session(s) open"
+
+# 4. Live work in the queue. `paused` is not terminal -- dex resumes its own
+#    pauses when capacity frees -- so a task paused by dex still counts as
+#    work. One the operator held deliberately does not: that is parked, and
+#    parking it is a reason to shut down rather than to stay up.
+sql="SELECT count(*) FROM tasks
+      WHERE state IN ('queued','running','awaiting_input')
+         OR (state = 'paused' AND held = false)"
+if ! live=$(runuser -u "$DEX_USER" -- psql -d "$DEX_DB" -tAc "$sql" 2>>"$LOG"); then
+    # A database that cannot be reached is not evidence of idleness. It is
+    # evidence that this script cannot tell, which is a reason to do nothing.
+    refuse "cannot query $DEX_DB -- refusing to decide blind"
+fi
+(( live == 0 )) || refuse "$live task(s) still live"
+
+# 5. Recent events. Catches the work that the task table does not: a design
+#    chat turn, an asset being written, anything mid-flight that has not landed
+#    in `tasks` yet.
+sql="SELECT COALESCE(EXTRACT(epoch FROM now() - max(ts))::bigint, 999999) FROM events"
+if ! quiet_s=$(runuser -u "$DEX_USER" -- psql -d "$DEX_DB" -tAc "$sql" 2>>"$LOG"); then
+    refuse "cannot read event recency -- refusing to decide blind"
+fi
+(( quiet_s >= QUIET_EVENTS_MIN * 60 )) || refuse "last event ${quiet_s}s ago"
+
+mem=$(awk '/MemAvailable/{a=$2} /MemTotal/{t=$2} END{printf "%d", (t-a)/1024}' /proc/meminfo)
+log "IDLE  uptime=${uptime_s}s used=${mem}MB quiet=${quiet_s}s tasks=0 sessions=0"
+
+if [[ "$DRY_RUN" != "0" ]]; then
+    log "DRY   would run: systemctl poweroff"
+    exit 0
+fi
+
+# Powering off a VMware guest is one-way from the guest's side: nothing inside
+# this VM can power it back on. See README.md -- the way back up is a call to
+# the hypervisor from a node that stays on.
+log "STOP  systemctl poweroff"
+sync
+systemctl poweroff
