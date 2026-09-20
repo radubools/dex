@@ -270,6 +270,12 @@ function TaskComposer({
         submit()
       }}
     >
+      <Attachments
+        attached={attached}
+        onChange={setAttached}
+        project={project}
+        disabled={busy}
+      />
       <textarea
         rows={1}
         value={draft}
@@ -282,12 +288,6 @@ function TaskComposer({
             submit()
           }
         }}
-      />
-      <Attachments
-        attached={attached}
-        onChange={setAttached}
-        project={project}
-        disabled={busy}
       />
       <button type="submit" className="send-btn" disabled={!draft.trim() || busy}>
         {live ? 'Queue' : 'Send'}

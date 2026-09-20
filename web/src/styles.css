@@ -1242,7 +1242,8 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 
 /* A row of its own, below everything else: file names are long, and beside
    the textarea they left neither the name nor the box readable. `order`
-   carries it past the send button even though it is written before it. */
+   carries it past the box and the send button, which it is written before —
+   it shares a component with the `+` that opens the picker. */
 .attached {
   order: 99; flex-basis: 100%; width: 100%;
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px;

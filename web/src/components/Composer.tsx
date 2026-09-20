@@ -38,6 +38,12 @@ export function Composer({
         submit()
       }}
     >
+      <Attachments
+        attached={attached}
+        onChange={setAttached}
+        project={project}
+        disabled={disabled}
+      />
       <textarea
         ref={field}
         value={draft}
@@ -52,12 +58,6 @@ export function Composer({
             submit()
           }
         }}
-      />
-      <Attachments
-        attached={attached}
-        onChange={setAttached}
-        project={project}
-        disabled={disabled}
       />
       <button type="submit" className="send-btn" disabled={disabled || !draft.trim()}>
         Send
