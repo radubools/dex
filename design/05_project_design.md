@@ -246,3 +246,19 @@ the template by hand.
 Before projects existed, packages sat directly under `assets/`.
 `adopt_existing_project` runs at startup and registers the default project over
 that layout, so an upgrade needs no manual step and no files move.
+
+---
+
+## Improvement opportunities
+
+- **The design chat can author skills, and that path has never run live.**
+  Fork, edit, test, publish is implemented and unit-tested, but no design turn
+  has yet produced a skill end to end. The first one will be the real test of
+  whether the instructions are followable.
+- **Adopting a draft moves every project with no preview.** `adopt` publishes
+  and re-materialises; nothing shows which projects are about to change before
+  it happens, and the only record afterwards is a line in the thread.
+- **A design turn is the one scope that may write to `skills/` itself**, which
+  means it can create a directory that is not a skill. `publish` would then
+  quietly ignore it.
+

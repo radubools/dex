@@ -264,3 +264,18 @@ flowchart LR
 
 Agents are told never to add, edit or remove rows. Guides are gitignored with
 the rest of `assets/`, so the table is local to the machine.
+
+---
+
+## Improvement opportunities
+
+- **A promotion is visible to the *next* task, not the one that made it.** The
+  index regenerates at task start, so the helper a task just shared is not in
+  the `API.md` that task is reading. Harmless in practice, surprising to read.
+- **The "Kept local" veto is per project; skills are shared.** A helper ruled
+  out in yoga can be proposed again in music, because the list lives in the
+  project guide while the module would land in a skill both projects use.
+- **Nothing checks that a promoted module is importable.** `validate` runs in
+  the task's own directory, and a module that imports something only that
+  package had would fail for the next project to enable the skill.
+

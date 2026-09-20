@@ -380,3 +380,20 @@ sequenceDiagram
     M->>M: submit follow-up — attempt+1,<br/>same session, same output dir
     M-->>O: task_message_delivered {startedTaskId}
 ```
+
+---
+
+## Improvement opportunities
+
+- **`--reload` kills in-flight tasks, and development routinely does.** The
+  banner warns, but a task died mid-run during this session's work and retried
+  as attempt 2 — costing a full agent session. A guard that refuses to reload
+  while a task is running, or a dev flag that drains first, would make editing
+  the server safe with work in flight.
+- **`held` survives a restart; the reason for it does not.** A task the
+  operator paused comes back paused with no record of why, which is the same
+  screen as one dex paused for capacity until you read the flag.
+- **Orphan sweeping is time-based.** A worker that is slow rather than dead
+  looks identical to one that died, and the heartbeat interval is the only
+  thing separating them.
+

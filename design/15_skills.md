@@ -477,6 +477,27 @@ from reading the code:
 
 ---
 
+## Improvement opportunities
+
+- **Dependency conflicts have no answer yet.** Two skills pinning different
+  versions of numpy share one venv, and nothing detects it. Probably "last
+  enable wins, and say so loudly", but nothing forces the question until a
+  second skill declares a version.
+- **A skill's own tests never run.** `utils/tests/` is in the layout and
+  Playwright specs sit inside widget skills; neither is tied to publishing, so
+  a broken skill can be published and adopted by every project on it.
+- **Two versions of a widget skill duplicate the bundle** — ~630 kB each,
+  committed. Keeping a prior version for rollback is the point, but the cost is
+  paid in the repository.
+- **Nothing garbage-collects old versions.** They accumulate, and the only
+  thing that says a version is unused is reading every project's
+  `skills.json`.
+- **A skill copied in by hand is trusted.** `publish` re-versions it if its
+  contents disagree with its name, but nothing checks that its `requires` are
+  installed or that its modules import.
+
+---
+
 ## See also
 
 - [06](06_widgets.md) — the widget contract a skill packages

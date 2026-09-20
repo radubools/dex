@@ -378,3 +378,20 @@ Guard rails enforced server-side, not just in the UI:
 Locally, pm2 loads these from `.env.auth` and `.env.google`. Renaming either to
 `*.off` parks it; the change needs `pm2 delete dex-api` and a fresh start,
 because `pm2 restart` does not re-read the ecosystem file's environment.
+
+---
+
+## Improvement opportunities
+
+- **An install with neither mechanism configured is open to anyone who can
+  reach the port**, and nothing says so at startup. The banner prints the URL
+  it is serving on; it does not print that the URL needs no credentials. One
+  line there would turn a silent default into an informed one.
+- **A capability change reaches an open SSE stream only on reconnect.** That is
+  recorded in the code and is the reason removing a role ends the user's
+  sessions — but it means a *narrowing* that does not end the session leaves a
+  stream broader than the grant until something interrupts it.
+- **Project grants are checked per request, not per row.** An asset path names
+  its project in the first segment, so the check is a string comparison; a
+  project renamed under a live grant would silently stop matching.
+

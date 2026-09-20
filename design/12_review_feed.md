@@ -211,3 +211,15 @@ Two consequences worth knowing:
 If per-person schedules become wanted, `topic_reviews` gains a `user_id` in its
 primary key and recording opens to `view` — which is also the natural point to
 revisit the second consequence.
+
+---
+
+## Improvement opportunities
+
+- **Not verified in this pass.** As with [11](11_animations.md), the
+  structural claims hold — modules, routes and symbols all exist — but the
+  scheduler's behaviour was not exercised.
+- **The schedule is per package and per install.** Nothing carries what has
+  been revisited between machines, so a project cloned elsewhere starts its
+  spacing from nothing.
+

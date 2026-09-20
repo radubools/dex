@@ -249,3 +249,18 @@ either affects new work while runs in flight keep what they were planned with.
 Higher effort buys better work on hard problems and costs wall-clock and tokens
 on easy ones — one high-effort run put 122 seconds of thinking before its first
 token.
+
+---
+
+## Improvement opportunities
+
+- **Cost is attributed to a task, and a skill has none.** A helper used by
+  three projects shows its cost wherever it happened to be written, so the
+  expensive capability and the expensive project are indistinguishable.
+- **A survey spends before the plan card exists.** The operator sees a task
+  chip and then a plan; the money spent deciding *how to split the work* is not
+  separated from the money spent doing it.
+- **Limit windows are read, not predicted.** dex holds work just short of the
+  edge but cannot tell a task that will take ten minutes from one that will
+  take an hour, so a long task started just inside the window still fails.
+

@@ -212,6 +212,22 @@ in the wrong directory the moment the two differ.
 
 ---
 
+## Improvement opportunities
+
+- **The 64 MB cap is a memory cap, not a policy.** The whole upload is held
+  while it is written, so the number is what the process can afford rather than
+  what a source might reasonably be. Streaming to disk would let it go.
+- **Legacy `.doc` and `.xls` have no preview**, and the download they fall back
+  to is the same one an unknown format gets — nothing says *why* they cannot be
+  shown.
+- **A file attached to a task-level message still renders as raw markdown.**
+  `task_messages` has no `data` column, so the `## Sources` block appears in
+  the queued note instead of as chips.
+- **Nothing ever deletes an upload.** `datasets/<project>/` only grows, and the
+  decode cache under `.dex-index/` grows with it.
+
+---
+
 ## See also
 
 - [14](14_survey_and_anchors.md) — planning work out of this material

@@ -149,6 +149,12 @@ flowchart TB
 | Module | One line |
 |---|---|
 | `api` | Every HTTP route and the SSE endpoint; wires the app together |
+| `cli` | A thin client for driving the server without the UI |
+| `config` | Runtime configuration, all overridable from the environment |
+| `models` / `threads` | Task, event and chat-thread models, shared across the layers |
+| `diffs` | Unified diffs for editing tools, computed before the edit lands |
+| `limits` | A concurrency gate whose ceiling can change while work is in flight |
+| `artifacts` | What counts as a generated artifact, and what is scratch beside it |
 | `authn` / `identity` | Who is calling and what they may do |
 | `queue` | Claims tasks, enforces capacity, pause / resume / archive |
 | `runner` | One task through the SDK, translated into events |
@@ -319,3 +325,17 @@ tasks. Widgets have their own Playwright suite. What the tests exercise is the
 plumbing — queueing, preemption, replay, resumption — against the scripted
 agent. **Reattaching to a real SDK session mid-run is not covered by the
 suite**; it is exercised only by real use.
+
+---
+
+## Improvement opportunities
+
+- **The module map is hand-maintained.** Nothing checks the diagram or the
+  table against `src/dex/`, so a new module can exist for weeks without
+  appearing here — `skills`, `sources`, `surveyor`, `uploads` and `web_sources`
+  all did. A test asserting every `src/dex/*.py` has a row would cost ten lines
+  and end the drift.
+- **The "request, end to end" sequence is now one of several.** A message may
+  be planned directly, surveyed first, or escalated into pre-planning, and the
+  diagram shows only the first. Worth splitting or annotating.
+

@@ -466,6 +466,70 @@ def folded_knee_on_floor(root, heading, near, far,
     return knee, add(knee, scale(shin, far))
 
 
+def tucked_foot(ankle, anterior, superior, dorsiflexion=15.0,
+                ankle_to_ball=0.130, ankle_above_sole=0.070, toes=0.060):
+    """The ball and the tucked toetip of a foot standing on its toes.
+
+    `skeleton.heel` answers where a flat foot's heel is. This is the other
+    foot: toes tucked under, heel lifted, the weight on the ball — a plank, a
+    prone hover, an upward-facing dog, the back foot of a lunge.
+
+    That foot is the one nobody can place by eye. `CENTRAL_TOETIP` is the tip
+    of the toes, and tucking folds them nearly double against the metatarsals,
+    so the straight line the viewer draws from the ankle to the toetip is both
+    much shorter than a foot and much steeper than the foot's own axis. Guess
+    it and the toetip lands too far from the ankle, which reads at the ankle
+    as an angle no ankle reaches.
+
+    So build the foot instead of the landmark. `anterior` is the direction the
+    body's front faces and `superior` the direction of its head — the axes
+    `frame` hands back. Off those, the foot turns `dorsiflexion` degrees from
+    neutral, which tips its long axis from anterior toward the shin and turns
+    the sole with it; the ball sits `ankle_to_ball` along that axis and
+    `ankle_above_sole` toward the sole; and the toes, bent up at the joints
+    until they lie flat, run `toes` further along the ground the way the foot
+    points. The defaults describe a 0.25 m foot at an everyday dorsiflexion.
+
+    Returns `(ball, toetip)`, both as [x, y, z]. The toetip shares the ball's
+    height, because tucked toes lie in the same plane the ball rests on — so
+    the pose is grounded exactly when the ball is, and neither point is forced
+    onto the floor here. Solve for that: the ankle comes from the leg, and the
+    body's tilt is what lands the foot.
+
+        ball, toetip = rig.tucked_foot(ankle, anterior, superior)
+        tilt = rig.solve(2.0, 20.0, lambda t: -ball_height(t), 0.0)
+
+    Raises when `anterior` and `superior` are the same direction, or when the
+    foot points straight down and so has no heading for the toes to follow.
+    """
+    superior = unit(superior)
+    anterior = sub(anterior, scale(superior, dot(anterior, superior)))
+    if norm(anterior) < 1e-9:
+        raise ValueError(
+            "anterior and superior point the same way, so the foot has no "
+            "direction to face")
+    anterior = unit(anterior)
+
+    turn = math.radians(dorsiflexion)
+    # Dorsiflexion tips the foot's long axis from anterior toward the shin.
+    # The sole faces away from the shin at neutral and rides the same turn.
+    foot_axis = add(scale(anterior, math.cos(turn)), scale(superior, math.sin(turn)))
+    sole_dir = add(scale(superior, -math.cos(turn)), scale(anterior, math.sin(turn)))
+
+    ball = add(add(list(ankle), scale(foot_axis, ankle_to_ball)),
+               scale(sole_dir, ankle_above_sole))
+
+    # The toes are bent up at the joints until they lie flat, so they leave the
+    # ball along the floor rather than along the foot: the heading is the
+    # foot's axis with its rise taken out.
+    heading = [foot_axis[0], 0.0, foot_axis[2]]
+    if norm(heading) < 1e-9:
+        raise ValueError(
+            f"a foot at {dorsiflexion:.1f} degrees points straight down, so "
+            f"the tucked toes have no heading to lie along")
+    return ball, add(ball, scale(unit(heading), toes))
+
+
 def shoulders_at_height(thoracic, superior, half_width, height,
                         toward=(1.0, 0.0, 0.0)):
     """Both shoulders of a girdle rolled about the spine until one is at `height`.

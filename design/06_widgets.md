@@ -317,3 +317,18 @@ The design chat ([05](05_project_design.md)) writes widget code, runs the build
 and the tests, and adds the rule to `widgets.json`. `node` and `playwright` are
 on the task allowlist and `widgets/` is writable for design turns, so the whole
 loop runs without stopping for approval.
+
+---
+
+## Improvement opportunities
+
+- **Every 3D widget carries its own copy of three.js** — about 630 kB,
+  committed. Two skills that both draw in 3D carry two copies, and the sandbox
+  is what forces it: an opaque origin cannot import anything at runtime.
+- **Moving a widget skill invalidates its bundle.** The bundle embeds the path
+  of the source it was built from, so a relocation needs a rebuild. Nothing
+  detects a bundle that no longer matches where it sits.
+- **A widget's tests are not run by the Python suite.** They are Playwright
+  specs inside the skill, and nothing ties them to a publish — a skill can be
+  published with a broken widget and no check objects.
+

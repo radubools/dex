@@ -95,10 +95,12 @@ erDiagram
         text output_slug "directory, when not slug"
         text project FK "SET NULL"
         text thread_id FK "SET NULL"
+        text title "what a chip shows"
         text problem
         text scope "package project design survey"
         text state
         text activity
+        text error "why it failed, in full"
         bool held "operator pause"
         jsonb anchor "where in the source material"
         text session_id "agent session"
@@ -108,8 +110,12 @@ erDiagram
         text model "resolved at submit"
         text claimed_by "host:pid"
         timestamptz claimed_at "heartbeat"
+        int turns "how many the agent took"
         float cost_usd
         bool cost_is_estimate
+        bigint input_tokens
+        bigint cache_read_tokens "billed at a tenth"
+        bigint cache_write_tokens "billed at 1.25x"
         bigint output_tokens
         bigint thinking_tokens "subset of output"
     }
@@ -309,3 +315,21 @@ Two examples already in the file. `interrupted` was folded into `paused` with an
 constraint was widened for the four-role model by first migrating `user` rows to
 `operator` and only then recreating the `CHECK`, which would otherwise have
 rejected the rows being fixed.
+
+---
+
+## Improvement opportunities
+
+- **`assets/` is gitignored, so `skills.json` does not travel.** Which version
+  of which skill each project is on is per-install state — a clone gets the
+  skills but not the answer to which ones are enabled. That is the one hole in
+  "a project is reproducible on another install", and the admin table is
+  currently the only thing that closes it.
+- **The ER block is hand-maintained**, and it had drifted: three token columns
+  the database has and `pricing` bills were missing from it until this pass. A
+  test comparing the diagram against `information_schema` would be a dozen
+  lines.
+- **Deleting a project nulls its tasks so spend survives** — which means a task
+  row can outlive every path it names, and `output_dir` then resolves against
+  the default project.
+

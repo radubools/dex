@@ -209,6 +209,15 @@ The visible set is resolved **once per connection**. Re-reading grants for each
 of thousands of events per second would be a query storm, so a grant change
 applies on reconnect — and removing a role ends the user's sessions to force one.
 
+### `guide`
+
+Published when a project's `AGENTS.md` is rewritten, so an open editor knows
+the file changed under it. It carries only `{project}` — the reader refetches
+rather than receiving the text, because a guide is large and most listeners do
+not want it.
+
+---
+
 > ### Known gap: untagged events never reach scoped users
 >
 > An event published without `project` is dropped for every restricted
@@ -236,3 +245,18 @@ applies on reconnect — and removing a role ends the user's sessions to force o
 independent of the stream — 2,000 by default, up to 10,000 with `?limit=`. Opening an old task's panel uses
 this rather than the 3,000-event replay window, which is sized for catching up,
 not for archaeology.
+
+---
+
+## Improvement opportunities
+
+- **The untagged-event gap above is still open**, and it is the one with teeth:
+  an event with no project never reaches a scoped user, so a restricted
+  operator can watch a task and see nothing.
+- **`guide` carries no version.** A listener refetches on the event, so two
+  edits in quick succession produce two fetches and the later one wins — which
+  is right, but nothing tells an editor its copy was superseded.
+- **Replay reaches back a few thousand events across all tasks**, which after a
+  busy day is minutes rather than days. A task opened from last week is served
+  from history instead, and the two paths can disagree about ordering.
+

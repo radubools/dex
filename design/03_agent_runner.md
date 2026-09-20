@@ -341,3 +341,20 @@ the project guide's job; a deliverable spec baked in at this level once applied
 to every project, and a yoga pose was asked for as an algorithm study package.
 When a project has no guide, the brief says so and tells the agent to ask rather
 than invent a format.
+
+---
+
+## Improvement opportunities
+
+- **Every task copies every enabled skill before it starts.** That is how a
+  promotion can publish a new version without losing the old one, and at
+  ~780 KB for yoga it is free. It is unmeasured for an install with twenty
+  skills, and it happens whether or not the task will write to one.
+- **`max_turns` is global except for surveys.** A sweep over a hundred packages
+  and a single pose get the same ceiling, so one is generous and the other is a
+  cliff.
+- **The permission policy is a path check, and skills widened what it covers.**
+  Each new writable root — datasets, then skill `utils/`, then the skills root
+  for design turns — was added separately. There is no single place that says
+  what a scope may write, which is where the next one will be forgotten.
+

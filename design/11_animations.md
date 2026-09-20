@@ -281,3 +281,16 @@ Synthesising cues separately is what makes the caption timings exact: each
 cue's length is measured, so every caption's start is a running total rather
 than an estimate. The five-pass cap exists because five renders of a 30-second
 animation is already several minutes of work.
+
+---
+
+## Improvement opportunities
+
+- **Not verified in this pass.** The file paths, symbols and routes this
+  document names all still exist, but its behavioural claims — frame slicing,
+  checkpoint stepping, the two formats' differences — were not exercised. Treat
+  the mechanisms as documented rather than confirmed.
+- **Rendering is optional and its absence is reported, not handled.** A project
+  whose guide assumes manim gets a task that discovers it is missing, rather
+  than a plan that never proposed the work.
+

@@ -341,6 +341,23 @@ segment, and it comes first.
 
 ---
 
+## Improvement opportunities
+
+- **DNS rebinding is the known residual**, recorded above: the guard checks the
+  addresses a name resolves to and the socket is opened separately. Closing it
+  needs the connection pinned to the address that was checked.
+- **No survey has run end to end against a live model.** The tool surface, the
+  parser, the routing and the hand-off are all tested; what a real survey
+  produces from a real document is not yet known.
+- **An anchor is never re-checked.** A task can open a source at the page a
+  survey named, but nothing notices if the file was replaced between the survey
+  and the run — the page number would then point somewhere else entirely.
+- **`peek` is bounded per call, not per run.** Forty peeks read a great deal of
+  a document; the cap makes each one cheap rather than making the pass
+  cheap.
+
+---
+
 ## See also
 
 - [13](13_source_material.md) — where the material lives and how it renders

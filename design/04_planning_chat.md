@@ -275,3 +275,20 @@ than dozens.
 `thread_busy` is published around the whole turn and followed by every open
 tab, so a second tab — or the same tab after a reload — shows planning in
 progress rather than an idle composer.
+
+---
+
+## Improvement opportunities
+
+- **Escalation is one-shot.** A plan that comes *out* of pre-planning and still
+  wants to ask falls through to a plain thread message with no widget behind
+  it, because escalating again would start a second pre-planning task over the
+  same request. That fallback is untested against a real model.
+- **`PLAN_BATCHES = 10` truncates silently in the sense that matters.** The
+  tenth batch posts what is outstanding as prose, and nothing tracks it
+  afterwards — a request that needed twelve batches leaves two batches of work
+  described only in a message.
+- **The planner never sees what a task actually produced.** Slugs it must not
+  collide with, yes; results, no. A plan that repeatedly proposes work already
+  done has no feedback path.
+
