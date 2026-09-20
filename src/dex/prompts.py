@@ -319,6 +319,10 @@ def generation_prompt(
         else ""
     )
     guide = project_instructions(task_dir, python, project_wide, workspace)
+    # Named rather than described, for the same reason the data directory is:
+    # a task told it may read "the rest of the project" and left to work out
+    # where that is goes looking, and looking costs turns.
+    project_dir = task_dir if project_wide else task_dir.parent
     # Named rather than described: a brief that says "the project's data
     # directory" and leaves the agent to guess the path sends it looking.
     datasets_line = (
@@ -437,11 +441,31 @@ work. It exists; you do not need to create it.
 Use `{python}` for every command — it is the environment the project's tooling
 is installed in.
 
-Nothing outside `{task_dir}` is yours. Do not read, write, or reason about other
-packages, other projects, dex's own source, or anything else in the repository
-around you; the brief above is the whole job. A tool that writes where it is run — `manim` on
-its own is the usual one — writes inside your directory, which is correct. Reach
-for an absolute path outside it and you are somewhere you should not be.
+`{task_dir}` is the only thing you may change. A tool that writes where it is
+run — `manim` on its own is the usual one — writes inside your directory, which
+is correct. Reach for an absolute path outside it to *write* and you are
+somewhere you should not be.
+
+**You may read the rest of this project.** It is `{project_dir}`, and the
+directories beside yours are packages other tasks produced. Look at them when
+it would settle something: how this project names things, how a similar
+deliverable was laid out, which helper a neighbour reached for. That is the
+cheapest way to match conventions the guide does not spell out.
+
+Reading them is all you may do, and dex enforces it — a write into another
+package is refused outright, not offered to the operator. Two more limits are
+yours to keep:
+
+- **A neighbour may be half-written.** Tasks queued alongside you are running
+  right now, so a package you open can be mid-build or abandoned. Treat what
+  you find as an example, never as a dependency, and never as something whose
+  existence proves it is finished or correct.
+- **Copy the convention, not the content.** Lifting a neighbour's file
+  wholesale produces a package that duplicates rather than delivers. If what
+  you want is the code itself, that is the shared-utilities protocol below.
+
+Other projects, dex's own source, and the repository around it stay off-limits
+for reading as well as writing; the brief above is the whole job.
 
 **The project's data directory is yours to read and write.**
 {datasets_line}{skills_block}

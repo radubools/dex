@@ -387,6 +387,12 @@ class TaskRunner:
         policy = PermissionPolicy(
             workspace=self.config.workspace,
             task_dir=self.task_dir,
+            # Its neighbours are readable and not writable. A project-wide task
+            # has the project as its own directory, so this names the same path
+            # twice and nothing beside it counts as somebody else's.
+            project_dir=self.task.project_dir(
+                self.config.assets_dir, self.config.default_project
+            ),
             # A design turn also authors widgets, which are shared across
             # projects and therefore live at the top level rather than inside
             # the project it is editing.

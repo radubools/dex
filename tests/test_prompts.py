@@ -93,8 +93,9 @@ def test_the_brief_opens_a_door_for_shared_utilities():
     """
     text = brief(ALGORITHMS / "two-sum")
     # The confinement itself has to survive -- the exception is narrow, not a
-    # replacement for the rule.
-    assert "Nothing outside" in text
+    # replacement for the rule. It confines *writing*; reading the rest of the
+    # project is allowed, which is a separate thing.
+    assert "is the only thing you may change" in text
     assert "The one exception is shared utilities" in text
     # The three things that make the loop actually run.
     assert "Reading is always allowed" in text

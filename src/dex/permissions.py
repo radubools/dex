@@ -5,6 +5,13 @@ blanket approval would hand the agent the whole machine. The policy below
 auto-approves the work the task legitimately needs — reads anywhere in the
 workspace, writes confined to the task's own output directory, and a fixed set
 of build/test commands — and escalates anything else to the operator.
+
+One rule does not escalate: a write into **another task's package in the same
+project** is refused outright. Reading those packages is allowed and useful —
+a task matching a project's conventions should be able to look at what its
+neighbours did — but a peek that can turn into an edit is not read-only, and
+`auto_approve` turns every escalation into an allow. A rule that must hold
+whatever that toggle says cannot be expressed as a question.
 """
 
 from __future__ import annotations
@@ -42,6 +49,10 @@ ALLOWED_COMMANDS = {
 #: Never auto-approved, however the command is spelled.
 DANGEROUS = {"rm", "sudo", "chmod", "chown", "curl", "wget", "ssh", "scp", "git", "npm", "pip", "brew", "kill", "pkill"}
 
+#: Entries at the top of a project directory that are not another task's work.
+#: Everything else beside a task's own directory is a sibling package.
+NOT_A_PACKAGE = {"utils", "AGENTS.md", "widgets.json", "skills.json"}
+
 
 class PermissionPolicy:
     """Builds the `can_use_tool` callback for one task."""
@@ -51,11 +62,17 @@ class PermissionPolicy:
         *,
         workspace: Path,
         task_dir: Path,
+        project_dir: Path | None = None,
         extra_writable: tuple[Path, ...] = (),
         escalate: Callable[[str, str, dict[str, Any], str | None], Awaitable[str]],
     ) -> None:
         self.workspace = workspace.resolve()
         self.task_dir = task_dir.resolve()
+        #: The project this task belongs to. Its other packages are readable
+        #: and not writable — see `_other_package`. A project-wide task has the
+        #: project *as* its directory, so nothing beside it is a sibling and
+        #: the rule never fires.
+        self.project_dir = project_dir.resolve() if project_dir else None
         #: Directories this run may write to besides its own. Empty for an
         #: ordinary task; a design turn adds `widgets/`, because widget code is
         #: shared across projects and so cannot live inside any one of them.
@@ -71,6 +88,33 @@ class PermissionPolicy:
         except OSError:
             return False
         return candidate == root or root in candidate.parents
+
+    def _other_package(self, raw: str | None) -> str | None:
+        """The name of another task's package this path is inside, if it is.
+
+        A project directory holds one directory per task, plus the handful of
+        project-level entries in `NOT_A_PACKAGE`. So a path under the project
+        but under none of those, and not under this task's own directory, is
+        inside somebody else's work.
+        """
+        if not raw or self.project_dir is None:
+            return None
+        try:
+            # Resolved against the task directory, because that is the agent's
+            # cwd — `_within` resolves against whatever root it is testing,
+            # which would read `../neighbour` as a path under the project.
+            candidate = (
+                Path(raw).resolve() if Path(raw).is_absolute()
+                else (self.task_dir / raw).resolve()
+            )
+        except OSError:
+            return None
+        if candidate == self.task_dir or self.task_dir in candidate.parents:
+            return None
+        if self.project_dir not in candidate.parents:
+            return None
+        first = candidate.relative_to(self.project_dir).parts[0]
+        return None if first in NOT_A_PACKAGE else first
 
     def _bash_verdict(self, command: str) -> tuple[bool, str]:
         try:
@@ -94,6 +138,10 @@ class PermissionPolicy:
         async def can_use_tool(
             tool_name: str, input_data: dict[str, Any], context: ToolPermissionContext
         ) -> PermissionResultAllow | PermissionResultDeny:
+            refusal = self._refuse_reason(tool_name, input_data)
+            if refusal is not None:
+                return PermissionResultDeny(message=refusal)
+
             reason = self._auto_reason(tool_name, input_data)
             if reason is None:
                 return PermissionResultAllow(updated_input=input_data)
@@ -107,6 +155,30 @@ class PermissionPolicy:
 
         return can_use_tool
 
+    def _refuse_reason(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
+        """A string means refuse outright — the operator is never asked.
+
+        Reserved for the one thing that has to hold regardless of the
+        auto-approve toggle: another task's package is read-only. Everything
+        else a task might do outside its directory is a judgement call, and
+        judgement calls belong to the operator.
+        """
+        if tool_name not in WRITE_TOOLS:
+            return None
+        path = _target_path(input_data)
+        if self._within(path, self.task_dir) or any(
+            self._within(path, root) for root in self.extra_writable
+        ):
+            return None
+        other = self._other_package(path)
+        if other is None:
+            return None
+        return (
+            f"`{other}` is another task's package. You may read anything in this "
+            "project, but only your own directory is yours to change — and that "
+            "package may be being written right now by the task that owns it."
+        )
+
     def _auto_reason(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
         """None means auto-approve; a string explains why a human is needed."""
         if tool_name in READ_ONLY_TOOLS:
@@ -114,7 +186,7 @@ class PermissionPolicy:
         if tool_name.startswith("mcp__dex__"):
             return None
         if tool_name in WRITE_TOOLS:
-            path = input_data.get("file_path") or input_data.get("path") or input_data.get("notebook_path")
+            path = _target_path(input_data)
             if self._within(path, self.task_dir):
                 return None
             if any(self._within(path, root) for root in self.extra_writable):
@@ -124,6 +196,15 @@ class PermissionPolicy:
             ok, why = self._bash_verdict(str(input_data.get("command", "")))
             return None if ok else why
         return f"{tool_name} has no auto-approval rule"
+
+
+def _target_path(input_data: dict[str, Any]) -> str | None:
+    """The file a write tool is aimed at, whichever key it used."""
+    return (
+        input_data.get("file_path")
+        or input_data.get("path")
+        or input_data.get("notebook_path")
+    )
 
 
 async def auto_deny(_id: str, _tool: str, _input: dict[str, Any], _title: str | None) -> str:

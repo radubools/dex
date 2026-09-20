@@ -113,12 +113,46 @@ def test_the_brief_says_when_it_is_an_edit(tmp_path: Path):
 
 
 def test_the_brief_confines_the_agent_to_its_own_directory(tmp_path: Path):
+    """Writing, that is. Reading the rest of the project is a separate rule."""
     prompt = generation_prompt(
         problem="x", task_dir=tmp_path / "algorithms" / "thing",
         python=Path("/usr/bin/python3"), manim_available=True,
     )
-    assert "Nothing outside" in prompt
-    assert "other projects" in prompt
+    assert "is the only thing you may change" in prompt
+    assert "Other projects" in prompt and "stay off-limits" in prompt
+
+
+def test_the_brief_lets_a_task_read_its_neighbours(tmp_path: Path):
+    """A task matching a project's conventions has to be able to see them.
+
+    The rule used to be "do not read, write, or reason about other packages",
+    which left the guide as the only source of a convention it does not always
+    spell out.
+    """
+    project = tmp_path / "algorithms"
+    prompt = generation_prompt(
+        problem="x", task_dir=project / "thing",
+        python=Path("/usr/bin/python3"), manim_available=True,
+    )
+    assert "You may read the rest of this project" in prompt
+    # Named, not described: a task left to work out where the project is goes
+    # looking, and looking costs turns.
+    assert str(project) in prompt
+    # And the two things that make reading safe: it cannot become a write, and
+    # what it finds may be half-built.
+    assert "refused outright" in prompt
+    assert "may be half-written" in prompt
+
+
+def test_a_project_wide_brief_still_owns_the_whole_project(tmp_path: Path):
+    """The neighbour rule is about packages beside yours. A sweep has none."""
+    project = tmp_path / "algorithms"
+    prompt = generation_prompt(
+        problem="x", task_dir=project, project_wide=True,
+        python=Path("/usr/bin/python3"), manim_available=True,
+    )
+    assert "You may read the rest of this project" not in prompt
+    assert f"Nothing outside `{project}` is yours" in prompt
 
 
 async def test_a_task_runs_from_its_own_directory(config, db, monkeypatch):

@@ -88,7 +88,9 @@ flowchart TD
     MCP -- no --> WR{"Write · Edit ·<br/>MultiEdit · NotebookEdit?"}
     WR -- yes --> IN{"Path inside task_dir<br/>or an extra writable root?"}
     IN -- yes --> ALLOW
-    IN -- no --> ESC([escalate])
+    IN -- no --> SIB{"Another task's package<br/>in the same project?"}
+    SIB -- yes --> REF([refuse — never escalated])
+    SIB -- no --> ESC([escalate])
     WR -- no --> BASH{"Bash?"}
     BASH -- no --> ESC
     BASH -- yes --> CH{"Contains ; && || | ` $( >( ?"}
@@ -102,6 +104,8 @@ flowchart TD
 
 - **Reads are free anywhere in the workspace**; **writes are confined** to the
   task's own directory. A project-wide task's directory is the whole project.
+- **Another task's package is read-only, and that one is a refusal.** See
+  [Reading the neighbours](#reading-the-neighbours).
 - A design turn adds `widgets/` as an **extra writable root**, because widget
   code is shared across projects and cannot live inside any one of them.
 - **Every** task adds `datasets/<project>/` as an extra writable root — not
@@ -116,6 +120,52 @@ flowchart TD
   because it downloads a missing package.
 - Paths are resolved before comparison, so `../` cannot walk out of the
   directory.
+
+### Reading the neighbours
+
+A task may **read** the other packages in its project, and may not **write** to
+them.
+
+Reading them was forbidden by the brief until it was not: *"Do not read, write,
+or reason about other packages."* That left the project guide as the only
+source of a convention the guide does not always spell out — how this project
+names things, how a similar deliverable was laid out, which helper a neighbour
+reached for. Looking is the cheapest way to answer those, and the packages are
+right there.
+
+The policy never blocked it. Reads have always been auto-approved with no path
+check at all, so the rule lived entirely in the brief and held only as long as
+the agent obeyed it.
+
+**The write half does not work that way.** `auto_approve` turns every
+escalation into an allow, so a rule expressed as a question stops being a rule
+the moment that toggle is on — and inviting a task to look at its neighbours is
+exactly when a stray `Write` becomes plausible. So this one is refused in
+`_refuse_reason`, before escalation is considered, and the operator is never
+asked.
+
+| Path, from a package task | Write |
+|---|---|
+| its own directory | allowed |
+| `datasets/`, an enabled skill's `utils/` | allowed — extra writable roots |
+| a sibling package | **refused, not escalated** |
+| the project's `utils/`, `AGENTS.md`, `widgets.json`, `skills.json` | escalates — project-level, not somebody else's work |
+| another project, dex's source | escalates, as before |
+
+A sibling is identified structurally: a path under the project directory whose
+first component is neither this task's own directory nor one of the
+project-level entries in `NOT_A_PACKAGE`. A **project-wide** task has the
+project *as* its directory, so every package is inside `task_dir` and the rule
+never fires.
+
+Relative paths are resolved against the **task directory**, because that is the
+agent's cwd. `_within` resolves against whichever root it is testing, which
+would read `../three-sum/x.py` as a path under the project and miss it.
+
+Two things the brief asks for that nothing enforces: that a neighbour is
+treated as an example rather than a dependency — it may be mid-build, since
+tasks queued together run at the same time — and that a convention is copied
+rather than a file.
 
 ### Escalation
 
@@ -357,4 +407,17 @@ than invent a format.
   Each new writable root — datasets, then skill `utils/`, then the skills root
   for design turns — was added separately. There is no single place that says
   what a scope may write, which is where the next one will be forgotten.
+- **Read-only holds for the write tools, not for Bash.** A neighbour's package
+  is refused to `Write` and `Edit`, but `python -c` is auto-approved and can
+  open any path for writing. Argument inspection cannot close that — the
+  allowlist exists precisely to run code — so the guarantee is real for the
+  tools an agent actually writes files with and a convention everywhere else.
+- **A redirect is not treated as chaining.** `;`, `&&`, `|` and `$(` all
+  escalate, but `>` and `>>` do not, so `echo … > ../elsewhere/x` passes a
+  check aimed at the first word. Blocking them would also stop the ordinary
+  `cmd > out.txt`, which is why it has not been done.
+- **Reads are unbounded.** Auto-approved with no path check at all, so a task
+  can read another project, dex's own source, or anything else the process can
+  open. The brief is the only thing that says otherwise, and it is now the only
+  thing distinguishing "your project" from "the machine".
 
