@@ -30,6 +30,7 @@ build and test them, and report what it verified.
 flowchart TD
     subgraph disk ["assets/yoga/"]
         G["AGENTS.md<br/>standing brief"]
+        SJ["skills.json<br/>which skill, which version"]
         WJ["widgets.json<br/>viewer rules"]
         U["utils/<br/>shared tooling + API.md"]
         P1["warrior-ii/"]
@@ -45,11 +46,18 @@ flowchart TD
     PR --- TK
     PR --- UP
     DT["design thread"] -->|edits| G
-    DT -->|edits| WJ
+    SK["enabled skills"] -->|materialised| U
+    SK -->|materialised| WJ
+    SK --- SJ
     CT["chat threads"] -->|plan and run| P1
     G -->|prepended to every brief| P1
     G -->|read by the planner| CT
 ```
+
+Only `AGENTS.md` and the task directories are the project's own. `utils/`,
+`widgets.json` and `skills.json` are **materialised from the skills it has
+enabled** ([15](15_skills.md)) — a new project has none of the three, and
+nothing is wrong with that.
 
 Switching project switches everything the UI shows — threads, tasks, feed,
 library, guide — and the project is also the unit of access control
@@ -108,13 +116,48 @@ that says why it is empty.
 
 ### What the template gives a new project
 
+Twelve lines, and two of them are headings. Everything a task needs to know
+that is *not* specific to this project — the environment, the operator's source
+material, how a helper becomes shared — moved to `AGENTS.common.md`, which
+every brief carries anyway; keeping a copy per project meant four copies of the
+same 289 lines drifting apart ([15](15_skills.md)).
+
 | Section | Purpose |
 |---|---|
-| The environment is ready | Tools already installed, so tasks do not spend turns checking |
+| `# Project: {project_name}` + description | Filled at creation |
 | What to produce | Left for the design chat to fill in |
-| Viewers for this project's files | How widgets are authored, registered, built, tested |
-| Shared utilities | The promote-at-the-end protocol ([08](08_shared_utilities.md)) |
-| Conventions | Shell rules, paths, and asking over guessing |
+| Conventions | Left for the design chat to fill in |
+
+### An unwritten guide says so
+
+The template's body is addressed to the **operator**: *"Describe the
+deliverable for a task in this project here."* A task handed that reads
+instructions meant for somebody else as its specification, and builds whatever
+the request on its own implies. That is worse than no guide, because it looks
+like one.
+
+So `untouched_template()` compares the guide against the template it was seeded
+from, and a brief whose guide is still the starter carries a heading saying so
+and sends the task to `mcp__dex__ask_user` — the same treatment a project with
+no `AGENTS.md` at all gets.
+
+The check is **derived from the template**, not keyed to a sentence copied out
+of it: every line of prose the template ships with, still present and
+unchanged, means nobody has written the guide. A check keyed to one phrase
+would stop working the moment the template was edited, and stop silently.
+
+### A new project has no skills
+
+Nothing is enabled until somebody enables it in the admin list, which is the
+right default — a skill is a capability, not a courtesy. Two consequences the
+brief now states rather than leaving the task to discover:
+
+- `utils/API.md` does not exist. The brief sends a task there to read what is
+  shared; saying "there is nothing shared here yet" beats a task concluding the
+  index is missing.
+- There is nowhere to promote a helper to. The shared-utilities protocol
+  describes a destination that does not exist yet, so the brief says to keep
+  the helper local and name it in the summary instead.
 
 ---
 
@@ -251,6 +294,17 @@ that layout, so an upgrade needs no manual step and no files move.
 
 ## Improvement opportunities
 
+- **Nothing tells the operator their guide is unwritten.** A task reports it
+  in a brief the operator never reads, and the design thread — the place that
+  would fix it — says nothing when it opens on a starter guide.
+- **A new project is created with no skills and no prompt to pick any.**
+  Creation and enabling are separate screens, so the first task in a project
+  routinely runs with nothing shared available to it.
+- **The template is read at creation and never again.** The four guides on
+  this install were trimmed by hand and share no substantial line with
+  `AGENTS.common.md`, but nothing keeps that true: a project seeded from an
+  older template would carry a duplicate copy of it, and no check would say
+  so.
 - **The design chat can author skills, and that path has never run live.**
   Fork, edit, test, publish is implemented and unit-tested, but no design turn
   has yet produced a skill end to end. The first one will be the real test of
@@ -261,4 +315,3 @@ that layout, so an upgrade needs no manual step and no files move.
 - **A design turn is the one scope that may write to `skills/` itself**, which
   means it can create a directory that is not a skill. `publish` would then
   quietly ignore it.
-

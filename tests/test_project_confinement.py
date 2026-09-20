@@ -244,3 +244,98 @@ def test_the_guide_says_what_to_do_with_narration_that_is_already_there(tmp_path
     assert "only spoken audio" in guide
     # And the reason a re-synthesis has to cover every cue, not just the new one.
     assert "slightly different length each time" in guide
+
+
+# ------------------------------------------ a project that is brand new
+
+
+def _seed(tmp_path: Path) -> Path:
+    """A workspace with the real template and common guide, and one project."""
+    import shutil
+
+    from dex import projects
+
+    repo = Path(__file__).resolve().parent.parent
+    shutil.copy(repo / "AGENTS.template", tmp_path / "AGENTS.template")
+    shutil.copy(repo / "AGENTS.common.md", tmp_path / "AGENTS.common.md")
+    project = tmp_path / "assets" / "recipes"
+    project.mkdir(parents=True)
+    (project / "AGENTS.md").write_text(
+        projects.starter_guide(tmp_path, "Recipes", "Cooking cards.", "recipes")
+    )
+    return project
+
+
+def test_a_brief_never_sends_a_helper_to_the_project_s_own_utils(tmp_path: Path):
+    """That directory is materialised from the skills, so a write there is lost.
+
+    The brief said "write the module into the project's `utils/`" long after
+    the common guide had been changed to say the opposite, so one brief
+    carried both instructions.
+    """
+    project = _seed(tmp_path)
+    prompt = generation_prompt(
+        problem="x", task_dir=project / "carbonara",
+        python=Path("/usr/bin/python3"), manim_available=False, workspace=tmp_path,
+        skills=[("cards", "recipe cards", str(tmp_path / "skills/cards/ab12cd"), True)],
+    )
+    assert "write the module into the project's `utils/`" not in prompt
+    assert "To promote, write into the skill" in prompt
+    # dex regenerates the index; a task told to do it itself does it wrong.
+    assert "regenerate the index with" not in prompt
+
+
+def test_a_project_with_no_skills_is_told_there_is_nowhere_to_share(tmp_path: Path):
+    """Which is every project until somebody enables one for it."""
+    project = _seed(tmp_path)
+    prompt = generation_prompt(
+        problem="x", task_dir=project / "carbonara",
+        python=Path("/usr/bin/python3"), manim_available=False, workspace=tmp_path,
+        skills=[],
+    )
+    assert "No skill is enabled here" in prompt
+    # And the index it is otherwise sent to read does not exist yet.
+    assert "has neither\n  the file nor the directory" in prompt
+
+
+def test_an_unwritten_project_guide_is_called_out(tmp_path: Path):
+    """A seeded guide is addressed to the operator, not to the task.
+
+    Worse than no guide, because it looks like one: "Describe the deliverable
+    for a task in this project here" reads as a specification until you notice
+    who it is talking to.
+    """
+    project = _seed(tmp_path)
+    prompt = generation_prompt(
+        problem="x", task_dir=project / "carbonara",
+        python=Path("/usr/bin/python3"), manim_available=False, workspace=tmp_path,
+    )
+    assert "That guide has not been written yet" in prompt
+    assert "mcp__dex__ask_user" in prompt
+
+    # Once it says something, it is left alone.
+    (project / "AGENTS.md").write_text(
+        "# Project: Recipes\n\n## What to produce\n\nOne `recipe.md` per dish.\n"
+    )
+    written = generation_prompt(
+        problem="x", task_dir=project / "carbonara",
+        python=Path("/usr/bin/python3"), manim_available=False, workspace=tmp_path,
+    )
+    assert "That guide has not been written yet" not in written
+
+
+def test_the_unwritten_check_follows_the_template(tmp_path: Path):
+    """Derived from the template, not from a phrase copied out of it.
+
+    A check keyed to one sentence stops working the moment somebody edits the
+    template, and stops silently.
+    """
+    from dex.prompts import untouched_template
+
+    (tmp_path / "AGENTS.template").write_text(
+        "# Project: {project_name}\n\n## Output\n\nSay what comes out.\n"
+    )
+    assert untouched_template("# Project: Recipes\n\n## Output\n\nSay what comes out.\n", tmp_path)
+    assert not untouched_template("# Project: Recipes\n\n## Output\n\nOne card.\n", tmp_path)
+    # No template to compare against is not a claim that the guide is empty.
+    assert not untouched_template("anything", tmp_path / "nowhere")

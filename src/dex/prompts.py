@@ -8,6 +8,37 @@ from pathlib import Path
 #: there — that one is instructions for whoever is working on dex itself.
 COMMON_GUIDE = "AGENTS.common.md"
 
+#: What a new project's guide is seeded from. Read back here to tell a guide
+#: somebody wrote from one nobody has touched yet.
+TEMPLATE_NAME = "AGENTS.template"
+
+
+def untouched_template(guide: str, workspace: Path) -> bool:
+    """Is this guide still the starter, with nothing written into it?
+
+    A new project is seeded from `AGENTS.template`, whose body is addressed to
+    the *operator*: "Describe the deliverable for a task in this project here."
+    A task handed that reads instructions meant for somebody else as its spec,
+    and builds whatever the request alone implies.
+
+    Derived from the template rather than from a phrase copied out of it, so
+    editing the template cannot silently stop this from working: every line of
+    prose it ships with, still present and unchanged, means nobody has written
+    the guide yet.
+    """
+    try:
+        template = (workspace / TEMPLATE_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    prose = [
+        line.strip()
+        for line in template.splitlines()
+        # Placeholders are substituted per project, so they never match; the
+        # headings survive an edit and would report a written guide as empty.
+        if line.strip() and not line.startswith("#") and "{" not in line
+    ]
+    return bool(prose) and all(line in guide for line in prose)
+
 GENERATION_SYSTEM = """\
 You are dex, an agent that turns one request into a complete, verified package \
 of study material.
@@ -369,6 +400,22 @@ def generation_prompt(
         if skills
         else ""
     )
+    # With no skill enabled there is no `utils/` and nowhere a helper could
+    # go, so the protocol below would describe a destination that does not
+    # exist. A new project is in exactly that state until somebody enables
+    # something for it.
+    no_skills_note = (
+        ""
+        if skills
+        else (
+            "\n\n**Not yet in this project.** No skill is enabled here, so there"
+            " is nowhere\na helper could go. Keep what you write inside your"
+            " own directory and say in\none line of your summary what would"
+            " have been worth sharing. The rest of\nthis section applies once"
+            " a skill is enabled for the project.\n"
+        )
+    )
+
     # A project with no guide would otherwise leave the agent to invent a
     # format. Saying so is better than letting it guess, which is how a whole
     # project's output silently became whatever the prompt happened to imply.
@@ -378,6 +425,18 @@ def generation_prompt(
             "This project has no AGENTS.md, so nothing defines what a task here\n"
             "produces. Do not assume a format. Call `mcp__dex__ask_user` once,\n"
             "with concrete options, to find out what is wanted.\n"
+        )
+    elif untouched_template(guide, workspace or task_dir.parent.parent):
+        # Worse than no guide, because it looks like one. The prose above is
+        # addressed to the operator, and a task that reads it as a spec builds
+        # whatever the request on its own implies.
+        guide += (
+            "\n# That guide has not been written yet\n\n"
+            "It is still the starter template: the text above is addressed to the\n"
+            "person who owns this project, not to you, and nothing in it defines\n"
+            "what a task here produces. Do not treat it as a specification and do\n"
+            "not assume a format. Call `mcp__dex__ask_user` once, with concrete\n"
+            "options, to find out what is wanted.\n"
         )
     if project_wide:
         return f"""\
@@ -415,11 +474,12 @@ untouched.
 {"" if manim_available else _ANIMATION_UNAVAILABLE}
 # Finish
 
-Before the summary, do the shared-utilities step if this project defines one:
-a sweep is exactly the kind of pass that writes the same helper into a dozen
-packages, so if you wrote and ran one, check whether sharing is switched on and
-move it into the project's `utils/` if it is, with the one-line docstring the
-generated `utils/API.md` reads.
+Before the summary, do the shared-utilities step if this project has a skill to
+put one in: a sweep is exactly the kind of pass that writes the same helper into
+a dozen packages, so if you wrote and ran one, check whether sharing is switched
+on and move it into that skill's `utils/` if it is, with the one-line docstring
+the generated `utils/API.md` reads. Not the project's own `utils/` — that one is
+materialised from the skills and anything written there is undone.
 
 Reply with a short summary: how many packages you changed, what you wrote into
 them, how you checked it, what you moved into `utils/` (or why you did not),
@@ -479,15 +539,16 @@ change it.
 When the brief has a `## Sources` section, those are the files attached to this
 particular request; read them wherever they are.
 
-**The one exception is shared utilities.** If the project instructions above
-define a `utils/` protocol, follow it — it is the sanctioned way to write
-outside your directory, and it is narrow:
+**The one exception is shared utilities.** It is the sanctioned way to write
+outside your directory, and it is narrow:{no_skills_note}
 
 - **Reading is always allowed.** The project's `utils/API.md` lists every
   shared module's signatures and a line each, at about a tenth of the source;
   dex rewrites it before you start, so it is never behind the code. Read that
   rather than the modules, and open a module only when its signature genuinely
-  does not settle whether it fits.
+  does not settle whether it fits. A project with no skills enabled has neither
+  the file nor the directory, which is not an error — there is simply nothing
+  shared here yet.
 - **Writing happens only at the very end.** You build and prove the helper
   inside your own directory first. Once your checks are green, you call
   `mcp__dex__utility_proposals_enabled`. If it answers `disabled`, the operator
@@ -499,15 +560,18 @@ outside your directory, and it is narrow:
   utility question for the operator rather than interrupting them. Ask anyway —
   it is how the decision is recorded — and act on what comes back rather than
   assuming it.
-- To promote: write the module into the project's `utils/`, give what you add a
-  one-line docstring — that line is the interface the next task reads out of the
-  generated `utils/API.md` — switch your package to import it and delete the
-  local copy, re-run your checks, and regenerate the index with
-  `dex.tools.utils_api`. No list is maintained by hand. Share mechanism, not
-  policy: something that returns data the caller decides about, with thresholds
-  as defaults rather than rules. A utility that needs a new argument for every
-  caller will be edited by every task, and the project instructions say more
-  about that.
+- **To promote, write into the skill**, at the exact path the skills list above
+  gives — not the project's `utils/`, which is materialised from the enabled
+  skills and rewritten whenever they change, so a module left there disappears
+  and the skill anybody else would copy never learns it exists. The full order
+  of operations is in the common guide above; follow it there rather than from
+  memory. You do not regenerate the index and you do not edit a list: dex
+  re-versions the skill and rewrites `utils/API.md` when your task finishes
+  clean.
+- Share mechanism, not policy: something that returns data the caller decides
+  about, with thresholds as defaults rather than rules. A utility that needs a
+  new argument for every caller will be edited by every task, and the project
+  instructions say more about that.
 - **An approval is still an approval.** The write lands outside your directory,
   so unless auto-approve is on it stops for the operator; that is the design
   working, not a wall. Wait for it rather than abandoning the step. If a write

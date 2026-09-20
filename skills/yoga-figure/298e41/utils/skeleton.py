@@ -158,38 +158,6 @@ def joint_angles(pose, hinges=HINGES):
     return angles
 
 
-def hip_flexion(pose, side, trunk=("TOP_OF_THORACIC_SPINE",
-                                   "BOTTOM_OF_SACRAL_SPINE")):
-    """Degrees a hip is folded, measured against the trunk axis.
-
-    The one joint `joint_angles` cannot report, because a hip is a ball rather
-    than a hinge and has no third landmark to take an interior angle at. The
-    angle at the sacrum is not a substitute: it reads about 110 degrees on a
-    figure standing up and barely moves as the leg comes forward, so a pose can
-    fold a hip past what a body allows without that number noticing.
-
-    This measures the thigh against the direction the trunk runs downward, the
-    way flexion is defined clinically. Zero is a leg in line with a standing
-    trunk, 90 a thigh carried straight out in front of it, and 180 a full front
-    split or a chest folded flat onto a straight leg — which is the limit, and
-    one only a practised body reaches.
-
-        fold = skeleton.hip_flexion(pose, "RIGHT")
-        if fold > 175:
-            problems.append("the front thigh has folded through the trunk")
-
-    `trunk` is the axis to measure against, superior end first, for a pose that
-    would rather use the lumbar spine or a rolled pelvis as its reference.
-    Returns the angle; whether it is too much is the pose's own business.
-    """
-    landmarks = pose["landmarks"]
-    superior, inferior = landmarks[trunk[0]], landmarks[trunk[1]]
-    down = [inferior[i] - superior[i] for i in range(3)]
-    thigh = [landmarks[f"{side}_KNEE"][i] - landmarks[f"{side}_HIP"][i]
-             for i in range(3)]
-    return angle_between(down, thigh)
-
-
 def chain_turns(points):
     """Each turn along a chain of landmarks, as the axis it turns about.
 
@@ -330,54 +298,6 @@ def bone_gap(pose, first, second, samples=48):
             for step in range(samples + 1))
 
     return min(walk(a, b, c, d), walk(c, d, a, b))
-
-
-def bone_contact(pose, first, second, samples=192):
-    """Where two bones come nearest: the gap, and how far along each that is.
-
-    `bone_gap` answers how close two bones pass; this answers where, which is
-    the half a pose needs when limbs are meant to be touching. A thigh resting
-    on a triceps and a knee grazing a shoulder measure the same distance, and
-    only the position along each bone tells them apart — a contact at a
-    fraction of 0.98 is on the joint at the end, which is a different pose from
-    the one that was asked for.
-
-    Returns `(gap in meters, fraction along first, fraction along second)`,
-    each fraction 0 at the bone's first-named landmark and 1 at its second.
-    Each bone is a (parent, child) pair of landmark names, in either order —
-    but the order chosen is the order the fractions are reported in, so name
-    them the way the pose thinks of them.
-
-        gap, along_thigh, along_arm = skeleton.bone_contact(
-            pose, ("RIGHT_HIP", "RIGHT_KNEE"), ("RIGHT_SHOULDER", "RIGHT_ELBOW"))
-        if along_arm > 0.9:
-            problems.append("the leg is resting on the elbow, not the triceps")
-
-    One segment is walked and the other solved exactly at each step, in both
-    directions, so the gap agrees with `bone_gap` to well under a millimetre at
-    the default sampling. Data, not a verdict.
-    """
-    landmarks = pose["landmarks"]
-    a, b = landmarks[first[0]], landmarks[first[1]]
-    c, d = landmarks[second[0]], landmarks[second[1]]
-
-    def walk(start, end, other_start, other_end, swapped):
-        edge = [other_end[i] - other_start[i] for i in range(3)]
-        span = sum(component * component for component in edge)
-        best = (float("inf"), 0.0, 0.0)
-        for step in range(samples + 1):
-            here = step / samples
-            point = [start[i] + (end[i] - start[i]) * here for i in range(3)]
-            there = 0.0 if span == 0 else max(0.0, min(1.0, sum(
-                (point[i] - other_start[i]) * edge[i]
-                for i in range(3)) / span))
-            gap = distance(point, [other_start[i] + edge[i] * there
-                                   for i in range(3)])
-            if gap < best[0]:
-                best = (gap, there, here) if swapped else (gap, here, there)
-        return best
-
-    return min(walk(a, b, c, d, False), walk(c, d, a, b, True))
 
 
 def center_of_mass(pose, segments=SEGMENT_MASSES):
@@ -706,44 +626,6 @@ def over_base_of_support(point, contacts):
                for i in range(len(hull)))
 
 
-def support_margin(point, contacts):
-    """How far inside the footprint of `contacts` a point falls, in meters.
-
-    `over_base_of_support` answers yes or no, and yes covers both a figure
-    squarely over its feet and one six millimetres from the edge of a heel. The
-    second is tipping, and a pose that only asks the boolean cannot see the
-    difference — which is how a balance passes every check and still looks like
-    it is falling over.
-
-    Signed: positive inside the footprint, negative outside, and the magnitude
-    is the distance to the nearest edge either way. About three centimetres is
-    what a balance held still actually has.
-
-        margin = skeleton.support_margin(skeleton.center_of_mass(pose), palms)
-        if margin < 0.03:
-            problems.append(f"only {margin * 100:.1f} cm inside the hands")
-
-    Only `x` and `z` are read, as with `over_base_of_support`, so the caller
-    decides what is bearing weight. Data, not a verdict: a pose caught
-    mid-transition is entitled to a negative margin.
-    """
-    hull = base_of_support(contacts)
-    here = (point[0], point[2])
-
-    nearest = float("inf")
-    for i in range(len(hull)):
-        ax, az = hull[i]
-        bx, bz = hull[(i + 1) % len(hull)]
-        ex, ez = bx - ax, bz - az
-        span = ex * ex + ez * ez
-        along = 0.0 if span == 0 else max(0.0, min(1.0, (
-            (here[0] - ax) * ex + (here[1] - az) * ez) / span))
-        nearest = min(nearest, math.hypot(here[0] - (ax + ex * along),
-                                          here[1] - (az + ez * along)))
-
-    return nearest if over_base_of_support(point, contacts) else -nearest
-
-
 def validate_landmarks(pose, stem=None):
     """All 20 landmarks present and numeric; optionally `pose` matches `stem`.
 
@@ -801,6 +683,51 @@ def check_limb_symmetry(pose, tolerance=0.001):
             problems.append(
                 f"{parent}->{child} differs L/R by {abs(left - right) * 1000:.1f} mm "
                 f"(left {left:.3f} m, right {right:.3f} m)")
+
+    return problems
+
+
+def check_mirror_symmetry(pose, tolerance=0.001):
+    """Left and right landmarks mirror each other across the x=0 plane.
+
+    `check_limb_symmetry` compares bone *lengths*, which one body shares
+    whatever it is doing, so it says nothing about where the two sides are. A
+    bilateral pose claims more than that: that they are in the same position,
+    mirrored. Swing a whole arm about its shoulder and every bone keeps its
+    length — the length check passes, and the figure stands there lopsided in a
+    pose that is meant to be even.
+
+    Every `LEFT_`/`RIGHT_` pair is compared with x negated, and a landmark that
+    is neither — head, spine — is checked for sitting on the plane itself,
+    which nothing else here looks at. `tolerance` is in meters, and the default
+    is the millimetre that `check_limb_symmetry` uses.
+
+        problems = skeleton.check_mirror_symmetry(pose)
+
+    Returns a list of problems, empty when the two sides agree. Only for a pose
+    that means to be symmetric: a one-legged or twisting pose will report every
+    pair it has, correctly, and the caller is the one who knows which it is.
+    """
+    landmarks = pose["landmarks"]
+    problems = []
+
+    for name, left in sorted(landmarks.items()):
+        if not name.startswith("LEFT_"):
+            if not name.startswith("RIGHT_") and abs(left[0]) > tolerance:
+                problems.append(f"{name} is a midline landmark but sits at "
+                                f"x={left[0]:.4f} m")
+            continue
+        twin = "RIGHT_" + name[len("LEFT_"):]
+        right = landmarks.get(twin)
+        if right is None:
+            problems.append(f"{name} has no {twin} to mirror")
+            continue
+        off = max(abs(left[0] + right[0]), abs(left[1] - right[1]),
+                  abs(left[2] - right[2]))
+        if off > tolerance:
+            problems.append(
+                f"{name} and {twin} are {off * 1000:.1f} mm from mirrored: "
+                f"{left} vs {right}")
 
     return problems
 

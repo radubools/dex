@@ -242,6 +242,59 @@ def two_bone(root, target, near, far, bend_hint):
     return add(add(root, scale(axis, projection)), scale(unit(across), offset))
 
 
+def two_bone_toward(root, target, near, far, onward, steps=360, refinements=40):
+    """The middle joint of a two-bone chain that leaves the end joint straightest.
+
+    `two_bone` needs a `bend_hint` to pick one of the circle of middle joints
+    that reach the target. A hint is the right input when what the pose knows is
+    where the joint points — an elbow flaring out, a knee bulging forward. It is
+    the wrong input when what the pose knows is instead where the limb *carries
+    on* past the target: a hand closed around something whose direction is
+    already fixed, a foot hooked over a set bar. Then the middle joint is not
+    free at all, because only some of that circle leave the end joint inside the
+    angle it can actually bend to, and picking by eye is how a wrist ends up
+    folded 95 degrees under its own forearm.
+
+    So state the continuation and let the circle be searched. `onward` is the
+    direction the chain leaves the target in — wrist to fingertip, ankle to
+    toetip — and the middle joint returned is the one that leaves the widest
+    angle at the target, which is what a body reaching for something does:
+
+        fingers = unit(sub(fingertip, wrist))
+        elbow = two_bone_toward(shoulder, wrist, 0.30, 0.26, fingers)
+
+    It answers only which point on the circle, so the bone lengths come out
+    exact the way `two_bone`'s do, and it raises what `two_bone` raises when the
+    target is out of reach. `steps` is a first sweep of the circle in whole
+    degrees and `refinements` subdivides the best of them; the defaults land
+    inside a hundredth of a degree.
+
+    What it does not do is say whether the angle it found is one the joint can
+    hold. It returns the best available, which may still be past a wrist or a
+    knee — measure it with `skeleton.joint_angles` and decide there.
+    """
+    chain = unit(sub(target, root))
+    seed = [0.0, 1.0, 0.0] if abs(chain[1]) < 0.9 else [1.0, 0.0, 0.0]
+    first = unit(sub(seed, scale(chain, dot(seed, chain))))
+    second = cross(chain, first)
+    onward = unit(list(onward))
+
+    def middle_at(azimuth):
+        radians = math.radians(azimuth)
+        hint = add(scale(first, math.cos(radians)),
+                   scale(second, math.sin(radians)))
+        return two_bone(root, target, near, far, hint)
+
+    def straightness(azimuth):
+        return -dot(unit(sub(middle_at(azimuth), target)), onward)
+
+    span = 360.0 / steps
+    best = max(range(steps), key=lambda step: straightness(step * span))
+    return middle_at(max(
+        (best * span + step * span / refinements
+         for step in range(-refinements, refinements + 1)), key=straightness))
+
+
 def joint_on_floor(root, heading, length, height=0.0):
     """One bone's far joint, landing on the floor — or at `height` — along `heading`.
 
@@ -464,70 +517,6 @@ def folded_knee_on_floor(root, heading, near, far,
     offset = max(offsets, key=lambda candidate: dot(candidate, list(outward)))
     knee = [root[0] + offset[0], 0.0, root[2] + offset[2]]
     return knee, add(knee, scale(shin, far))
-
-
-def tucked_foot(ankle, anterior, superior, dorsiflexion=15.0,
-                ankle_to_ball=0.130, ankle_above_sole=0.070, toes=0.060):
-    """The ball and the tucked toetip of a foot standing on its toes.
-
-    `skeleton.heel` answers where a flat foot's heel is. This is the other
-    foot: toes tucked under, heel lifted, the weight on the ball — a plank, a
-    prone hover, an upward-facing dog, the back foot of a lunge.
-
-    That foot is the one nobody can place by eye. `CENTRAL_TOETIP` is the tip
-    of the toes, and tucking folds them nearly double against the metatarsals,
-    so the straight line the viewer draws from the ankle to the toetip is both
-    much shorter than a foot and much steeper than the foot's own axis. Guess
-    it and the toetip lands too far from the ankle, which reads at the ankle
-    as an angle no ankle reaches.
-
-    So build the foot instead of the landmark. `anterior` is the direction the
-    body's front faces and `superior` the direction of its head — the axes
-    `frame` hands back. Off those, the foot turns `dorsiflexion` degrees from
-    neutral, which tips its long axis from anterior toward the shin and turns
-    the sole with it; the ball sits `ankle_to_ball` along that axis and
-    `ankle_above_sole` toward the sole; and the toes, bent up at the joints
-    until they lie flat, run `toes` further along the ground the way the foot
-    points. The defaults describe a 0.25 m foot at an everyday dorsiflexion.
-
-    Returns `(ball, toetip)`, both as [x, y, z]. The toetip shares the ball's
-    height, because tucked toes lie in the same plane the ball rests on — so
-    the pose is grounded exactly when the ball is, and neither point is forced
-    onto the floor here. Solve for that: the ankle comes from the leg, and the
-    body's tilt is what lands the foot.
-
-        ball, toetip = rig.tucked_foot(ankle, anterior, superior)
-        tilt = rig.solve(2.0, 20.0, lambda t: -ball_height(t), 0.0)
-
-    Raises when `anterior` and `superior` are the same direction, or when the
-    foot points straight down and so has no heading for the toes to follow.
-    """
-    superior = unit(superior)
-    anterior = sub(anterior, scale(superior, dot(anterior, superior)))
-    if norm(anterior) < 1e-9:
-        raise ValueError(
-            "anterior and superior point the same way, so the foot has no "
-            "direction to face")
-    anterior = unit(anterior)
-
-    turn = math.radians(dorsiflexion)
-    # Dorsiflexion tips the foot's long axis from anterior toward the shin.
-    # The sole faces away from the shin at neutral and rides the same turn.
-    foot_axis = add(scale(anterior, math.cos(turn)), scale(superior, math.sin(turn)))
-    sole_dir = add(scale(superior, -math.cos(turn)), scale(anterior, math.sin(turn)))
-
-    ball = add(add(list(ankle), scale(foot_axis, ankle_to_ball)),
-               scale(sole_dir, ankle_above_sole))
-
-    # The toes are bent up at the joints until they lie flat, so they leave the
-    # ball along the floor rather than along the foot: the heading is the
-    # foot's axis with its rise taken out.
-    heading = [foot_axis[0], 0.0, foot_axis[2]]
-    if norm(heading) < 1e-9:
-        raise ValueError(
-            f"a foot at {dorsiflexion:.1f} degrees points straight down, so "
-            f"the tucked toes have no heading to lie along")
-    return ball, add(ball, scale(unit(heading), toes))
 
 
 def shoulders_at_height(thoracic, superior, half_width, height,
