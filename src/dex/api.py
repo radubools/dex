@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
@@ -883,6 +883,54 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             raise HTTPException(409, str(exc)) from exc
         log.info("%s skill %s for %s", "enabled" if on else "disabled", name, slug)
         return {"project": slug, "skills": now.skills}
+
+    @app.get("/api/skills/{name}/export", dependencies=admin_only)
+    async def export_skill(name: str, version: str = Query(default="")) -> Response:
+        """One version of one skill, as a `.tar.gz` to carry to another install.
+
+        The selected version, not the current one: the point of downloading a
+        skill is often that you want the version a project is actually running
+        rather than the newest one on disk.
+        """
+        skill = skills.find(config.workspace, name, version)
+        if skill is None:
+            raise HTTPException(404, "no such skill")
+        blob = skills.export(skill)
+        log.info("exported skill %s v%s (%d bytes)", skill.name, skill.version, len(blob))
+        return Response(
+            content=blob,
+            media_type="application/gzip",
+            headers={
+                "content-disposition":
+                    f'attachment; filename="{skills.archive_name(skill)}"',
+            },
+        )
+
+    @app.post("/api/skills/import", dependencies=admin_only)
+    async def import_skill(file: UploadFile = File(...)) -> dict[str, Any]:
+        """Take an exported skill and put it on disk as a version of its own.
+
+        It is enabled for nothing. A version arriving is not a decision to run
+        it, and the whole reason versions coexist is that the operator picks
+        when — trying it in one project before the rest follow.
+        """
+        blob = await file.read()
+        if len(blob) > uploads.MAX_BYTES:
+            raise HTTPException(413, "archive too large")
+        try:
+            got = skills.import_archive(config.workspace, blob)
+        except skills.Collision as exc:
+            raise HTTPException(400, str(exc)) from exc
+        log.info(
+            "imported skill %s v%s (%s)",
+            got.skill.name, got.skill.version, "new" if got.fresh else "already here",
+        )
+        return {
+            "name": got.skill.name,
+            "version": got.skill.version,
+            "description": got.skill.description,
+            "fresh": got.fresh,
+        }
 
     @app.get("/api/costs", dependencies=admin_only)
     async def costs(

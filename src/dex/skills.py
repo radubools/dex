@@ -31,9 +31,13 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 import logging
+import shutil
 import sys
+import tarfile
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +47,11 @@ log = logging.getLogger("dex.skills")
 
 #: Where skills live, under the workspace.
 SKILLS_DIR = "skills"
+
+#: Prefix for an import's staging directory, before `publish` renames it to the
+#: content hash. Distinct from `DRAFT` so a half-finished import is not mistaken
+#: for something somebody is editing.
+INCOMING = "incoming-"
 
 #: A skill's own generated index of what its modules offer. Regenerated when
 #: the skill is published, so it always describes the source it ships with —
@@ -187,6 +196,16 @@ def find(workspace: Path, name: str, version: str = "") -> Skill | None:
     return matching[0] if len(matching) == 1 else None
 
 
+def safe_skill_name(raw: str) -> str:
+    """A skill name reduced to what may become a directory and sit in a URL.
+
+    Returned rather than raised so a caller can compare: a name that survives
+    unchanged is one that can be trusted as a path component.
+    """
+    cleaned = "".join(c for c in raw.strip() if c.isalnum() or c in "-_.")
+    return "" if cleaned in ("", ".", "..") or cleaned.startswith(".") else cleaned
+
+
 def fingerprint(path: Path) -> str:
     """A short content hash of everything in a skill.
 
@@ -208,6 +227,23 @@ def _hashable(path: Path) -> Iterable[Path]:
         if not file.is_file():
             continue
         if any(part in IGNORED for part in file.relative_to(path).parts):
+            continue
+        yield file
+
+
+def _copyable(path: Path) -> Iterable[Path]:
+    """Every file that is part of the skill — a wider set than `_hashable`.
+
+    The two differ on purpose. `IGNORED` is what the *version* must not depend
+    on; `JUNK` is what nobody should ever receive. A widget's committed
+    `dist/index.js` is in the first set and not the second: it is excluded from
+    the hash because it embeds its own versioned source path, and included in a
+    copy because without it the widget has to be built before it will open.
+    """
+    for file in path.rglob("*"):
+        if not file.is_file():
+            continue
+        if any(part in JUNK for part in file.relative_to(path).parts):
             continue
         yield file
 
@@ -302,8 +338,6 @@ def _write_index(skill: Skill) -> None:
 
 def _sweep(path: Path) -> None:
     """Remove build artefacts a rename carried along."""
-    import shutil
-
     for junk in path.rglob("*"):
         if junk.is_dir() and junk.name in JUNK:
             shutil.rmtree(junk, ignore_errors=True)
@@ -649,8 +683,6 @@ def snapshot(workspace: Path, project_dir: Path, into: Path) -> dict[str, Path]:
     Skills are small (the largest here is 668 KB), so this is a cheap way to
     keep "two versions coexist" true even when dex itself is what changed one.
     """
-    import shutil
-
     available = {s.name: s for s in all_skills(workspace)}
     into.mkdir(parents=True, exist_ok=True)
     kept: dict[str, Path] = {}
@@ -685,8 +717,6 @@ def resync(
 
     Returns the names of the skills that changed, for the log.
     """
-    import shutil
-
     changed: list[str] = []
     recorded = dict(read_enabled(project_dir).skills)
     moved: dict[str, str] = {}
@@ -745,8 +775,6 @@ def fork(workspace: Path, name: str, version: str = "") -> Skill:
     A name with nothing behind it yet gets an empty draft, which is how a new
     skill starts.
     """
-    import shutil
-
     root = skills_dir(workspace)
     (root / name).mkdir(parents=True, exist_ok=True)
     draft = root / name / DRAFT
@@ -792,8 +820,6 @@ def adopt(workspace: Path, assets_dir: Path) -> list[tuple[str, str, list[str]]]
 
     Returns `(name, version, projects moved)` per published draft.
     """
-    import shutil
-
     done: list[tuple[str, str, list[str]]] = []
     for draft in drafts(workspace):
         try:
@@ -833,3 +859,115 @@ def adopt(workspace: Path, assets_dir: Path) -> list[tuple[str, str, list[str]]]
             moved.append(project_dir.name)
         done.append((published.name, published.version, moved))
     return done
+
+
+# ------------------------------------------------------------ export/import
+
+
+#: What an exported archive is called. The version is in the name so a file
+#: sitting in somebody's downloads still says which one it is.
+def archive_name(skill: Skill) -> str:
+    return f"{skill.name}@{skill.version}.tar.gz"
+
+
+def export(skill: Skill) -> bytes:
+    """One version of one skill as a `.tar.gz`, ready to hand to another install.
+
+    Members are relative to the version directory — `SKILL.md`, `utils/rig.py`
+    — and carry no version in their paths. The receiving install computes the
+    version from the contents it actually got, which is the only version that
+    can be true there: a name copied across would claim a hash nobody verified.
+
+    Everything but `JUNK` goes in, which is **more than the hash covers**. A
+    widget's committed `dist/index.js` is out of the hash (it embeds its own
+    source path, and that path contains the version the hash is computing) but
+    it is the whole reason a widget works on arrival without a build step.
+    `skill.json` is likewise out of the hash and in the archive: it carries the
+    name that says which skill this is.
+    """
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for file in sorted(_copyable(skill.path)):
+            archive.add(file, arcname=str(file.relative_to(skill.path)))
+    return buffer.getvalue()
+
+
+@dataclass
+class Imported:
+    """What arrived, and whether it was new."""
+
+    skill: Skill
+    #: False when this install already had this exact content under this name.
+    fresh: bool
+
+
+def import_archive(workspace: Path, data: bytes) -> Imported:
+    """Take a `.tar.gz` and put it on disk as a version of its own.
+
+    Resolved by the **name in its manifest**, so an archive of `yoga-figure`
+    lands as another version of the `yoga-figure` already here rather than as
+    something separate. It is enabled for nothing: arriving is not the same as
+    being adopted, and the point of versions coexisting is that somebody
+    chooses when to move.
+
+    Nothing is enabled, nothing is materialised, and no project changes.
+    """
+    with tempfile.TemporaryDirectory(prefix="dex-import-") as scratch:
+        staging = Path(scratch) / "unpacked"
+        staging.mkdir()
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                # `data` refuses absolute paths, `..`, links and device files.
+                # An archive is somebody else's bytes, and extracting one
+                # unfiltered is how a tarball writes outside the directory it
+                # was given.
+                archive.extractall(staging, filter="data")
+        except (tarfile.TarError, OSError, ValueError) as exc:
+            raise Collision(f"not a readable skill archive: {exc}") from exc
+
+        manifest = staging / MANIFEST_NAME
+        if not manifest.is_file():
+            raise Collision(
+                f"the archive has no {MANIFEST_NAME}, so it does not say which "
+                "skill it is"
+            )
+        try:
+            name = str(json.loads(manifest.read_text()).get("name") or "").strip()
+        except ValueError as exc:
+            raise Collision(f"its {MANIFEST_NAME} is unreadable: {exc}") from exc
+        # The name becomes a directory, so it is checked as one. `..` and a
+        # separator are the reasons this matters; the rest keeps a name that
+        # would be unreadable in a URL out of the tree.
+        if not name or name != safe_skill_name(name):
+            raise Collision(f"{name!r} is not a usable skill name")
+
+        root = skills_dir(workspace) / name
+        root.mkdir(parents=True, exist_ok=True)
+        # A unique staging name rather than a timestamp: two imports in the
+        # same second would otherwise land on the same directory. `publish`
+        # renames it to the hash of what actually arrived.
+        landing = Path(tempfile.mkdtemp(prefix=INCOMING, dir=root))
+        shutil.copytree(
+            staging, landing, dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(*JUNK),
+        )
+
+    try:
+        skill = read(landing)
+        if skill is None:
+            raise Collision("the archive did not unpack into a skill")
+        publish(skill)
+    except Collision:
+        # Either this install already has this exact content under this name,
+        # or what arrived was not a skill. Staging goes either way; an
+        # `incoming-` directory left on disk would read as a version.
+        existing = find(workspace, name, fingerprint(landing)) if landing.exists() else None
+        shutil.rmtree(landing, ignore_errors=True)
+        if existing is None:
+            raise
+        # Keep the copy that was already here and throw the arrival away.
+        return Imported(skill=existing, fresh=False)
+    except Exception:
+        shutil.rmtree(landing, ignore_errors=True)
+        raise
+    return Imported(skill=skill, fresh=True)

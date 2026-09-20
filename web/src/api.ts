@@ -233,6 +233,60 @@ export const putSkillDoc = (name: string, version: string, text: string) =>
     { method: 'PUT', body: JSON.stringify({ text }) },
   )
 
+/**
+ * Download one version of a skill as a `.tar.gz`.
+ *
+ * Fetched rather than linked, because the route needs the auth header — and
+ * the filename comes from the server's `content-disposition` so the file on
+ * disk says which version it is without the browser having to be told twice.
+ */
+export const exportSkill = async (name: string, version: string): Promise<void> => {
+  const response = await fetch(
+    `/api/skills/${encodeURIComponent(name)}/export?version=${encodeURIComponent(version)}`,
+    { credentials: 'same-origin', headers: { 'x-dex-token': token } },
+  )
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(detail ? safeDetail(detail) : `export failed (${response.status})`)
+  }
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const named = /filename="([^"]+)"/.exec(disposition)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = named ? named[1] : `${name}@${version}.tar.gz`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+/**
+ * Take an exported skill onto this install as a new version.
+ *
+ * Resolved by the name inside the archive, so it joins the skill it belongs
+ * to. It is enabled for nothing: `fresh` is false when this install already
+ * had that exact content.
+ */
+export const importSkill = async (
+  file: File,
+): Promise<{ name: string; version: string; description: string; fresh: boolean }> => {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch('/api/skills/import', {
+    method: 'POST',
+    body: form,
+    credentials: 'same-origin',
+    headers: { 'x-dex-token': token },
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(detail ? safeDetail(detail) : `import failed (${response.status})`)
+  }
+  return response.json()
+}
+
 export const cancelTask = (id: string) => post<{ ok: boolean }>(`/api/tasks/${id}/cancel`)
 
 /** Continue a task that stopped before finishing, in the same output directory. */

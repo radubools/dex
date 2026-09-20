@@ -1745,6 +1745,9 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel-2); max-width: 260px;
 }
+/* Pushed to the far end of the head row: it acts on the version in the
+   dropdown, but it is not part of choosing one. */
+.skill-export { margin-left: auto; }
 /* Says the row is not showing the newest version, so a tick here is a
    deliberate step backwards rather than an accident. */
 .skill-older {

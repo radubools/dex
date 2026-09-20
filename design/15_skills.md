@@ -17,7 +17,7 @@ enabled.
 | Module | Responsibility |
 |---|---|
 | `src/dex/skills.py` | Read a skill, hash it, enable and disable it, materialise `utils/` |
-| `src/dex/api.py` | `GET /skills`, `POST /skills/{name}/projects/{slug}` |
+| `src/dex/api.py` | `GET /skills`, `POST /skills/{name}/projects/{slug}`, export and import |
 | `src/dex/runner.py` | Each enabled skill's `SKILL.md` appended to the brief |
 | `web/src/components/SkillAdmin.tsx` | The admin list, with a checkbox per project |
 
@@ -203,6 +203,95 @@ version of the same skill shows which, because ticking moves it.
 3. `assets/<project>/skills.json` — which skills are on, and at which version.
    That pairing is what makes a project reproducible on another install: the
    name alone would not say which of two directories it meant.
+
+---
+
+## Moving one between installs
+
+Enabling shares a skill between *projects*. Export and import share one between
+*installs* — the same capability on a laptop and on the box, or handed to
+somebody else's dex.
+
+| Route | Does |
+|---|---|
+| `GET /api/skills/{name}/export?version=` | That version as a `.tar.gz` |
+| `POST /api/skills/import` | Unpack an archive as a version of the skill it names |
+
+### The archive carries no version
+
+Members are relative to the version directory — `SKILL.md`, `utils/rig.py` —
+and the version appears only in the *filename*, for whoever finds it in their
+downloads. The receiving install computes the version from the bytes it
+actually got.
+
+That is the only version that can be true there. A hash copied across in a
+field would be a claim nobody on the receiving side had verified, and the one
+thing a content hash is for is not having to take that on trust. In practice
+the two agree — a round trip of every skill here comes back byte-identical at
+the same version — but they agree because the content does, not because the
+name was carried.
+
+### What goes in is wider than what is hashed
+
+`IGNORED` is what the *version* must not depend on. `JUNK` is what nobody
+should ever receive. They are different sets and the archive uses the second:
+
+| | In the hash | In the archive |
+|---|---|---|
+| `utils/*.py`, `SKILL.md`, `bind.json` | yes | yes |
+| `skill.json` | no — it carries the answer | yes — it carries the name |
+| `widgets/*/dist/index.js` | no — [it embeds its own versioned path](#dist-is-not-part-of-a-version) | yes — or the widget will not open |
+| `__pycache__`, `.DS_Store` | no | no |
+
+The committed bundle is the case that matters. It is out of the hash for a
+reason that has nothing to do with whether it belongs to the skill, and a
+receiving install has no build step — shipping the source without the bundle
+would hand over a widget that cannot be opened.
+
+### Arriving is not adopting
+
+An imported version is enabled for **nothing**. It appears in the dropdown and
+waits.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as Admin
+    participant UI as SkillAdmin
+    participant API as POST /skills/import
+    participant FS as skills/&lt;name&gt;/
+
+    A->>UI: picks a .tar.gz
+    UI->>API: multipart
+    API->>API: extract, filtered · read the name
+    API->>FS: stage, then publish at the hash of what arrived
+    API-->>UI: {name, version, fresh}
+    UI->>UI: dropdown opens on the new version — ticked for no project
+    A->>UI: ticks it for one project
+    Note over UI,FS: that project leaves the version it was on;<br/>every other project stays where it is
+```
+
+This is the whole point of versions coexisting. A new build goes onto one
+project, is watched there, and takes over the rest when it has earned it —
+which only works if arriving and adopting are two separate acts.
+
+`fresh: false` means this install already had that exact content under that
+name. The copy that was here is kept and the arrival is discarded; two
+directories differing only by which was written first is not a distinction
+anybody can act on.
+
+### An archive is somebody else's bytes
+
+| Guard | Against |
+|---|---|
+| `extractall(filter="data")` | A member named `../…` writing outside the staging directory; links and device files |
+| `name == safe_skill_name(name)` | A manifest naming `../evil` — refused, not rewritten, because filing it under a name it never claimed is worse |
+| Staging under `INCOMING`, removed on any failure | A half-unpacked directory being read as a version |
+| `uploads.MAX_BYTES` | The archive is held in memory while it is read |
+
+The name is **checked, not sanitised**. Quietly turning `../evil` into `evil`
+would store the skill under a name its own manifest never claimed, and every
+later question about which skill this is would get the wrong answer.
 
 ---
 
@@ -494,7 +583,16 @@ from reading the code:
   `skills.json`.
 - **A skill copied in by hand is trusted.** `publish` re-versions it if its
   contents disagree with its name, but nothing checks that its `requires` are
-  installed or that its modules import.
+  installed or that its modules import. An imported archive gets the same
+  benefit of the doubt: it is unpacked safely and hashed honestly, and then its
+  Python is trusted exactly as much as the repository's own.
+- **An import does not say what would collide.** Two skills claiming the same
+  module is caught at *enable* time, so an archive can land cleanly and then
+  refuse to go on anywhere. The check exists; nothing runs it on arrival.
+- **A version directory whose name disagrees with its contents is invisible.**
+  Nothing sweeps for it, and it reads as a version everywhere — in the
+  dropdown, and in an export that would then import under a different name.
+  `fingerprint(path) == path.name` is the check; no code runs it.
 
 ---
 
