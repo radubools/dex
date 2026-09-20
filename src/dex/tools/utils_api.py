@@ -50,10 +50,14 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return f"{node.name}({ast.unparse(node.args)}){returns}"
 
 
-def describe(path: Path) -> str:
-    """One module's section: its docstring line, then what it exports."""
+def describe(path: Path, skill: str = "") -> str:
+    """One module's section: where it came from, its docstring, its exports."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    lines = [f"## `{path.stem}`"]
+    # Which skill provides it. `utils/` is materialised from several, and a
+    # task that wants to add a function *beside* this one has to write to the
+    # right skill — the brief lists the skills, this is what joins them to the
+    # module names a reader actually has in hand.
+    lines = [f"## `{path.stem}`" + (f" — from `{skill}`" if skill else "")]
     if summary := _first_line(tree):
         lines.append("")
         lines.append(summary)
@@ -141,15 +145,54 @@ def _modules(utils_dir: Path) -> list[Path]:
     )
 
 
-def render(utils_dir: Path) -> str:
+def _combined(project_dir: Path) -> str:
+    """The project's index from its skills, or `""` if it has none."""
+    try:
+        from .. import skills
+
+        workspace = project_dir.parent.parent
+        enabled = skills.read_enabled(project_dir).skills
+        parts = [
+            (skill.name, skill.index.read_text(encoding="utf-8"))
+            for skill in skills.all_skills(workspace)
+            if enabled.get(skill.name) == skill.version and skill.index.is_file()
+        ]
+        return combine(parts)
+    except Exception:
+        return ""
+
+
+def providers(project_dir: Path) -> dict[str, str]:
+    """Which skill each materialised module came from, by filename.
+
+    Best effort: an install mid-migration, or a module somebody dropped in by
+    hand, simply has no entry and its section says nothing about a skill.
+    """
+    try:
+        from .. import skills
+
+        workspace = project_dir.parent.parent
+        enabled = skills.read_enabled(project_dir).skills
+        return {
+            module.name: skill.name
+            for skill in skills.all_skills(workspace)
+            if enabled.get(skill.name) == skill.version
+            for module in skill.modules()
+        }
+    except Exception:
+        return {}
+
+
+def render(utils_dir: Path, from_skill: dict[str, str] | None = None) -> str:
     """The whole file, or an empty string when there is nothing to describe."""
     modules = _modules(utils_dir)
     if not modules:
         return ""
+    from_skill = from_skill or {}
     sections = []
     for path in modules:
         try:
-            sections.append(describe(path))
+            sections.append(describe(path, from_skill.get(path.name, "")))
         except SyntaxError as exc:
             # A half-written module must not take the index down with it.
             sections.append(f"## `{path.stem}`\n\nCould not be parsed ({exc.msg}).")
@@ -169,7 +212,12 @@ def write(project_dir: Path, check: bool = False) -> bool:
     if not utils_dir.is_dir():
         return changed
     target = utils_dir / "API.md"
-    wanted = render(utils_dir)
+    # Combined from the enabled skills' own indexes when there are any. Each
+    # skill carries the index for its own modules, so a skill copied to another
+    # install arrives already describing itself; scanning the materialised
+    # directory is the fallback for a project whose utils/ came from somewhere
+    # else, or an install mid-migration.
+    wanted = _combined(project_dir) or render(utils_dir, providers(project_dir))
     current = target.read_text(encoding="utf-8") if target.exists() else ""
     if wanted == current:
         return changed
@@ -208,3 +256,50 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# --------------------------------------------------- one index per skill
+
+
+def render_skill(utils_dir: Path) -> str:
+    """One skill's index: its own modules, with no attribution.
+
+    Inside a skill there is nothing to attribute to — every module in it came
+    from it. The skill name is added when these are combined, which is also
+    the only place it can be right: a skill can be renamed, and an index that
+    had baked the old name in would then be lying.
+    """
+    modules = _modules(utils_dir)
+    sections = []
+    for path in modules:
+        try:
+            sections.append(describe(path))
+        except SyntaxError as exc:
+            sections.append(f"## `{path.stem}`\n\nCould not be parsed ({exc.msg}).")
+    return "\n\n".join(sections)
+
+
+def combine(parts: list[tuple[str, str]]) -> str:
+    """The project's index, from each enabled skill's own.
+
+    `parts` is `(skill name, that skill's index)`, in enable order. Combined
+    rather than regenerated from the materialised directory, so a skill carries
+    its own index and arrives at another install already describing itself.
+
+    The skill name goes into each heading here, because `utils/` is a flat
+    import namespace — `from utils import rig` does not say where `rig` came
+    from, and a task promoting a helper beside it has to know.
+    """
+    sections = []
+    for skill, body in parts:
+        if not body.strip():
+            continue
+        sections.append(
+            "\n".join(
+                f"{line} — from `{skill}`" if line.startswith("## `") else line
+                for line in body.splitlines()
+            )
+        )
+    if not sections:
+        return ""
+    return HEADER + "\n" + "\n\n".join(sections) + "\n"

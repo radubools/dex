@@ -1,0 +1,7 @@
+{
+  "name": "yoga-figure",
+  "description": "Build and measure a posed human skeleton in 3D \u2014 vector maths, limb placement against joint limits, and the measurements that say whether a pose is physically possible.",
+  "version": "1eccbf",
+  "updated": 1789893635.5216808,
+  "requires": []
+}

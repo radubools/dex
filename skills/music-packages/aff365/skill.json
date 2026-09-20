@@ -1,0 +1,10 @@
+{
+  "name": "music-packages",
+  "description": "The Music project's package format: validating a score sidecar, measuring its audio, checking harmony for clashes, and building the self-contained player.html a package ships.",
+  "version": "aff365",
+  "updated": 1789893635.5022001,
+  "requires": [
+    "numpy",
+    "pretty_midi"
+  ]
+}

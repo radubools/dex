@@ -4,10 +4,11 @@ import {
   resolveApproval, resumeTask, sendTaskMessage,
 } from '../api'
 import { progressOf, type FeedItem, type TaskView } from '../store'
-import type { Task, TaskMessage, TaskState } from '../types'
+import type { SourceAnchor, Task, TaskMessage, TaskState } from '../types'
 
 /** States in which the agent has not finished with this task. */
 const WORKING_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused'])
+import { Attachments, namesOf, type Attached } from './Attachments'
 import { ErrorNote } from './ErrorNote'
 import { Prose } from './Prose'
 import { AssetExplorer } from './AssetExplorer'
@@ -57,17 +58,21 @@ export function TaskPanel({
     const end = feedEnd.current
     const scroller = end?.parentElement?.parentElement
     if (!end || !scroller) return
+    // The scroller is moved directly rather than through scrollIntoView, which
+    // scrolls every scrollable ancestor it needs to: with a streaming feed that
+    // reached past the panel it would scroll the app shell itself, sliding the
+    // panes out from under their own fixed children.
     if (!anchored.current) {
-      end.scrollIntoView({ block: 'end' })
+      scroller.scrollTop = scroller.scrollHeight
       anchored.current = true
       return
     }
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 220
-    if (nearBottom) end.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    if (nearBottom) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
   }, [view.feed, tab, task.id])
 
   return (
-    <section className={`task-panel ${tab === 'activity' ? 'with-composer' : ''}`}>
+    <section className="task-panel">
       <header className="panel-head">
         <button className="back-btn" onClick={onBack} aria-label="Back">‹</button>
         <div className="panel-title">
@@ -141,16 +146,29 @@ export function TaskPanel({
 
       <div className="panel-body">
         {tab === 'files' ? (
-          <AssetExplorer
-            // The directory it writes into, relative to the assets root: the
-            // project, then the output slug — which is the parent's for a
-            // resumed or re-run attempt, not this task's own slug. Without the
-            // project the lookup 404s for every task outside the default one.
-            slug={task.project ? `${task.project}/${task.outputSlug}` : task.outputSlug}
-            assets={view.assets}
-            openPath={openPath}
-            onOpen={(path) => onOpen({ kind: 'asset', path })}
-          />
+          <>
+            {/* What went in, before what came out. A task planned from a
+                survey covers one part of the operator's own material, and
+                until this was here the only record of which part was a
+                sentence buried in the brief. */}
+            {task.anchor && (
+              <TaskInput
+                anchor={task.anchor}
+                project={task.project}
+                onOpen={onOpen}
+              />
+            )}
+            <AssetExplorer
+              // The directory it writes into, relative to the assets root: the
+              // project, then the output slug — which is the parent's for a
+              // resumed or re-run attempt, not this task's own slug. Without the
+              // project the lookup 404s for every task outside the default one.
+              slug={task.project ? `${task.project}/${task.outputSlug}` : task.outputSlug}
+              assets={view.assets}
+              openPath={openPath}
+              onOpen={(path) => onOpen({ kind: 'asset', path })}
+            />
+          </>
         ) : (
           <div className="feed">
             {view.feed.length === 0 && (
@@ -195,6 +213,9 @@ export function TaskPanel({
         <TaskComposer
           taskId={task.id}
           live={live}
+          // The task's own project, not whichever one the sidebar is showing:
+          // a panel stays open while the picker moves.
+          project={task.project ?? undefined}
           onQueued={(messages) => onQueued(task.id, messages)}
         />
       )}
@@ -210,13 +231,17 @@ export function TaskPanel({
 function TaskComposer({
   taskId,
   live,
+  project,
   onQueued,
 }: {
   taskId: string
   live: boolean
+  /** Whose `datasets/` directory an attachment goes into. */
+  project?: string
   onQueued: (messages: TaskMessage[]) => void
 }) {
   const [draft, setDraft] = useState('')
+  const [attached, setAttached] = useState<Attached[]>([])
   const [busy, setBusy] = useState(false)
 
   const submit = () => {
@@ -224,9 +249,16 @@ function TaskComposer({
     if (!text || busy) return
     setBusy(true)
     setDraft('')
-    sendTaskMessage(taskId, text)
+    const sending = attached
+    setAttached([])
+    sendTaskMessage(taskId, text, namesOf(sending))
       .then(() => getTaskMessages(taskId).then(onQueued))
-      .catch(() => setDraft(text))
+      .catch(() => {
+        // Put the message back as it was, attachments included: the files are
+        // already on the server, so retrying costs nothing but the click.
+        setDraft(text)
+        setAttached(sending)
+      })
       .finally(() => setBusy(false))
   }
 
@@ -250,6 +282,12 @@ function TaskComposer({
             submit()
           }
         }}
+      />
+      <Attachments
+        attached={attached}
+        onChange={setAttached}
+        project={project}
+        disabled={busy}
       />
       <button type="submit" className="send-btn" disabled={!draft.trim() || busy}>
         {live ? 'Queue' : 'Send'}
@@ -426,4 +464,56 @@ function QuestionRow({
 function firstLine(message: string): string {
   const line = message.trim().split('\n')[0]
   return line.length > 200 ? `${line.slice(0, 200)}…` : line
+}
+
+
+/**
+ * The material this task was cut out of, above the files it produced.
+ *
+ * A URL is a link rather than a pane: dex serves the operator's own uploads
+ * and will not proxy somebody else's site to put it in a frame, so the honest
+ * thing is to hand the address to the browser. An uploaded document opens in
+ * the preview pane at the anchored page, which is the whole reason the survey
+ * records a page at all.
+ */
+function TaskInput({
+  anchor,
+  project,
+  onOpen,
+}: {
+  anchor: SourceAnchor
+  project: string | null
+  onOpen: (target: ViewerTarget) => void
+}) {
+  const external = Boolean(anchor.url) && !anchor.page && !anchor.line
+  return (
+    <div className="task-input">
+      <div className="card-kind">From your sources</div>
+      {external ? (
+        <a className="input-row" href={anchor.url} target="_blank" rel="noreferrer">
+          <span className="input-icon" aria-hidden="true">🔗</span>
+          <span className="input-name">{anchor.label || anchor.url}</span>
+          <span className="input-where">opens in a new tab</span>
+        </a>
+      ) : (
+        <button
+          className="input-row"
+          onClick={() =>
+            onOpen({
+              kind: 'source',
+              project: project ?? '',
+              name: anchor.source,
+              anchor,
+            })
+          }
+        >
+          <span className="input-icon" aria-hidden="true">📄</span>
+          <span className="input-name">{anchor.source}</span>
+          <span className="input-where">{anchor.label}</span>
+        </button>
+      )}
+      {/* The line between what was given and what was made. */}
+      <div className="files-divider"><span>Produced by this task</span></div>
+    </div>
+  )
 }

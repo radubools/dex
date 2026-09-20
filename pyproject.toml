@@ -19,6 +19,14 @@ dependencies = [
     # have had the login path import something that is not there -- exactly the
     # asyncpg mistake again.
     "httpx>=0.27",
+    # Reading a PDF's bookmark tree and its per-page text, for the survey that
+    # plans work out of an uploaded document. Pure Python, so it adds no build
+    # step and no binary to the image.
+    "pypdf>=5.0",
+    # Heading trees out of uploaded and fetched HTML. Already present as a
+    # transitive dependency; declared because `dex.sources` imports it
+    # directly, which is the asyncpg mistake recorded above.
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]

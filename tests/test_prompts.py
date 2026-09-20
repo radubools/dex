@@ -21,7 +21,11 @@ def brief(task_dir: Path) -> str:
 
 def test_the_project_guide_is_part_of_the_brief():
     text = brief(ALGORITHMS / "two-sum")
-    assert "# Project instructions" in text
+    # Two guides now: the common one, then this project's own. They were one
+    # file copied per project, which meant four copies of the same 289 lines
+    # drifting apart.
+    assert "# How work is done here" in text
+    assert "# What this project produces" in text
     # The agent is told, not left to discover.
     assert "manim" in text.lower()
 
@@ -111,22 +115,36 @@ def test_a_project_wide_sweep_can_promote_a_utility_too():
         project_wide=True,
     )
     assert "do not create directories" in text
-    assert "`utils/` is the one exception" in text
+    # Not spanning the line wrap: the brief is hard-wrapped at 79 columns.
+    assert "A skill's `utils/` is" in text
+    assert "the one exception" in text
     assert "utils/API.md" in text
 
 
-def test_the_guides_define_the_protocol_the_brief_points_at():
-    """The brief defers to the project instructions, so they must carry it."""
-    for project in ("algorithms", "yoga"):
-        guide = (REPO / "assets" / project / "AGENTS.md").read_text(encoding="utf-8")
+def test_the_common_guide_defines_the_protocol_the_brief_points_at():
+    """The brief defers to the instructions, so they must carry the protocol.
+
+    One file now, not four copies of it. Read once here rather than per
+    project, which is the duplication that made a fix to one guide reach
+    nobody else.
+    """
+    for project in ("common",):
+        guide = (REPO / "AGENTS.common.md").read_text(encoding="utf-8")
         # The generated index, not the modules: a tenth of the bytes.
         assert "Shared utilities" in guide, project
         assert "utils/API.md" in guide, project
-        assert "dex.tools.utils_api" in guide, project
         # Ask at the end, with the operator's two options.
         assert "prove it first, then ask at the end" in guide, project
         assert "dex answers this" in guide, project
-        assert "Put it in the project `utils/`" in guide, project
+        # A helper is promoted into a *skill*. The project's own `utils/` is
+        # materialised from the enabled skills, so a module written there is
+        # undone by the next materialise and reaches no other project — which
+        # is the mistake the wording exists to prevent.
+        assert "Put it in the `<skill>` skill" in guide, project
+        assert "skills/<skill>/utils/" in guide, project
+        # And dex regenerates the index now, so the guide must not send the
+        # task to do it by hand.
+        assert "dex.tools.utils_api" not in guide, project
         # Utilities general enough that tasks are not forever editing them.
         assert "Keep them general" in guide, project
         assert "Return data, not verdicts or prose" in guide, project
@@ -155,14 +173,34 @@ def test_declining_a_promotion_is_recorded_so_it_is_not_re_asked():
     assert "leave `utils/` as you found\n  it" in text
 
 
-def test_a_new_project_starts_with_the_protocol():
+def test_a_new_project_starts_with_a_skeleton_not_the_protocol():
+    """The template seeds only what is particular to a project.
+
+    The protocol — environment, data directory, viewers, the sharing rules —
+    is read from the common guide, so copying it into every new project is
+    exactly the duplication this removed.
+    """
     from dex.projects import starter_guide
 
     guide = starter_guide(REPO, "Demo", "A demo.")
-    assert "Shared utilities" in guide
-    assert "mcp__dex__utility_proposals_enabled" in guide
-    assert "Do not ask" in guide
-    assert "Kept local" in guide
+    assert "## What to produce" in guide
+    assert "## Conventions" in guide
+    assert "Shared utilities" not in guide
+    assert len(guide.splitlines()) < 40, "a seed, not a protocol"
+
+
+def test_the_common_guide_carries_the_protocol():
+    """Whatever left the project guides has to be somewhere, and this is it."""
+    common = (REPO / "AGENTS.common.md").read_text(encoding="utf-8")
+    for expected in (
+        "Shared utilities",
+        "utils/API.md",
+        "mcp__dex__utility_proposals_enabled",
+        "prove it first, then ask at the end",
+        "Put it in the `<skill>` skill",
+        "skills/<skill>/utils/",
+    ):
+        assert expected in common, expected
 
 
 def test_narration_files_are_recognised_as_assets():
@@ -229,3 +267,92 @@ def test_the_design_brief_makes_it_look_before_it_writes():
     # persists across a long conversation.
     assert "Look before you write" in DESIGN_SYSTEM
     assert "Check what you wrote" in DESIGN_SYSTEM
+
+
+def test_the_promotion_path_carries_the_version():
+    """A skill's directory is `name@version`, and only that path is writable.
+
+    A brief naming `skills/yoga-figure/utils/` sends a task somewhere that does
+    not exist, and the permission policy refuses the write — so the path in the
+    brief has to be the one the runner actually allows.
+    """
+    text = generation_prompt(
+        problem="x",
+        task_dir=ALGORITHMS,
+        python=Path("/w/.venv/bin/python"),
+        manim_available=False,
+        skills=[("figure", "Geometry.", "/w/skills/figure@1fc7b2", True)],
+    )
+    # The versioned path, because that is the only one the permission policy
+    # allows — and the SKILL.md beside it, which is the second tier.
+    assert "Read `/w/skills/figure@1fc7b2/SKILL.md`." in text
+    assert "`/w/skills/figure@1fc7b2/utils/`" in text
+    assert "skills/figure/utils" not in text
+
+
+def test_a_widget_only_skill_is_listed_but_not_offered_for_promotion():
+    """Its SKILL.md is worth reading; there is nowhere in it to put a module."""
+    text = generation_prompt(
+        problem="x",
+        task_dir=ALGORITHMS,
+        python=Path("/w/.venv/bin/python"),
+        manim_available=False,
+        skills=[("viewer", "Draws a pose.", "/w/skills/viewer@aaaaaa", False)],
+    )
+    assert "Read `/w/skills/viewer@aaaaaa/SKILL.md`." in text
+    assert "Promote a helper" not in text
+
+
+def test_a_skill_with_no_utils_is_not_offered_for_promotion():
+    """A widget-only skill has nowhere to put a module."""
+    text = generation_prompt(
+        problem="x",
+        task_dir=ALGORITHMS,
+        python=Path("/w/.venv/bin/python"),
+        manim_available=False,
+        skills=[],
+    )
+    assert "Skills enabled" not in text
+
+
+# ------------------------------------------------- the generated index
+
+
+def test_the_index_says_which_skill_a_module_came_from(tmp_path):
+    """`utils/` is materialised from several skills, and a promotion targets one.
+
+    The brief lists the skills and their paths; the index lists the module
+    names a reader actually has in hand. Without the attribution nothing joins
+    the two, so a task wanting to add a function beside `rig` cannot tell which
+    skill to write it into.
+    """
+    import json
+
+    from dex import skills
+    from dex.tools.utils_api import render, providers
+
+    staged = tmp_path / "skills" / "figure" / "new"
+    (staged / "utils").mkdir(parents=True)
+    (staged / "utils" / "rig.py").write_text('"""Place a limb."""\n\n\ndef lean(x):\n    return x\n')
+    (staged / skills.MANIFEST_NAME).write_text(json.dumps({"name": "figure"}) + "\n")
+    skills.publish(skills.read(staged))
+
+    project = tmp_path / "assets" / "demo"
+    project.mkdir(parents=True)
+    skills.materialise(tmp_path, project, ["figure"])
+
+    text = render(project / "utils", providers(project))
+    assert "## `rig` — from `figure`" in text
+    assert "lean(x)" in text
+
+
+def test_a_module_from_no_skill_is_still_indexed(tmp_path):
+    """Dropped in by hand, or an install mid-migration. It gets no attribution."""
+    from dex.tools.utils_api import render
+
+    utils = tmp_path / "utils"
+    utils.mkdir()
+    (utils / "loose.py").write_text('"""Local."""\n\n\ndef f():\n    pass\n')
+    text = render(utils, {})
+    assert "## `loose`" in text
+    assert "from `" not in text

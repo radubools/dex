@@ -104,6 +104,11 @@ flowchart TD
   task's own directory. A project-wide task's directory is the whole project.
 - A design turn adds `widgets/` as an **extra writable root**, because widget
   code is shared across projects and cannot live inside any one of them.
+- **Every** task adds `datasets/<project>/` as an extra writable root — not
+  only tasks that were given an upload. A task that downloads a source, or
+  builds an index beside one, is doing the work it was asked to do; one that
+  had to ask before touching it would stop on its first real step. See
+  [13](13_source_material.md).
 - The Bash check is on the **first word**, so any chaining or substitution
   character escalates — it could smuggle a second command past the check.
 - The program is matched by **basename**, so the guides name
@@ -314,12 +319,22 @@ said *archived*, which made archiving look like it did nothing.
 
 ```mermaid
 flowchart LR
-    T([Task]) --> D{"scope == design?"}
-    D -- no --> G["generation_prompt<br/>project AGENTS.md prepended ·<br/>existing files noted ·<br/>{python} {task_dir} {workspace} filled"]
-    D -- yes --> DP["design_prompt<br/>guide · history · message ·<br/>look before you write ·<br/>build and test widgets"]
+    T([Task]) --> S{scope}
+    S -->|package / project| G["generation_prompt<br/>project AGENTS.md prepended ·<br/>existing files noted ·<br/>{python} {task_dir} {workspace} filled"]
+    S -->|design| DP["design_prompt<br/>guide · history · message ·<br/>look before you write ·<br/>build and test widgets"]
+    S -->|survey| SV["survey_prompt<br/>message · attachments · links · guide"]
     G --> SYS1["+ GENERATION_SYSTEM"]
     DP --> SYS2["+ DESIGN_SYSTEM"]
+    SV --> SYS3["+ SURVEY_SYSTEM<br/>allowed_tools = the five survey tools"]
 ```
+
+A **survey** is the one scope whose tools are named rather than judged.
+`allowed_tools` is set to the five survey tool names alone — no Read, no Bash, no
+Grep — so the permission callback above never has an opportunity to allow
+anything else. That is what makes "a thousand-page document never enters the
+context" a property of the run rather than a request in a prompt. It also caps
+at 24 turns: a survey that has not converged by then is not going to.
+See [14](14_survey_and_anchors.md).
 
 The generation brief deliberately says nothing about *what* to build. That is
 the project guide's job; a deliverable spec baked in at this level once applied

@@ -96,14 +96,14 @@ export function UserAdmin({
               {roles.map((r) => (
                 <div key={r.role}>
                   <dt>
-                    <span className={`role-pill ${r.role}`}>{r.role}</span>
+                    <span className={`role-pill role-${r.role}`}>{r.role}</span>
                   </dt>
                   <dd>{r.description}</dd>
                 </div>
               ))}
               <div>
                 <dt>
-                  <span className="role-pill none">no role</span>
+                  <span className="role-pill role-none">no role</span>
                 </dt>
                 <dd>
                   Signed in and not authorised — they see a holding page and nothing else. This
@@ -148,7 +148,7 @@ export function UserAdmin({
                   ) : (
                     <span className="user-avatar placeholder" aria-hidden="true" />
                   )}
-                  <span>
+                  <span className="user-name">
                     <strong>{user.name || user.username || user.email}</strong>
                     {/* The identifier they actually sign in with. A local
                         account's email is synthetic, so showing it would be

@@ -99,14 +99,14 @@ export function Feed({
 
   if (error) {
     return (
-      <section className="feed">
+      <section className="review-feed">
         <p className="error" style={{ padding: 16 }}>{error}</p>
       </section>
     )
   }
 
   return (
-    <section className="feed" aria-label="Review feed">
+    <section className="review-feed" aria-label="Review feed">
       <div className="feed-status">
         <span className="muted small">
           {data?.project}

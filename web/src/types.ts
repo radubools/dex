@@ -42,14 +42,59 @@ export type Task = {
   /** Stopped short — paused, failed or cancelled — so it can go again. */
   canContinue: boolean
   canArchive: boolean
+  /**
+   * Where in the operator's own material this task's work came from, when a
+   * survey anchored it there. Shown in the Files tab above what the task
+   * produced: the input first, then a divider, then the output.
+   */
+  anchor?: SourceAnchor | null
 }
 
-export type PlannedTask = { title: string; problem: string; slug: string }
+/**
+ * Where in an attached source a task's work is, when a survey found it. Kept
+ * in the source's own terms — a PDF has pages, a document has lines — because
+ * flattening them to one number reads as nothing to the person clicking it.
+ */
+export type SourceAnchor = {
+  source: string
+  label: string
+  page?: number
+  endPage?: number
+  line?: number
+  endLine?: number
+  heading?: string
+  sheet?: string
+  url?: string
+}
+
+export type PlannedTask = {
+  title: string
+  problem: string
+  slug: string
+  anchor?: SourceAnchor | null
+}
+
+/** What the pre-planning pass found in the attached material. */
+export type SurveySegment = {
+  title: string
+  summary: string
+  extent: string
+  anchor: SourceAnchor | null
+}
+
+export type Survey = {
+  segments: SurveySegment[]
+  overview: string
+  gaps: string
+  single: boolean
+}
 
 export type Plan = {
   tasks: PlannedTask[]
   notes: string
   needsClarification: string
+  /** Concrete answers offered with the question, as buttons. */
+  options?: string[]
 }
 
 export type ThreadMessage = {
@@ -61,12 +106,35 @@ export type ThreadMessage = {
     tasks?: (PlannedTask | Task)[]
     guideChanged?: boolean
     project?: string
+    /**
+     * The run that wrote this message, when one did. A design turn is a task
+     * with no chip in the thread, so this is the only way back to its
+     * activity once it has finished.
+     */
+    taskId?: string
+    /** Whether that run failed, so the link says so. */
+    failed?: boolean
     /** The full failure, when this message is an error; the body is the summary. */
     detail?: string
     /** Which plan in a sequence this is, when one request needed several. */
     batch?: number
+    /** The survey this reply reports, when a pre-planning pass produced it. */
+    survey?: Survey
+    /**
+     * Files attached to this message, by name in the project's `datasets/`
+     * directory. The transcript keeps the names only — the agent was given the
+     * absolute paths, but showing a wall of them to a reader is noise.
+     */
+    attachments?: string[]
   }
   ts: number
+}
+
+/** Files stored in a project's `datasets/` directory, and where they went. */
+export type UploadBatch = {
+  project: string
+  directory: string
+  files: { name: string; path: string; bytes: number }[]
 }
 
 export type ThreadKind = 'chat' | 'project_design'
@@ -284,12 +352,6 @@ export type GuideResponse = { project: Project; path: string; text: string }
 
 export type DesignReply = { summary: string; changed: boolean }
 
-export type Pose = {
-  pose: string
-  display_name?: string
-  landmarks: Record<string, [number, number, number]>
-}
-
 /** One generated package in a project, as the library lists it. */
 export type PackageEntry = {
   slug: string
@@ -325,3 +387,37 @@ export type TokenTotals = {
   counted: number
   with_cost: number
 }
+
+
+/** One version of a skill: what it carries, and when it was published. */
+export type SkillVersion = {
+  name: string
+  description: string
+  /** Short content hash; it changes whenever anything in the skill does. */
+  version: string
+  /** Seconds since the epoch, when that version was published. */
+  updated: number
+  /** Python packages its utils import, beyond the standard library. */
+  requires: string[]
+  modules: string[]
+  widgets: string[]
+}
+
+/**
+ * A capability, with every version of it on disk.
+ *
+ * One entry per *name*: an install that has published a skill ten times has
+ * one capability, not ten, and the versions are a dropdown rather than ten
+ * rows of clutter.
+ */
+export type Skill = {
+  name: string
+  description: string
+  /** The newest version — what the dropdown opens on. */
+  current: string
+  versions: SkillVersion[]
+  /** Which version each project is on, keyed by project slug. */
+  projects: Record<string, string>
+}
+
+export type SkillsResponse = { projects: string[]; skills: Skill[] }

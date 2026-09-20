@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -39,7 +39,7 @@ from .identity import (
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation
-from . import designer
+from . import designer, skills, surveyor, uploads
 from .feed import ReviewStore, discover
 from .migrate import adopt_existing_project, ensure_design_thread
 from .projects import ProjectStore
@@ -110,10 +110,20 @@ class SubmitRequest(BaseModel):
     #: An existing package this rewrites; it writes into that directory rather
     #: than creating one beside it.
     updates: str | None = None
+    #: A package this task fills alongside its siblings. Unlike `updates` it
+    #: need not exist yet. Ignored when `updates` is set: that one names a
+    #: directory known to be there.
+    package: str | None = None
     #: "package" (the default) or "project" for a uniform edit across every
     #: package the project already has. Anything else is read as "package":
     #: widening what a task may touch should take saying so exactly.
     scope: str = "package"
+    #: Upload batches whose files this task may read as sources.
+    uploads: list[str] = Field(default_factory=list)
+    #: Where in that material this task's work is, as the survey anchored it:
+    #: a page range of a PDF, a section of a document, a URL. Round-trips
+    #: through the UI untouched — it is the survey's, not the browser's.
+    anchor: dict[str, Any] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -128,6 +138,10 @@ class ConfirmRequest(BaseModel):
 
     tasks: list[SubmitRequest]
     thread_id: str | None = None
+    #: Attachments from the message that produced this plan. Applied to every
+    #: task in it: the operator attached them to the request, not to one task
+    #: the planner happened to split out.
+    uploads: list[str] = Field(default_factory=list)
 
 
 class ThreadCreateRequest(BaseModel):
@@ -146,6 +160,8 @@ class GuideRequest(BaseModel):
 
 class ThreadMessageRequest(BaseModel):
     text: str = Field(min_length=1)
+    #: Upload batches attached to this message.
+    uploads: list[str] = Field(default_factory=list)
 
 
 class SettingsRequest(BaseModel):
@@ -187,6 +203,8 @@ class ReviewRequest(BaseModel):
 
 class TaskMessageRequest(BaseModel):
     text: str = Field(min_length=1)
+    #: Upload batches attached to this note.
+    uploads: list[str] = Field(default_factory=list)
 
 
 class AnswerRequest(BaseModel):
@@ -242,6 +260,33 @@ async def _limit_status(settings: SettingsStore) -> dict[str, Any]:
         # What dex has spent finding this out, so polling is never invisible.
         "probe": await settings.get(SettingsStore.LIMIT_PROBE),
     }
+
+
+def _without_gone_tasks(
+    messages: list[dict[str, Any]], live: set[str]
+) -> list[dict[str, Any]]:
+    """Drop chips for tasks the thread no longer has.
+
+    A "started N tasks" message stores a snapshot of each task as it was when
+    the message was written, and the UI renders a chip from that snapshot when
+    the store has nothing newer. So a task that was archived — or deleted —
+    went on showing the state it had at the moment it was announced, usually
+    `queued`, with no way to clear it: archiving appeared to do nothing at all.
+    The thread's own task list is the authority on what still exists.
+    """
+    kept: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("kind") != "tasks":
+            kept.append(message)
+            continue
+        data = message.get("data") or {}
+        listed = data.get("tasks") or []
+        remaining = [t for t in listed if isinstance(t, dict) and t.get("id") in live]
+        if listed and not remaining:
+            # Every task it announced is gone; the sentence describes nothing.
+            continue
+        kept.append({**message, "data": {**data, "tasks": remaining}})
+    return kept
 
 
 def create_app(config: Config = CONFIG) -> FastAPI:
@@ -483,6 +528,26 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "rules": [r.to_json() for r in widgets.rules_for(config.assets_dir, chosen)],
         }
 
+    @app.get(
+        "/api/widgets/{skill}/{version}/{widget}/index.js", dependencies=guard
+    )
+    async def widget_bundle(skill: str, version: str, widget: str) -> FileResponse:
+        """One widget's built ES module, straight out of its skill.
+
+        The browser imports exactly this inside a sandboxed frame, so it is
+        served as JavaScript and cached hard: the URL carries the bundle's
+        mtime, so a rebuilt widget is a different URL and an unchanged one is
+        never re-fetched.
+        """
+        found = widgets.bundle_path(config.workspace, skill, version, widget)
+        if found is None:
+            raise HTTPException(404, "no such widget")
+        return FileResponse(
+            found,
+            media_type="text/javascript",
+            headers={"cache-control": "private, max-age=31536000, immutable"},
+        )
+
     @app.get("/api/widgets/resolve", dependencies=guard)
     async def resolve_widget(
         path: str = Query(...), access: Access = Depends(access_dep)
@@ -546,6 +611,73 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         projects.write_guide(slug, body.text)
         bus.publish(Event(type="guide", data={"project": slug}, project=slug))
         return {"ok": True, "text": projects.read_guide(slug)}
+
+    @app.get("/api/projects/{slug}/skills", dependencies=slug_guard)
+    async def project_skills(slug: str) -> dict[str, Any]:
+        """The skills this project has on, for the design thread's picker.
+
+        Narrower than `GET /api/skills`, which is the admin's list of
+        everything: this is what *this* project reads, which is what somebody
+        editing its instructions needs to see.
+        """
+        if await projects.get(slug) is None:
+            raise HTTPException(404, "no such project")
+        on = skills.read_enabled(config.project_dir(slug)).skills
+        return {
+            "skills": [
+                {
+                    **skill.to_json(),
+                    "doc": (skill.path / "SKILL.md").is_file(),
+                }
+                for skill in skills.all_skills(config.workspace)
+                if on.get(skill.name) == skill.version
+            ]
+        }
+
+    @app.get("/api/skills/{name}/doc", dependencies=guard)
+    async def read_skill_doc(
+        name: str, version: str = Query(default="")
+    ) -> dict[str, Any]:
+        skill = skills.find(config.workspace, name, version)
+        if skill is None:
+            raise HTTPException(404, "no such skill")
+        doc = skill.path / "SKILL.md"
+        return {
+            "name": skill.name,
+            "version": skill.version,
+            "path": str(doc),
+            "text": doc.read_text(encoding="utf-8") if doc.is_file() else "",
+        }
+
+    @app.put("/api/skills/{name}/doc", dependencies=[Depends(design_dep)])
+    async def write_skill_doc(
+        name: str, body: GuideRequest, version: str = Query(default="")
+    ) -> dict[str, Any]:
+        """Edit a skill's instructions, by publishing a new version of it.
+
+        Never in place. A published version is what some project is running on
+        and what another install may have copied, and its version *is* a hash
+        of its contents — editing it would leave the name describing something
+        that no longer exists. So this forks, writes the fork, and publishes,
+        which is the same path the design chat takes.
+        """
+        source = skills.find(config.workspace, name, version)
+        if source is None:
+            raise HTTPException(404, "no such skill")
+
+        draft = skills.fork(config.workspace, name, source.version)
+        (draft.path / "SKILL.md").write_text(body.text, encoding="utf-8")
+        try:
+            done = skills.adopt(config.workspace, config.assets_dir)
+        except skills.Collision as exc:
+            raise HTTPException(409, str(exc)) from exc
+        published = next((d for d in done if d[0] == name), None)
+        if published is None:
+            # The text was identical, so there was nothing to publish.
+            return {"ok": True, "version": source.version, "moved": [], "text": body.text}
+        _, new_version, moved = published
+        log.info("published %s@%s from a guide edit, moved %s", name, new_version, moved)
+        return {"ok": True, "version": new_version, "moved": moved, "text": body.text}
 
     @app.get("/api/settings", dependencies=guard)
     async def read_settings(access: Access = Depends(access_dep)) -> dict[str, Any]:
@@ -670,6 +802,88 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         access.check(chosen)
         return {"review": await ReviewStore(db).record(chosen, slug, body.rating)}
 
+    # ---------------------------------------------------------------- skills
+
+    @app.get("/api/skills", dependencies=admin_only)
+    async def list_skills() -> dict[str, Any]:
+        """Every skill, its versions, and which version each project is on.
+
+        Grouped by name rather than one entry per version: an install that has
+        published a skill ten times has one capability, not ten, and a list
+        that showed ten rows would bury the one thing an operator acts on.
+        The versions ride along for the dropdown.
+
+        Admin-only, like costs and user administration: enabling a skill
+        changes what every task in a project may import.
+        """
+        slugs = [p.slug for p in await projects.list()]
+        on: dict[str, dict[str, str]] = {}
+        for slug in slugs:
+            for name, version in skills.read_enabled(config.project_dir(slug)).skills.items():
+                on.setdefault(name, {})[slug] = version
+
+        grouped: dict[str, list[Any]] = {}
+        for skill in skills.all_skills(config.workspace):
+            grouped.setdefault(skill.name, []).append(skill)
+
+        listed = []
+        for name, versions in sorted(grouped.items()):
+            # Newest first, so the dropdown opens on the current version and
+            # follows a publish without anybody choosing again.
+            versions.sort(key=lambda s: s.updated, reverse=True)
+            listed.append({
+                "name": name,
+                "description": versions[0].description,
+                "current": versions[0].version,
+                "versions": [s.to_json() for s in versions],
+                # Which version each project is on, if any.
+                "projects": on.get(name, {}),
+            })
+        return {"projects": slugs, "skills": listed}
+
+    @app.post("/api/skills/{name}/projects/{slug}", dependencies=admin_only)
+    async def enable_skill(
+        name: str, slug: str, version: str = Query(default="")
+    ) -> dict[str, Any]:
+        return await _set_skill(name, slug, version, on=True)
+
+    @app.delete("/api/skills/{name}/projects/{slug}", dependencies=admin_only)
+    async def disable_skill(
+        name: str, slug: str, version: str = Query(default="")
+    ) -> dict[str, Any]:
+        return await _set_skill(name, slug, version, on=False)
+
+    async def _set_skill(
+        name: str, slug: str, version: str, *, on: bool
+    ) -> dict[str, Any]:
+        """Turn one version of one skill on or off for a project.
+
+        Enabling a version replaces whatever version of that name was on:
+        a project is on one version of a skill, and moving between them is
+        what the version in the directory name exists for.
+        """
+        if await projects.get(slug) is None:
+            raise HTTPException(404, "no such project")
+        if skills.find(config.workspace, name, version) is None:
+            raise HTTPException(404, "no such skill")
+
+        project_dir = config.project_dir(slug)
+        current = dict(skills.read_enabled(project_dir).skills)
+        if on:
+            current[name] = version
+        else:
+            current.pop(name, None)
+        try:
+            now = skills.materialise(
+                config.workspace, project_dir, list(current), versions=current
+            )
+        except skills.Collision as exc:
+            # Named, not resolved: two skills claiming one module is a rename,
+            # and guessing a winner would hide which one is in use.
+            raise HTTPException(409, str(exc)) from exc
+        log.info("%s skill %s for %s", "enabled" if on else "disabled", name, slug)
+        return {"project": slug, "skills": now.skills}
+
     @app.get("/api/costs", dependencies=admin_only)
     async def costs(
         period: str = Query(default="week"),
@@ -696,17 +910,109 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             ]
         }
 
+    @app.post("/api/uploads", dependencies=can_run)
+    async def upload_sources(
+        files: list[UploadFile] = File(...),
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """Store files for a task to read as sources.
+
+        One batch per call, so several files chosen together stay together and
+        a brief can name them as one set. Nothing is parsed here: what a PDF or
+        a recording means is the agent's problem, and guessing at it now would
+        only be a guess that has to be right.
+        """
+        chosen = await resolve_project(project)
+        access.check(chosen)
+        target = config.project_datasets(chosen)
+        stored: list[uploads.Upload] = []
+        for item in files:
+            data = await item.read()
+            if not data:
+                continue
+            if len(data) > uploads.MAX_BYTES:
+                raise HTTPException(
+                    413,
+                    f"{item.filename or 'file'} is "
+                    f"{len(data) / 1_048_576:.0f} MB; the limit is "
+                    f"{uploads.MAX_BYTES // 1_048_576} MB",
+                )
+            stored.append(uploads.store(target, item.filename or "attachment", data))
+        if not stored:
+            raise HTTPException(400, "no files were uploaded")
+        log.info("stored %d source file(s) in %s", len(stored), target)
+        return {
+            "project": chosen,
+            "directory": str(target),
+            "files": [u.to_json() for u in stored],
+        }
+
+    @app.get("/api/datasets", dependencies=guard)
+    async def list_sources(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """What is in a project's data directory, for the preview pane."""
+        chosen = await resolve_project(project)
+        access.check(chosen)
+        root = config.project_datasets(chosen)
+        files = [
+            {"name": f.name, "bytes": f.stat().st_size, "mtime": f.stat().st_mtime}
+            for f in sorted(root.glob("*"))
+            if f.is_file() and not f.name.startswith(".")
+        ]
+        return {"project": chosen, "files": files}
+
+    @app.get("/api/datasets/raw", dependencies=guard)
+    async def raw_source(
+        name: str = Query(...),
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> FileResponse:
+        """One uploaded source file, for the viewer to render.
+
+        Served inline rather than as an attachment: the point is that the
+        browser shows the PDF in a frame, and a `content-disposition:
+        attachment` header makes it download instead. The name is re-resolved
+        against the project's own directory, so a `../` in it reaches nothing.
+        """
+        chosen = await resolve_project(project)
+        access.check(chosen)
+        root = config.project_datasets(chosen)
+        found = uploads.resolve(root, [name])
+        if not found:
+            raise HTTPException(404, "not a file in this project's data")
+        target = found[0].path
+        media_type, _ = mimetypes.guess_type(target.name)
+        return FileResponse(
+            target,
+            media_type=media_type or "application/octet-stream",
+            # Both halves matter. Without `filename` starlette writes no
+            # content-disposition at all, so a download has no name to save
+            # under; with it but without `inline` the default is `attachment`,
+            # and the frame downloads the PDF instead of rendering it. The
+            # filename itself may be non-ASCII, which starlette encodes.
+            filename=target.name,
+            content_disposition_type="inline",
+        )
+
     @app.post("/api/tasks", dependencies=can_run)
     async def submit(
         body: SubmitRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
         chosen_project = await resolve_project(body.project)
         access.check(chosen_project)
+        sources = config.project_datasets(chosen_project)
         task = await tasks.submit(
-            body.problem, body.title, body.slug, body.thread_id,
+            uploads.with_sources(
+                body.problem, uploads.resolve(sources, body.uploads), sources
+            ),
+            body.title, body.slug, body.thread_id,
             project=chosen_project,
-            output_slug=body.updates or None,
+            output_slug=body.updates or body.package or None,
             scope=body.scope,
+            anchor=body.anchor,
         )
         if body.thread_id:
             await threads.touch(body.thread_id)
@@ -814,7 +1120,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         It is held while the task runs and delivered when it stops, as the brief
         for a follow-up attempt.
         """
-        message = await tasks.queue_message(task_id, body.text)
+        # Named in the note itself: the note becomes the follow-up's brief, so
+        # this is what puts the paths in front of the agent that reads it.
+        owner = await tasks.tasks.get(task_id)
+        sources = config.project_datasets(owner.project if owner else None)
+        note = uploads.with_sources(
+            body.text, uploads.resolve(sources, body.uploads), sources
+        )
+        message = await tasks.queue_message(task_id, note)
         if message is None:
             raise HTTPException(404, "no such task")
         return {"message": message}
@@ -880,13 +1193,25 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         # is the route that actually spends money, so it is checked even though
         # the plan that produced it already was.
         access.check(project)
+        # Attached to the request, so they belong to every task the planner
+        # split it into rather than to whichever one happens to be first.
+        sources = config.project_datasets(project)
+        attached = uploads.resolve(
+            sources, body.uploads + [u for t in body.tasks for u in t.uploads]
+        )
         created = [
             await tasks.submit(
-                t.problem, t.title, t.slug, body.thread_id, project=project,
+                uploads.with_sources(t.problem, attached, sources),
+                t.title, t.slug, body.thread_id, project=project,
                 # Rewriting a package means writing into its directory, not
-                # beside it. The task still gets a slug of its own for identity.
-                output_slug=t.updates or None,
+                # beside it — and so does joining siblings in a shared one. The
+                # task still gets a slug of its own for identity.
+                output_slug=t.updates or t.package or None,
                 scope=t.scope,
+                # What the operator's own material contributed to this task.
+                # It came from the survey, through the plan, and is kept on the
+                # task so the Files tab can show the input beside the output.
+                anchor=t.anchor,
             )
             for t in body.tasks
         ]
@@ -956,9 +1281,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         # against tasks the browser had never been sent, showed them as never
         # started, and offered to run work that was already queued.
         stored = await tasks.tasks.list(thread_id=thread_id, limit=THREAD_TASK_LIMIT)
+        payload = thread.to_json()
+        payload["messages"] = _without_gone_tasks(
+            payload.get("messages") or [], {t.id for t in stored}
+        )
         return {
             "thread": {
-                **thread.to_json(),
+                **payload,
                 "costUsd": await CostStore(db).by_thread(thread_id),
                 "planning": thread_id in planning_threads,
             },
@@ -998,12 +1327,118 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         design = thread.kind == "project_design"
         access.require(CAP_DESIGN if design else CAP_RUN_TASKS)
 
-        # Published only once the capability has been confirmed, or a viewer's
-        # refused message would still be sitting in the transcript.
-        await publish_message(thread_id, ThreadMessage(role="user", kind="text", text=body.text))
+        # The transcript keeps what was typed; the model is given the paths as
+        # well. Putting the paths in the transcript would make every reread of
+        # the conversation carry a wall of absolute paths.
+        sources = config.project_datasets(thread.project)
+        attached = uploads.resolve(sources, body.uploads)
+        await publish_message(
+            thread_id,
+            ThreadMessage(
+                role="user", kind="text", text=body.text,
+                data={"attachments": [u.name for u in attached]} if attached else {},
+            ),
+        )
+        prompt = uploads.with_sources(body.text, attached, sources)
         if design:
-            return await _design_turn(thread, body.text)
-        return await _plan_turn(thread, body.text)
+            return await _design_turn(thread, prompt)
+        # Hardcoded, and the same in every project: a message that arrives with
+        # material attached is surveyed before it is planned. No guide gets a
+        # say in it — the plan an operator reads has to mean the same thing
+        # whichever project they happen to be in, and planning from a filename
+        # when the file is right there is guessing.
+        if surveyor.needs_survey(body.text, [u.name for u in attached]):
+            return await _survey_turn(
+                thread, body.text, [u.name for u in attached],
+                surveyor.urls_in(body.text),
+            )
+        return await _plan_turn(thread, prompt)
+
+
+    async def _survey_turn(
+        thread: Any,
+        text: str,
+        attachments: list[str],
+        urls: list[str],
+        ask: str = "",
+        options: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Start the pre-planning pass, as a task.
+
+        A task rather than an inline call because it is a real agent run with
+        tools: as a task it gets the activity surface, the cost accounting and
+        the retry path for free, and the operator can watch it decide. It
+        posts no message of its own — the plan it leads to is the answer, and a
+        placeholder saying "surveying…" would be a second thing in the thread
+        saying what the task chip already says.
+        """
+        project_slug = thread.project or config.default_project
+        # A question the planner wanted asked rides in the message. The survey
+        # is the only step that may ask, so a planner that needs something is
+        # escalated to here rather than putting a sentence in the chat that the
+        # next planning call would not remember.
+        message = (
+            f"{text}\n\nBefore this can be planned, ask the operator: {ask}"
+            + (f"\nLikely answers: {', '.join(options)}." if options else "")
+            if ask
+            else text
+        )
+        payload = json.dumps({
+            "message": message,
+            "attachments": attachments,
+            "urls": urls,
+            "guide": projects.read_guide(project_slug),
+        })
+        task = await tasks.submit(
+            payload,
+            title=(
+                f"Ask: {ask[:60]}" if ask
+                else f"Survey: {text.strip().splitlines()[0][:60] or 'attached sources'}"
+            ),
+            thread_id=thread.id,
+            project=project_slug,
+            scope="survey",
+        )
+        return {"task": task.to_json(config.assets_dir), "survey": {"queued": True}}
+
+    async def _plan_from_survey(task: Any, result: str) -> None:
+        """Plan from a survey that has just finished.
+
+        Called by the runner through the queue. The survey's own account goes
+        into the thread first: it is what the plan is built on, so an operator
+        looking at a task list that surprises them can see the reasoning that
+        produced it without opening the run.
+        """
+        if not task.thread_id:
+            return
+        thread = await threads.get(task.thread_id)
+        if thread is None:
+            return
+        survey = surveyor.parse_survey(result)
+        payload = task.survey_payload()
+
+        # Deliberately not posted to the thread. The survey is working, not an
+        # answer: its whole account is in the task's own activity, where the
+        # operator can read it if they want to. What belongs in the chat is the
+        # plan it led to, and a wall of segments above that plan only buries it.
+        #
+        # The planner is tool-less and never sees the sources, so the survey's
+        # rendering is the only account of them it gets.
+        await _plan_turn(
+            thread,
+            uploads.with_sources(
+                payload["message"],
+                uploads.resolve(
+                    config.project_datasets(task.project), payload["attachments"]
+                ),
+                config.project_datasets(task.project),
+            ),
+            survey=survey.render(),
+            # This plan *is* the escalation's result. Escalating again would
+            # start a second pre-planning task over the same request, and a
+            # third over that one.
+            may_escalate=False,
+        )
 
     async def _design_turn(thread: Any, text: str) -> dict[str, Any]:
         with _planning(thread.id):
@@ -1050,11 +1485,15 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     #: `remaining` what it has not reached yet.
     PLAN_BATCHES = 10
 
-    async def _plan_turn(thread: Any, text: str) -> dict[str, Any]:
+    async def _plan_turn(
+        thread: Any, text: str, survey: str = "", may_escalate: bool = True
+    ) -> dict[str, Any]:
         with _planning(thread.id):
-            return await _plan_turn_inner(thread, text)
+            return await _plan_turn_inner(thread, text, survey, may_escalate)
 
-    async def _plan_turn_inner(thread: Any, text: str) -> dict[str, Any]:
+    async def _plan_turn_inner(
+        thread: Any, text: str, survey: str = "", may_escalate: bool = True
+    ) -> dict[str, Any]:
         project_slug = thread.project or config.default_project
         # Directories only — see the note in `chat_plan`.
         taken = _existing_slugs(config, project_slug)
@@ -1071,7 +1510,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                     async with tasks.chat_limiter:
                         return await plan_from_message(
                             request, config, sorted(taken), model,
-                            project=project_slug, guide=guide,
+                            project=project_slug, guide=guide, survey=survey,
                         )
 
                 plan = await _with_retries("planning", attempt)
@@ -1088,6 +1527,29 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 raise HTTPException(
                     503 if is_auth_error(detail) else 502, message
                 ) from exc
+
+            # A question is not the chat's to ask. The planner is one stateless
+            # call: it cannot follow up, and an answer typed underneath it
+            # reaches a *different* call that remembers none of it — which is
+            # how a link surveyed into twenty parts came back as one task.
+            # Pre-planning can ask, because it parks a task with an activity
+            # pane and carries the answer forward itself, so the question is
+            # handed there. Never from a run that came *out* of pre-planning:
+            # that one has already had its chance to ask.
+            if (
+                may_escalate
+                and plan.needs_clarification
+                and not plan.tasks
+                and first is None
+            ):
+                return await _survey_turn(
+                    thread, text, [], surveyor.urls_in(text),
+                    ask=plan.needs_clarification, options=plan.options,
+                )
+            # Not escalating leaves the old behaviour: the question is posted
+            # as text and the operator replies to it. That is the path for a
+            # run that already came out of pre-planning, which has had its
+            # chance to ask and must not start another round.
 
             reply = ThreadMessage(
                 role="dex",
@@ -1395,6 +1857,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # A follow-up started by a worker (from a queued note) is announced the
     # same way one started from a button is.
     tasks.announce = _announce
+    # The queue hands a finished survey back here, because planning from one
+    # needs the thread store and the planner and the queue has neither.
+    tasks.surveyed = _plan_from_survey
 
     # ------------------------------------------------------------------- ui
 
@@ -1403,9 +1868,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # Built widget bundles. `check_dir=False` so an install with no widgets
     # still starts; the directory can appear later without a restart because
     # StaticFiles resolves each request against the filesystem as it arrives.
-    widgets_root = widgets.widgets_dir(config.workspace)
-    widgets_root.mkdir(parents=True, exist_ok=True)
-    app.mount("/widgets", StaticFiles(directory=widgets_root, check_dir=False), name="widgets")
+    # Widgets are served out of the skills that provide them — see
+    # `/api/widgets/{skill}/{version}/{widget}/index.js` above. There used to
+    # be a `StaticFiles` mount over a top-level `widgets/` directory holding a
+    # materialised copy of each, which meant a bundle could be built in one
+    # place and served from the other. One silently was.
 
     web_dist = config.workspace / "web" / "dist"
     if (web_dist / "index.html").exists():

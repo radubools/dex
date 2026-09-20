@@ -1,0 +1,9 @@
+{
+  "name": "traduceri-sources",
+  "description": "Getting readable text out of a source: cutting extracted document text into CJK-aware paragraph chunks, and pulling the article out of a MediaWiki page as ordered blocks.",
+  "version": "e04a33",
+  "updated": 1789893635.510156,
+  "requires": [
+    "bs4"
+  ]
+}

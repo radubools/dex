@@ -16,7 +16,7 @@ card is the checkpoint between them.
 |---|---|
 | `src/dex/planner.py` | `plan_from_message`, `parse_plan`, salvage of truncated replies |
 | `src/dex/prompts.py` | `PLANNER_SYSTEM`, `planner_prompt` |
-| `src/dex/api.py` | Threads, `_plan_turn`, `/chat/confirm` |
+| `src/dex/api.py` | Threads, `_survey_turn`, `_plan_turn`, `/chat/confirm` |
 | `src/dex/store.py` | `ThreadStore` — threads and messages |
 | `web/src/components/Chat.tsx` | Thread view and plan cards |
 
@@ -59,7 +59,7 @@ classDiagram
 
 | Thread `kind` | Purpose | A message produces |
 |---|---|---|
-| `chat` | Plan and run work | A plan card |
+| `chat` | Plan and run work | A plan card — preceded by a survey when the message brought material |
 | `project_design` | Shape the project itself | A design task — see [05](05_project_design.md) |
 
 | Message `kind` | Rendered as |
@@ -68,6 +68,8 @@ classDiagram
 | `plan` | A plan card with checkboxes and **Run** |
 | `tasks` | "Started N tasks", with task chips |
 | `error` | An error notice |
+
+A clarifying question is no longer among them: it became a task.
 
 **Threads are hidden, never deleted.** Deleting cascaded messages away and
 orphaned tasks, which lost real work when a tap landed in the wrong place.
@@ -113,6 +115,36 @@ sequenceDiagram
 nothing and writes nothing, so it cannot wander into the filesystem. What it
 needs is handed to it: the message, the project's guide, and the directory names
 that already exist.
+
+Which is why it cannot plan out of an attached document by itself — it never
+sees one. When a message arrives with material, a **survey** runs first and its
+segments are handed to the planner in the same way the guide is. The planner
+stays tool-less; the reading happened somewhere else. See
+[14](14_survey_and_anchors.md).
+
+### And it does not ask
+
+One stateless call cannot hold a conversation. A question it asked in the chat
+was answered into a *different* call that remembered nothing of it, so the
+answer changed nothing — a link surveyed into twenty parts came back as one
+task once the operator had answered. A `needs_clarification` with no tasks is
+therefore **escalated into a pre-planning task**, which has the guide, can ask
+with `ask_user`, and carries the answer into the plan itself. `options` seed
+the buttons it offers.
+
+Only the plan comes back to the chat. The asking, and the survey's own account
+of the material, stay in that task's activity.
+
+### Anchors ride through
+
+A task planned from a survey segment carries that segment's `anchor`, copied
+unchanged. It reaches the plan card as a 📍 button that opens the source at
+that page, and is persisted onto the task at confirm so the Files tab can show
+the input beside the output.
+
+The planner is also told to restate the pages in `problem`. The generation
+agent reads only `problem` and never sees the anchor, so a brief that says
+"translate the document" translates all of it.
 
 ### It takes a task slot
 

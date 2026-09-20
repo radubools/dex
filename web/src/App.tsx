@@ -14,6 +14,11 @@ import { ProjectPicker } from './components/ProjectPicker'
 import { SettingsMenu } from './components/SettingsMenu'
 import { ChangePassword, SignIn, Unauthorized } from './components/SignIn'
 import { UserAdmin } from './components/UserAdmin'
+// Three.js is nowhere near this, but the table is admin-only and rarely
+// opened; no reason for it to sit in the first load.
+const SkillAdmin = lazy(() =>
+  import('./components/SkillAdmin').then((m) => ({ default: m.SkillAdmin })),
+)
 import { TaskPanel } from './components/TaskPanel'
 import type { ViewerTarget } from './components/Viewer'
 
@@ -63,6 +68,7 @@ export default function App() {
   /** Who the caller is. null while the first /api/auth/me is in flight. */
   const [me, setMe] = useState<Me | null>(null)
   const [showUsers, setShowUsers] = useState(false)
+  const [showSkills, setShowSkills] = useState(false)
   /** The change-my-password form, opened from the settings menu. */
   const [showPassword, setShowPassword] = useState(false)
   const [planning, setPlanning] = useState(false)
@@ -234,12 +240,18 @@ export default function App() {
     listThreads(project).then(setThreads).catch(() => {})
   }, [project])
 
+  // What the last message attached, so the plan it produces can hand the same
+  // files to every task it creates. A plan is confirmed in a separate request,
+  // which does not otherwise know the message existed.
+  const pendingUploads = useRef<string[]>([])
+
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, uploads: string[] = []) => {
       if (!threadId) return
       setPlanning(true)
+      pendingUploads.current = uploads
       try {
-        await sendMessage(threadId, text)
+        await sendMessage(threadId, text, uploads)
         refreshThreads()
       } catch (err) {
         // The server already recorded the failure as a thread message; this
@@ -255,7 +267,7 @@ export default function App() {
   const confirm = useCallback(
     async (tasks: PlannedTask[]) => {
       if (!threadId) return
-      const created = await confirmPlan(threadId, tasks)
+      const created = await confirmPlan(threadId, tasks, pendingUploads.current)
       dispatch({ type: 'tasks', tasks: created })
       // One task is unambiguous: opening it is what you wanted to look at.
       // Several are not — picking the first would hide the other twenty-nine
@@ -335,7 +347,7 @@ export default function App() {
   return (
     <div
       className={`app ${activeTask ? 'with-panel' : ''} ${
-        viewing || showCosts || showGuide || showUsers ? 'with-viewer' : ''
+        viewing || showCosts || showGuide || showUsers || showSkills ? 'with-viewer' : ''
       }`}
     >
       <aside className={`threads ${drawerOpen ? 'open' : ''}`}>
@@ -471,6 +483,7 @@ export default function App() {
             onOpenCosts={() => setShowCosts(true)}
             me={me}
             onOpenUsers={() => setShowUsers(true)}
+            onOpenSkills={() => setShowSkills(true)}
             onChangePassword={() => setShowPassword(true)}
             onAutoApprove={(enabled) => {
               // Optimistic: the server echoes the change back over the stream.
@@ -523,6 +536,20 @@ export default function App() {
             setActiveTaskId(id)
             setViewing(null)
           }}
+          onOpenSource={(name, anchor) => {
+            // The same pane the activity and the assets use.
+            //
+            // The *thread's* project, not the picker's. The server filed the
+            // upload under the project the thread belongs to, so reading it
+            // back under whatever is selected now would look in the wrong
+            // directory the moment the two differ.
+            setActiveTaskId(null)
+            setCameFrom(null)
+            const owner = threads.find((t) => t.id === threadId)?.project
+            setViewing({
+              kind: 'source', project: owner ?? project ?? '', name, anchor,
+            })
+          }}
           activeTaskId={activeTaskId ?? undefined}
         />
           </>
@@ -530,7 +557,8 @@ export default function App() {
 
         {view === 'chat' && (
           <Composer
-            onSend={(text) => void send(text)}
+            onSend={(text, uploads) => void send(text, uploads)}
+            project={project ?? undefined}
             // Which capability this needs depends on the thread, exactly as it
             // does on the server: speaking in a design thread rewrites the
             // guide and authors widgets, speaking in a chat thread queues
@@ -565,7 +593,7 @@ export default function App() {
         />
       )}
 
-      {viewing && !showCosts && !showGuide && !showUsers && (
+      {viewing && !showCosts && !showGuide && !showUsers && !showSkills && (
         <Suspense fallback={null}>
           <Viewer
             target={viewing}
@@ -636,6 +664,14 @@ export default function App() {
           me={me.user}
           onClose={() => setShowUsers(false)}
         />
+      )}
+      {/* Gated the same way and for the same reason: the endpoint refuses a
+          caller without the capability, so this only avoids rendering a pane
+          that would come back empty. */}
+      {showSkills && can(me.user, 'manage_users') && (
+        <Suspense fallback={null}>
+          <SkillAdmin projects={projects} onClose={() => setShowSkills(false)} />
+        </Suspense>
       )}
       {showPassword && (
         <ChangePassword

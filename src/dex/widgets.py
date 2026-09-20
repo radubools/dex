@@ -42,6 +42,11 @@ class Widget:
     name: str
     title: str
     description: str = ""
+    #: Which skill provides it, and at which version. A widget is part of a
+    #: skill now, and two versions of one skill can be on disk at once — so
+    #: the name alone does not say which bundle to serve.
+    skill: str = ""
+    skill_version: str = ""
     #: Cache key. `import()` and `<script>` both cache by URL for the life of
     #: the page, so a rebuilt widget needs a changing URL or the browser keeps
     #: running the old bundle -- an hour of debugging a file you already fixed.
@@ -55,7 +60,14 @@ class Widget:
             "description": self.description,
             "version": self.version,
             "built": self.built,
-            "url": f"/widgets/{self.name}/{ENTRY_NAME}?v={self.version}",
+            # Served straight out of the skill. There used to be a copy of
+            # every widget under a top-level `widgets/`, materialised on
+            # enable — which meant a bundle could be built in one place and
+            # served from the other, and one silently was.
+            "url": (
+                f"/api/widgets/{self.skill}/{self.skill_version}/{self.name}"
+                f"/index.js?v={self.version}"
+            ),
         }
 
 
@@ -70,18 +82,36 @@ class Rule:
     #: fnmatch patterns against the bare filename, for the cases where the
     #: extension is too coarse -- `manifest.json`, `narrated_*.mp4`.
     filenames: tuple[str, ...] = ()
+    #: fnmatch patterns against the whole path inside the project, for the
+    #: cases where the *directory* is what identifies a file. Yoga's poses are
+    #: plain `<name>.json` and are told apart from a manifest only by living in
+    #: `poses/`; a filename rule cannot see that, and `*.json` would claim
+    #: every sidecar in the package.
+    paths: tuple[str, ...] = ()
+    #: fnmatch patterns on the bare filename that veto a match, checked before
+    #: anything else. A path rule is a blunt instrument — `*/poses/*.json`
+    #: also catches the `manifest.json` of a package that happens to be called
+    #: `poses` — and a manifest is not a pose wherever it sits.
+    excludes: tuple[str, ...] = ()
 
     def matches(self, path: str) -> bool:
         name = Path(path).name.lower()
+        if any(fnmatch.fnmatch(name, pattern.lower()) for pattern in self.excludes):
+            return False
         if any(name.endswith(ext.lower()) for ext in self.extensions):
             return True
-        return any(fnmatch.fnmatch(name, pattern.lower()) for pattern in self.filenames)
+        if any(fnmatch.fnmatch(name, pattern.lower()) for pattern in self.filenames):
+            return True
+        whole = str(path).replace("\\", "/").lower()
+        return any(fnmatch.fnmatch(whole, pattern.lower()) for pattern in self.paths)
 
     def to_json(self) -> dict[str, Any]:
         return {
             "widget": self.widget,
             "extensions": list(self.extensions),
             "filenames": list(self.filenames),
+            "paths": list(self.paths),
+            "excludes": list(self.excludes),
         }
 
 
@@ -90,41 +120,67 @@ def widgets_dir(workspace: Path) -> Path:
 
 
 def available(workspace: Path) -> list[Widget]:
-    """Every widget on disk, built or not.
+    """Every widget every skill provides, built or not.
 
     Unbuilt ones are listed too rather than hidden: "I wrote it and it does not
     appear" is a much worse thing to debug than a row that says `built: false`.
+
+    Walks the skills rather than a directory of its own. A widget belongs to a
+    skill, ships inside it, and is built there; a second copy somewhere else is
+    only an opportunity for the two to disagree.
     """
-    root = widgets_dir(workspace)
-    if not root.is_dir():
-        return []
+    from . import skills
+
     found: list[Widget] = []
-    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
-        manifest_path = directory / MANIFEST_NAME
-        if not manifest_path.is_file():
-            continue
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            log.warning("widget %s has an unreadable %s: %s", directory.name, MANIFEST_NAME, exc)
-            continue
-        entry = directory / ENTRY_NAME
-        found.append(
-            Widget(
-                name=str(manifest.get("name") or directory.name),
-                title=str(manifest.get("title") or directory.name),
-                description=str(manifest.get("description") or ""),
-                # The built file's mtime: it changes exactly when the bundle
-                # does, which is the only thing the cache key has to track.
-                version=str(int(entry.stat().st_mtime)) if entry.is_file() else "0",
-                built=entry.is_file(),
+    for skill in skills.all_skills(workspace):
+        for name in skill.widgets():
+            directory = skill.widgets_dir / name
+            manifest_path = directory / MANIFEST_NAME
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                log.warning("widget %s has an unreadable %s: %s", name, MANIFEST_NAME, exc)
+                continue
+            entry = directory / ENTRY_NAME
+            found.append(
+                Widget(
+                    name=str(manifest.get("name") or name),
+                    title=str(manifest.get("title") or name),
+                    description=str(manifest.get("description") or ""),
+                    skill=skill.name,
+                    skill_version=skill.version,
+                    # The built file's mtime: it changes exactly when the
+                    # bundle does, which is the only thing the cache key has
+                    # to track.
+                    version=str(int(entry.stat().st_mtime)) if entry.is_file() else "0",
+                    built=entry.is_file(),
+                )
             )
-        )
     return found
 
 
 def registry_path(assets_dir: Path, project: str) -> Path:
+    """Where a project keeps its rules, beside its guide."""
     return assets_dir / project / REGISTRY_NAME
+
+
+def bundle_path(workspace: Path, skill: str, version: str, widget: str) -> Path | None:
+    """Where one widget's built bundle is, or `None` if that is not a widget.
+
+    Every part is checked rather than joined and hoped for: these come off a
+    URL, and a `..` in any of them would otherwise walk out of the workspace.
+    """
+    from . import skills
+
+    found = skills.find(workspace, skill, version)
+    if found is None or widget not in found.widgets():
+        return None
+    entry = found.widgets_dir / widget / ENTRY_NAME
+    root = skills.skills_dir(workspace).resolve()
+    resolved = entry.resolve()
+    if root not in resolved.parents or not resolved.is_file():
+        return None
+    return resolved
 
 
 def rules_for(assets_dir: Path, project: str) -> list[Rule]:
@@ -158,6 +214,8 @@ def rules_for(assets_dir: Path, project: str) -> list[Rule]:
                 widget=str(entry["widget"]),
                 extensions=tuple(str(e) for e in entry.get("extensions") or ()),
                 filenames=tuple(str(f) for f in entry.get("filenames") or ()),
+                paths=tuple(str(x) for x in entry.get("paths") or ()),
+                excludes=tuple(str(x) for x in entry.get("excludes") or ()),
             )
         )
     return rules

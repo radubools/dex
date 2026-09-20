@@ -196,14 +196,18 @@ export function PackageLibrary({
               }
             >
               <span className="asset-icon">📦</span>
-              <span className="asset-name">{entry.displayName}</span>
-              {entry.tags.length > 0 && (
-                <span className="asset-tags">
-                  {entry.tags.map((tag) => (
-                    <span key={tag} className="row-tag">{split(tag).value}</span>
-                  ))}
-                </span>
-              )}
+              {/* Name and tags share a column: a tag list beside the name
+                  squeezes it until it wraps mid-word. */}
+              <span className="asset-main">
+                <span className="asset-name">{entry.displayName}</span>
+                {entry.tags.length > 0 && (
+                  <span className="asset-tags">
+                    {entry.tags.map((tag) => (
+                      <span key={tag} className="row-tag">{split(tag).value}</span>
+                    ))}
+                  </span>
+                )}
+              </span>
               <span className="asset-size">
                 {entry.files} file{entry.files === 1 ? '' : 's'}
               </span>

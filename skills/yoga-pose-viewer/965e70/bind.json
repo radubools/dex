@@ -1,0 +1,12 @@
+{
+  "$comment": "A pose file is plain <name>.json and is told apart from a manifest only by living in poses/ — hence the path rule. `excludes` is what keeps it off the manifest of a package that happens to be named `poses`. The two suffixes and .pose.json are historical spellings still on disk.",
+  "rules": [
+    {
+      "widget": "pose-skeleton",
+      "paths": ["*/poses/*.json"],
+      "filenames": ["*_pose.json", "*_posture.json"],
+      "extensions": [".pose.json"],
+      "excludes": ["manifest.json", "sources.json", "widgets.json", "skills.json"]
+    }
+  ]
+}

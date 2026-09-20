@@ -19,7 +19,7 @@ def client(config: Config, dsn: str, monkeypatch):
     monkeypatch.setattr("dex.queue.TaskRunner", __import__(
         "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
 
-    async def fake_plan(message, cfg, existing, model=None, project=None, guide=""):
+    async def fake_plan(message, cfg, existing, model=None, project=None, guide="", survey=""):
         if "vague" in message:
             return Plan(needs_clarification="Which problem did you mean?")
         return Plan(
@@ -113,11 +113,22 @@ def test_confirming_a_plan_links_tasks_to_the_thread(client):
     assert len(fetched["tasks"]) == 2
 
 
-def test_a_vague_message_comes_back_as_a_question(client):
+def test_a_vague_message_is_escalated_to_pre_planning(client):
+    """It used to come straight back as a question in the chat.
+
+    Planning is one stateless call, so a question asked from there reached a
+    later call that remembered nothing of it. The question now goes to a
+    pre-planning task, which has the guide, can ask with `ask_user`, and
+    carries the answer into the plan itself.
+    """
     thread = client.post("/api/threads", json={}).json()["thread"]
-    body = client.post(f"/api/threads/{thread['id']}/messages", json={"text": "something vague"}).json()
-    assert body["plan"]["tasks"] == []
-    assert "Which problem" in body["message"]["text"]
+    body = client.post(
+        f"/api/threads/{thread['id']}/messages", json={"text": "something vague"}
+    ).json()
+
+    assert body["survey"] == {"queued": True}
+    assert body["task"]["scope"] == "survey"
+    assert "Which problem" in body["task"]["title"]
 
 
 def test_resume_is_refused_for_a_task_that_did_not_stop_short(client):

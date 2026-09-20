@@ -1,8 +1,8 @@
 """Which widget opens which file.
 
-The rules live per project in `assets/<project>/widgets.json`; the code lives at
-the top level in `widgets/`. Everything here is read from disk per call, which
-is what lets a widget built a moment ago work without a restart.
+The rules live per project in `assets/<project>/widgets.json`; the code lives
+inside the skill that provides it. Everything here is read from disk per call,
+which is what lets a widget built a moment ago work without a restart.
 """
 
 from __future__ import annotations
@@ -13,13 +13,25 @@ from pathlib import Path
 from dex import widgets
 
 
-def make_widget(root: Path, name: str, *, built: bool = True) -> None:
-    directory = root / "widgets" / name
+def make_widget(root: Path, name: str, *, built: bool = True, skill: str = "") -> Path:
+    """A widget inside a skill, which is the only place one lives now.
+
+    Returns the widget's directory, because a test that changes the bundle
+    needs it and `skills/<skill>/<version>/widgets/<name>` is not a path worth
+    spelling out at every call site.
+    """
+    from dex import skills
+
+    named = skill or f"{name}-skill"
+    version = root / "skills" / named / "v1"
+    directory = version / "widgets" / name
     directory.mkdir(parents=True, exist_ok=True)
+    (version / skills.MANIFEST_NAME).write_text(json.dumps({"name": named}))
     (directory / "widget.json").write_text(json.dumps({"name": name, "title": name.title()}))
     if built:
         (directory / "dist").mkdir(exist_ok=True)
         (directory / "dist" / "index.js").write_text("export function mount(){}")
+    return directory
 
 
 def make_registry(assets: Path, project: str, rules: list[dict]) -> None:
@@ -96,12 +108,40 @@ def test_the_version_changes_when_the_bundle_does(tmp_path: Path):
     import os
     import time
 
-    make_widget(tmp_path, "w")
+    directory = make_widget(tmp_path, "w")
     first = widgets.available(tmp_path)[0].version
-    entry = tmp_path / "widgets" / "w" / "dist" / "index.js"
     later = time.time() + 5
-    os.utime(entry, (later, later))
+    os.utime(directory / "dist" / "index.js", (later, later))
     assert widgets.available(tmp_path)[0].version != first
+
+
+def test_a_bundle_is_served_only_from_the_skill_that_provides_it(tmp_path: Path):
+    """The path comes off a URL, so every part of it is checked."""
+    make_widget(tmp_path, "w", skill="demo")
+    found = widgets.bundle_path(tmp_path, "demo", "v1", "w")
+    assert found is not None and found.is_file()
+
+    # A skill that is not there, a version that is not, and a widget that skill
+    # does not provide — none of them resolve.
+    assert widgets.bundle_path(tmp_path, "nope", "v1", "w") is None
+    assert widgets.bundle_path(tmp_path, "demo", "v2", "w") is None
+    assert widgets.bundle_path(tmp_path, "demo", "v1", "other") is None
+    # And nothing walks out of the workspace.
+    assert widgets.bundle_path(tmp_path, "..", "v1", "w") is None
+    assert widgets.bundle_path(tmp_path, "demo", "..", "w") is None
+
+
+def test_an_unbuilt_widget_has_no_bundle_to_serve(tmp_path: Path):
+    make_widget(tmp_path, "w", built=False, skill="demo")
+    assert widgets.bundle_path(tmp_path, "demo", "v1", "w") is None
+
+
+def test_a_widget_says_which_skill_it_came_from(tmp_path: Path):
+    """Two versions of a skill can be on disk; the name alone is not enough."""
+    make_widget(tmp_path, "w", skill="demo")
+    found = widgets.available(tmp_path)[0]
+    assert (found.skill, found.skill_version) == ("demo", "v1")
+    assert "/api/widgets/demo/v1/w/index.js" in found.to_json()["url"]
 
 
 def test_matching_ignores_case(tmp_path: Path):

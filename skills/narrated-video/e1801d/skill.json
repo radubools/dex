@@ -1,0 +1,7 @@
+{
+  "name": "narrated-video",
+  "description": "Plays a generated video with its narration track and caption sidecar, so a render can be reviewed with the words it was built around.",
+  "version": "e1801d",
+  "updated": 1789893635.505595,
+  "requires": []
+}

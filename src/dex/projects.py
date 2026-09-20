@@ -47,7 +47,9 @@ def template_path(workspace: Path) -> Path:
     return workspace / TEMPLATE_NAME
 
 
-def starter_guide(workspace: Path, name: str, description: str) -> str:
+def starter_guide(
+    workspace: Path, name: str, description: str, slug: str = ""
+) -> str:
     """The template, with this project's name and description filled in."""
     path = template_path(workspace)
     try:
@@ -59,8 +61,13 @@ def starter_guide(workspace: Path, name: str, description: str) -> str:
             path, name,
         )
         body = FALLBACK_GUIDE
-    return body.replace("{project_name}", name).replace(
-        "{project_description}", description
+    # `{project_slug}` as well as the name: a guide has to be able to name its
+    # own directories — `datasets/<slug>` and `assets/<slug>` — and the display
+    # name is not what either is called on disk.
+    return (
+        body.replace("{project_name}", name)
+        .replace("{project_description}", description)
+        .replace("{project_slug}", slug or slugify(name))
     )
 
 
@@ -157,6 +164,7 @@ class ProjectStore:
                     self.workspace,
                     project.name,
                     project.description or "What this project is for.",
+                    project.slug,
                 ),
                 encoding="utf-8",
             )

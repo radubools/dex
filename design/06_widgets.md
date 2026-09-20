@@ -2,6 +2,22 @@
 
 ## Summary
 
+> **Widgets live inside skills, and are served from there.** A widget's source
+> and its built bundle are in `skills/<name>/<version>/widgets/<widget>/`;
+> enabling a skill adds its binding to the project's `widgets.json` and copies
+> nothing. The browser fetches
+> `/api/widgets/<skill>/<version>/<widget>/index.js`.
+>
+> There used to be a top-level `widgets/` holding a materialised copy of each,
+> served by a `StaticFiles` mount. It meant a bundle could be built in one
+> place and served from the other, and one silently was. `widgets/` now holds
+> only the tooling: the builder, the test harness and its server.
+>
+> Everything below still describes how a widget *works* — the contract, the
+> sandbox, the resolution rules — which is unchanged. Where it comes from is
+> [15](15_skills.md).
+
+
 A **widget** is a small ES module that turns one kind of file into something
 worth looking at: a pose JSON into an orbitable 3D skeleton, a narrated MP4
 into a player with synchronised captions, a score sidecar into sheet music with
@@ -36,13 +52,13 @@ The design deliberately splits two halves:
 ```mermaid
 flowchart LR
     subgraph shared ["widgets/ — tracked, shared"]
-        W1["pose-3d/<br/>widget.json · src/index.ts ·<br/>test/*.spec.ts · dist/index.js"]
+        W1["pose-skeleton/<br/>widget.json · src/index.ts ·<br/>test/*.spec.ts · dist/index.js"]
         W2["narrated-video/"]
         W3["music-score/"]
         BLD["build.mjs"]
     end
     subgraph yoga ["assets/yoga/"]
-        R1["widgets.json<br/>*_pose.json · *_posture.json ·<br/>.pose.json → pose-3d"]
+        R1["widgets.json<br/>*/poses/*.json ·<br/>*_pose.json → pose-skeleton"]
     end
     subgraph alg ["assets/algorithms/"]
         R2["widgets.json<br/>.mp4 · .webm → narrated-video"]
@@ -186,7 +202,7 @@ sequenceDiagram
     participant M as widget module
 
     V->>H: widget, path, text
-    H->>S: GET /widgets/pose-3d/dist/index.js?v=…
+    H->>S: GET /widgets/pose-skeleton/dist/index.js?v=…
     S-->>H: bundle source
     H->>H: base64 in 32 KB chunks
     H->>H: ctx JSON, "<" escaped

@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from .bus import EventBus
 from .config import DEFAULT_CONCURRENCY, MAX_WORKERS, Config
 from .db import Database
-from .models import Event, Task, TaskState, slugify
+from .models import Event, Task, TaskState, continued_problem, slugify
 from .runner import TaskRunner
 from .limits import DynamicLimiter
 from .store import SettingsStore, TaskMessageStore, TaskStore
@@ -87,6 +87,11 @@ class TaskManager:
         #: Set by the app so follow-ups started from the worker loop are
         #: announced in their thread, the same as a resume or a re-run.
         self.announce: Callable[[Task, str], Awaitable[None]] | None = None
+        #: Set by the app so a finished survey is planned from. The queue has
+        #: no planner and the runner has no thread store, so the step from
+        #: "the sources divide like this" to "here are the tasks" belongs to
+        #: whoever owns both — which is the API.
+        self.surveyed: Callable[[Task, str], Awaitable[None]] | None = None
         #: Gate for planner/chat calls; its ceiling lives in the database.
         self.chat_limiter = DynamicLimiter(
             lambda: self.settings.concurrency(SettingsStore.CHAT_CONCURRENCY),
@@ -189,6 +194,7 @@ class TaskManager:
         output_slug: str | None = None,
         resumed_from: str | None = None,
         scope: str = "package",
+        anchor: dict[str, Any] | None = None,
     ) -> Task:
         display_title = (title or problem.strip().splitlines()[0])[:80]
         directory = self.config.project_dir(project or self.config.default_project)
@@ -201,6 +207,7 @@ class TaskManager:
             slug=slugify(slug or display_title, taken),
         )
         task.thread_id = thread_id
+        task.anchor = anchor
         task.project = project or self.config.default_project
         task.attempt = attempt
         task.parent_id = parent_id
@@ -245,16 +252,18 @@ class TaskManager:
             return None
 
         notes = "\n\n".join(f"- {b}" for b in bodies)
-        follow_up = (
-            f"{task.problem}\n\n"
+        note = (
             "## Follow-up\n\n"
             "The previous attempt has finished. The operator has since asked for:\n\n"
-            f"{notes}\n\n"
-            "Work in the existing task directory, keep what is still correct, and "
-            "re-run the test suite before you finish."
+            f"{notes}"
         )
+        if not task.is_design:
+            note += (
+                "\n\nWork in the existing task directory, keep what is still "
+                "correct, and re-run the test suite before you finish."
+            )
         started = await self.submit(
-            follow_up,
+            continued_problem(task, note),
             title=task.title,
             slug=task.slug,
             thread_id=task.thread_id,
@@ -264,6 +273,10 @@ class TaskManager:
             session_id=task.session_id,
             output_slug=task.output_slug or task.slug,
             resumed_from=task.session_id,
+            # Without this a continued design turn came back as an ordinary
+            # package task: it took the generation prompt, lost the design
+            # tools, and built a package directory for a conversation.
+            scope=task.scope,
         )
         # Echo the notes onto the follow-up as well, so opening it shows what
         # was asked for rather than starting mid-conversation.
@@ -314,8 +327,7 @@ class TaskManager:
                 ).glob("*")
             )
         )
-        continuation = (
-            f"{original.problem}\n\n"
+        note = (
             "## Resuming\n\n"
             "A previous attempt at this task was interrupted before it finished. "
             + (
@@ -326,6 +338,7 @@ class TaskManager:
             + "Check what is there, keep whatever is correct and complete, and finish "
             "the rest of the deliverable. Re-run the test suite before you finish."
         )
+        continuation = continued_problem(original, note)
 
         return await self.submit(
             continuation,
@@ -725,7 +738,9 @@ class TaskManager:
             from .fake_agent import FakeTaskRunner
 
             return FakeTaskRunner(task, self.config, self.bus, self.tasks, self.settings)
-        return TaskRunner(task, self.config, self.bus, self.tasks, self.settings)
+        runner = TaskRunner(task, self.config, self.bus, self.tasks, self.settings)
+        runner.surveyed = self.surveyed
+        return runner
 
     async def _scale(self) -> None:
         """Bring the worker count in line with the configured limit.

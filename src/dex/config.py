@@ -137,6 +137,21 @@ class Config:
     def threads_dir(self) -> Path:
         return self.state_dir / "threads"
 
+    @property
+    def datasets_dir(self) -> Path:
+        """Source material, one directory per project.
+
+        Outside `assets/` on purpose: that tree is what tasks *produce*, and a
+        source dropped in there would end up in the Library, the feed and the
+        backup as though dex had generated it. Tasks may read and write here —
+        it is where a corpus, a scratch index, or a downloaded PDF belongs.
+        """
+        return _env_path("DEX_DATASETS", self.workspace / "datasets")
+
+    def project_datasets(self, project: str | None) -> Path:
+        """One project's source directory."""
+        return self.datasets_dir / (project or self.default_project)
+
     def ensure_dirs(self) -> None:
         self.assets_dir.mkdir(parents=True, exist_ok=True)
         self.project_dir().mkdir(parents=True, exist_ok=True)

@@ -108,7 +108,7 @@ def client(config: Config, monkeypatch):
     monkeypatch.setattr("dex.queue.TaskRunner", __import__(
         "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
 
-    async def fake_plan(message, cfg, existing, model=None, project=None, guide=""):
+    async def fake_plan(message, cfg, existing, model=None, project=None, guide="", survey=""):
         return Plan(tasks=[PlannedTask(title="Two Sum", problem="full", slug="two-sum")])
 
     monkeypatch.setattr("dex.api.plan_from_message", fake_plan)

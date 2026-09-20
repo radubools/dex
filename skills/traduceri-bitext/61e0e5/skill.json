@@ -1,0 +1,7 @@
+{
+  "name": "traduceri-bitext",
+  "description": "The bitext format: the checks a finished translation has to pass, and the viewer that reads a .bitext.json as numbered source-and-target chunks.",
+  "version": "61e0e5",
+  "updated": 1789893635.5078132,
+  "requires": []
+}
