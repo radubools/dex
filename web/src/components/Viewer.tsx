@@ -2,20 +2,16 @@ import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
 import { assetUrl, readAsset } from '../api'
-import type { AssetResponse } from '../types'
-import { isPose } from '../pose'
+import type { AssetResponse, SourceAnchor } from '../types'
 import { resolveWidget, type WidgetInfo } from '../api'
 import { AnimationPlayer } from './AnimationPlayer'
 import { VideoPlayer } from './VideoPlayer'
 import { Diff } from './Diff'
 import { WidgetHost } from './WidgetHost'
+import { SourceView } from './SourceView'
 
 // mermaid + marked are ~600kB; only load them when markdown is opened.
 const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markdown })))
-// Three.js is ~600kB; only pull it in when a pose is actually opened.
-const PoseViewer3D = lazy(() =>
-  import('./PoseViewer3D').then((m) => ({ default: m.PoseViewer3D })),
-)
 
 /** Rendered by the media view rather than fetched as text. */
 const IMAGE = new Set(['gif', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'avif', 'mp4', 'webm', 'mov'])
@@ -27,6 +23,18 @@ export type ViewerTarget =
   | { kind: 'diff'; path: string; patch: string }
   /** A whole generated package: its assets, then its explanation inline. */
   | { kind: 'package'; path: string; title: string }
+  /**
+   * A file the operator attached, in `datasets/<project>/`. Addressed by
+   * project and name because it is not in the assets tree and has no path.
+   * The anchor, when a survey produced one, says where in it to land.
+   */
+  | { kind: 'source'; project: string; name: string; anchor?: SourceAnchor }
+
+/** What the title bar shows, and what the pane is labelled for a reader. */
+const labelOf = (t: ViewerTarget) =>
+  t.kind === 'source'
+    ? t.anchor ? `${t.name} \u00b7 ${t.anchor.label}` : t.name
+    : t.kind === 'diff' ? `diff \u00b7 ${t.path}` : t.path
 
 /** Renders whatever the operator opened: an asset, or a diff from the feed. */
 export function Viewer({
@@ -42,13 +50,12 @@ export function Viewer({
   /** Opens something from inside the current view, e.g. a package's animation. */
   onOpen?: (target: ViewerTarget) => void
 }) {
+  const label = labelOf(target)
   return (
-    <section className="viewer" role="dialog" aria-label={target.path}>
+    <section className="viewer" role="dialog" aria-label={label}>
       <header className="viewer-bar">
         <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
-        <span className="viewer-path" title={target.path}>
-          {target.kind === 'diff' ? `diff · ${target.path}` : target.path}
-        </span>
+        <span className="viewer-path" title={label}>{label}</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>
       <div className="viewer-body">
@@ -56,6 +63,12 @@ export function Viewer({
           <Diff patch={target.patch} />
         ) : target.kind === 'package' ? (
           <PackageView path={target.path} title={target.title} onOpen={onOpen} />
+        ) : target.kind === 'source' ? (
+          <SourceView
+            project={target.project}
+            name={target.name}
+            anchor={target.anchor}
+          />
         ) : (
           <AssetView path={target.path} />
         )}
@@ -193,23 +206,8 @@ function AssetView({ path }: { path: string }) {
     return () => { live = false }
   }, [path, ext])
 
-  // Parsed here, memoised on the text, because the result is a prop identity
-  // that matters: PoseViewer3D rebuilds its whole Three.js scene when `pose`
-  // changes. Parsing inline in the render handed it a new object on every
-  // render of this component — and an SSE event re-renders the app several
-  // times a second while tasks run — so the camera snapped back to its default
-  // mid-drag, every time.
   const content =
     state.s === 'ok' && 'content' in state.asset ? (state.asset.content as string) : ''
-  const parsedJson = useMemo<unknown>(() => {
-    if (ext !== 'json' || !content) return null
-    try {
-      return JSON.parse(content) as unknown
-    } catch {
-      return null
-    }
-  }, [ext, content])
-
   // Which widget, if any, this project maps this filename to. Asked on every
   // open rather than cached: a widget built a moment ago has to work without a
   // reload, and the answer is one small request.
@@ -282,17 +280,12 @@ function AssetView({ path }: { path: string }) {
       </Suspense>
     )
   }
-  if (ext === 'json') {
-    // A pose file is JSON, but it is a figure rather than a document.
-    if (isPose(parsedJson)) {
-      return (
-        <Suspense fallback={<p className="muted">Loading the 3D viewer…</p>}>
-          <PoseViewer3D pose={parsedJson} />
-        </Suspense>
-      )
-    }
-    return <Json content={state.asset.content} />
-  }
+  // A pose used to be special-cased here — dex knew the landmark list, the
+  // bones between them, and sniffed for them with `isPose`. That was one
+  // project's subject matter compiled into everybody's viewer. It is a widget
+  // in the `yoga-pose-viewer` skill now, and a project's own rules decide what
+  // opens a file.
+  if (ext === 'json') return <Json content={state.asset.content} />
   return <Code content={state.asset.content} ext={ext} />
 }
 

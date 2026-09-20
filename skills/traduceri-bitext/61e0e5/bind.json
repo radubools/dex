@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "widget": "bitext",
+      "extensions": [
+        ".bitext.json"
+      ]
+    }
+  ]
+}

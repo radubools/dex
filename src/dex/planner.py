@@ -28,17 +28,29 @@ class PlannedTask:
     #: it a "regenerate X" request built `x-2` beside `x` and left the original
     #: sitting there, which is how one problem ended up with three directories.
     updates: str = ""
+    #: A package this task fills together with its siblings, when one piece of
+    #: work genuinely cannot be cut into independent packages. Unlike `updates`
+    #: it need not exist yet. Rare on purpose: the ordinary plan is separate
+    #: tasks with separate directories, which is the only arrangement where one
+    #: task failing leaves the others whole.
+    package: str = ""
     #: "package" for ordinary work, "project" for one small uniform edit across
     #: every package the project already has.
     scope: str = "package"
+    #: Where in the attached material this task's work is, when a survey found
+    #: it. Carried as the survey emitted it so the operator can open the source
+    #: at that spot, and echoed into `problem` so the worker knows its bounds.
+    anchor: dict[str, Any] | None = None
 
-    def to_json(self) -> dict[str, str]:
+    def to_json(self) -> dict[str, Any]:
         return {
             "title": self.title,
             "problem": self.problem,
             "slug": self.slug,
             "updates": self.updates,
+            "package": self.package,
             "scope": self.scope,
+            "anchor": self.anchor,
         }
 
 
@@ -47,6 +59,10 @@ class Plan:
     tasks: list[PlannedTask] = field(default_factory=list)
     notes: str = ""
     needs_clarification: str = ""
+    #: Concrete answers offered with `needs_clarification`. A question with no
+    #: options is a prompt to type prose, which is a worse thing to hand
+    #: somebody on a phone than two buttons.
+    options: list[str] = field(default_factory=list)
     #: What this plan did not cover, empty when it covered everything. A
     #: request that implies hundreds of tasks is planned in batches, and this
     #: is what carries the rest into the next one.
@@ -57,6 +73,7 @@ class Plan:
             "tasks": [t.to_json() for t in self.tasks],
             "notes": self.notes,
             "needsClarification": self.needs_clarification,
+            "options": self.options,
             "remaining": self.remaining,
         }
 
@@ -68,6 +85,7 @@ async def plan_from_message(
     model: str | None = None,
     project: str | None = None,
     guide: str = "",
+    survey: str = "",
 ) -> Plan:
     """Ask a short agent run to split the message into independent tasks.
 
@@ -88,7 +106,7 @@ async def plan_from_message(
     )
 
     chunks: list[str] = []
-    prompt = planner_prompt(message, existing, project, guide)
+    prompt = planner_prompt(message, existing, project, guide, survey)
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, AssistantMessage):
             chunks.extend(b.text for b in msg.content if isinstance(b, TextBlock))
@@ -158,6 +176,28 @@ def _salvage_tasks(raw: str) -> list[dict[str, Any]]:
     return salvaged
 
 
+def _anchor_of(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """A task's anchor, kept only when it says something.
+
+    Normalised through `Anchor` rather than passed along raw: the planner is
+    copying a nested object by hand and may hand back a string, a half-filled
+    dict, or page numbers as text. An anchor that names no source is dropped —
+    the UI turns one into a button that opens the document, and a button
+    pointing at nothing is worse than no button.
+    """
+    from .sources import Anchor
+
+    raw = entry.get("anchor")
+    if not isinstance(raw, dict):
+        return None
+    anchor = Anchor.from_json(raw)
+    if not anchor.source and not anchor.url:
+        return None
+    if not (anchor.page or anchor.line or anchor.sheet or anchor.heading or anchor.url):
+        return None
+    return anchor.to_json()
+
+
 def parse_plan(raw: str, existing: list[str]) -> Plan:
     """Extract the plan JSON, tolerating prose or a missing fence around it."""
     payload: dict[str, Any] | None = None
@@ -219,21 +259,39 @@ def parse_plan(raw: str, existing: list[str]) -> Plan:
         # Anything the planner invents here would silently widen what a task
         # may touch, so only the one alternative is accepted.
         scope = "project" if str(entry.get("scope") or "").strip() == "project" else "package"
+        # A shared directory, which — unlike `updates` — is allowed not to
+        # exist yet: that is the whole point of it. So it is normalised rather
+        # than checked against the list, and it never outranks `updates`, which
+        # names a package that is certainly there.
+        shared = str(entry.get("package") or "").strip()
+        package = slugify(shared) if shared else ""
         # A sweep has no package of its own; carrying `updates` too would say
         # it writes into one particular package, which is not what it does.
         if scope == "project":
-            updates = ""
+            updates = package = ""
         slug = slugify(str(entry.get("slug") or title), taken)
         taken.add(slug)
         tasks.append(
             PlannedTask(
-                title=title, problem=problem, slug=slug, updates=updates, scope=scope
+                title=title, problem=problem, slug=slug, updates=updates,
+                package=package, scope=scope, anchor=_anchor_of(entry),
             )
         )
+
+    # Options only mean anything beside a question, and a model that offers
+    # twelve has not narrowed anything down. Trimmed rather than trusted: each
+    # becomes a button, and a button with a paragraph on it is not a button.
+    question = str(payload.get("needs_clarification") or "")
+    options = [
+        str(o).strip()[:80]
+        for o in (payload.get("options") or [])
+        if isinstance(o, (str, int, float)) and str(o).strip()
+    ][:4] if question else []
 
     return Plan(
         tasks=tasks,
         notes=str(payload.get("notes") or ""),
-        needs_clarification=str(payload.get("needs_clarification") or ""),
+        needs_clarification=question,
+        options=options,
         remaining=str(payload.get("remaining") or ""),
     )

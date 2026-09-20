@@ -8,9 +8,15 @@ whatever a project's guide describes. You drive it from a browser or a phone;
 the work happens on the machine dex runs on.
 
 A request travels **message → plan → confirmed tasks → agent sessions →
-files on disk**, and every step is streamed back to the UI as it happens. Only
-inference leaves the machine: the agent loop, each tool call, test runs and
-renders all execute locally in the task's own directory.
+files on disk**, and every step is streamed back to the UI as it happens. A
+message that arrives with material attached — a document, a link — gains one
+step in front: a **survey** reads the shape of that material so the plan can be
+cut out of it rather than guessed at. See [14](14_survey_and_anchors.md).
+
+Only inference leaves the machine, with one exception: a survey may fetch a URL
+the operator named, behind a guard that refuses every non-public address. The
+agent loop, each tool call, test runs and renders all execute locally in the
+task's own directory.
 
 This document is the map. Each feature has its own document:
 
@@ -28,6 +34,9 @@ This document is the map. Each feature has its own document:
 | [10](10_data_model.md) | Data model |
 | [11](11_animations.md) | Animations |
 | [12](12_review_feed.md) | Review feed |
+| [13](13_source_material.md) | Source material the operator supplies |
+| [14](14_survey_and_anchors.md) | Pre-planning survey and anchors |
+| [15](15_skills.md) | Skills — a capability as one copyable directory |
 
 ---
 
@@ -46,6 +55,7 @@ flowchart LR
         CLI["Claude Code CLI<br/>subprocess over stdio"]
         FS[("assets/project/package/")]
         WG[("widgets/")]
+        DS[("datasets/project/")]
         WA["AssetWatcher"]
         UW["UsageWatcher"]
         PG[("Postgres")]
@@ -61,8 +71,11 @@ flowchart LR
     R --> PG
     R -->|spawns| CLI
     CLI -->|HTTPS inference only| ANT
+    API -.->|"a URL a survey was given<br/>(guarded: public addresses only)"| WEBSITE(["the open web"])
     CLI -->|"Read · Write · Bash<br/>pytest · manim · node"| FS
     CLI -->|design turns| WG
+    CLI -->|"every task reads and writes"| DS
+    API -->|"survey: outline · search · peek"| DS
     WA -.->|watches| FS
     WA --> PG
     UW --> PG
@@ -90,6 +103,8 @@ flowchart TB
         prompts["prompts"]
         planner["planner"]
         designer["designer"]
+        surveyor["surveyor"]
+        skills["skills"]
         fake["fake_agent"]
     end
     subgraph state [State]
@@ -105,6 +120,8 @@ flowchart TB
         usage["usage"]
         pricing["pricing"]
         widgets["widgets"]
+        sources["sources · web_sources"]
+        uploads["uploads"]
         feed["feed"]
         animation["animation · gifinfo"]
         diffs["diffs"]
@@ -118,7 +135,10 @@ flowchart TB
     api --> authn --> identity
     api --> queue --> runner
     runner --> permissions & prompts & pricing & diffs
-    api --> planner & designer
+    api --> planner & designer & surveyor & uploads & skills
+    runner -.->|promotes a helper| skills
+    surveyor --> sources
+    runner -.->|survey scope| surveyor
     api --> feed & animation & widgets
     queue & runner & api & watcher & usage --> bus
     store & identity & projects --> db
@@ -135,6 +155,11 @@ flowchart TB
 | `permissions` | What a task may do without asking |
 | `prompts` | System prompts and briefs |
 | `planner` | Message → plan of tasks |
+| `sources` | A document's shape — outline, search, bounded peek |
+| `web_sources` | Fetching a URL, and the guard that refuses most of them |
+| `surveyor` | The survey's tool surface, and when a message gets one |
+| `uploads` | Material the operator supplies, in `datasets/<project>/` |
+| `skills` | A project's helpers and widgets, versioned and shareable |
 | `designer` | Conversation history for design turns |
 | `store` / `db` | Reads and writes; schema applied at startup |
 | `projects` / `migrate` | Projects, starter guides, design threads, adopting old installs |
@@ -162,6 +187,11 @@ sequenceDiagram
     participant Bus
 
     You->>API: "two sum and an LRU cache"
+    opt the message brought material with it
+        API->>Queue: a survey task — outline, search, peek
+        Queue-->>API: segments, each anchored in the source
+        API-->>You: the survey, in the thread
+    end
     API->>Planner: split into self-contained problems
     Planner-->>You: plan card — nothing queued yet
     You->>API: confirm (after dropping rows)

@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1b1e27;
+    --ink: #e8eaf0;
+    --dim: #9098ab;
+    --rule: #2c3140;
+    --staff: #6f7789;
+    --cursor: #ff6b4a;
+    --v0: #6cc5ff;
+    --v1: #7ee08a;
+    --v2: #ffd166;
+    --v3: #c79bff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    background: linear-gradient(var(--bg) 78%, transparent);
+    padding: 22px 28px 14px;
+  }
+  h1 { margin: 0; font-size: 26px; letter-spacing: .2px; font-weight: 600; }
+  .sub { color: var(--dim); font-size: 13.5px; margin-top: 3px; }
+
+  .transport {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 11px;
+    padding: 11px 14px; margin-top: 14px;
+  }
+  button.play {
+    width: 42px; height: 42px; flex: 0 0 42px; border-radius: 50%;
+    border: none; background: var(--v0); color: #0d1017;
+    font-size: 17px; cursor: pointer; line-height: 42px;
+  }
+  button.play:active { transform: scale(.95); }
+  input[type=range] { flex: 1; accent-color: var(--v0); cursor: pointer; }
+  .clock { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 13px;
+           min-width: 92px; text-align: right; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 11px;
+            font-size: 12.5px; color: var(--dim); }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; }
+
+  main { padding: 4px 28px 60px; }
+  .system { margin-bottom: 6px; }
+  .note.on { filter: drop-shadow(0 0 6px currentColor); }
+
+  .warn {
+    display: none; margin-top: 12px; padding: 11px 14px; border-radius: 9px;
+    background: #3a2320; border: 1px solid #6b3a30; color: #ffb4a2; font-size: 13.5px;
+  }
+  .warn.show { display: block; }
+  .warn input { margin-top: 8px; display: block; color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <div class="sub">__SUBTITLE__</div>
+  <div class="transport">
+    <button class="play" id="play" aria-label="Play">&#9654;</button>
+    <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Seek">
+    <div class="clock" id="clock">0:00 / 0:00</div>
+  </div>
+  <div class="legend" id="legend"></div>
+  <div class="warn" id="warn">
+    Could not load <code>__AUDIO__</code> from this folder. Your browser may be
+    blocking local media. Pick the file manually to play it:
+    <input type="file" id="pick" accept="audio/*">
+  </div>
+</header>
+<main id="score"></main>
+
+<audio id="audio" src="__AUDIO__" preload="auto"></audio>
+
+<script>
+"use strict";
+
+// The MIDI this player draws, inlined so the page works from file:// with no
+// server. Everything below - note positions, bar lines, the cursor - is
+// derived from these bytes and the audio element's own duration.
+const MIDI_BASE64 = "__MIDI_BASE64__";
+
+/* ------------------------------------------------------------------ *
+ * Standard MIDI File parsing
+ * ------------------------------------------------------------------ */
+
+function decodeBase64(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function parseMidi(bytes) {
+  let pos = 0;
+  const u32 = () => (bytes[pos++] << 24 | bytes[pos++] << 16 | bytes[pos++] << 8 | bytes[pos++]) >>> 0;
+  const u16 = () => bytes[pos++] << 8 | bytes[pos++];
+  const tag = () => String.fromCharCode(bytes[pos++], bytes[pos++], bytes[pos++], bytes[pos++]);
+
+  if (tag() !== "MThd") throw new Error("not a MIDI file");
+  const headerLength = u32();
+  u16();                              // format
+  const trackCount = u16();
+  const ticksPerBeat = u16();
+  if (ticksPerBeat & 0x8000) throw new Error("SMPTE time division is not supported");
+  pos = 8 + headerLength;
+
+  const tempos = [];
+  let timeSignature = { numerator: 4, denominator: 4 };
+  const tracks = [];
+
+  for (let t = 0; t < trackCount; t++) {
+    if (tag() !== "MTrk") throw new Error("expected an MTrk chunk");
+    // Read the length first: `pos + u32()` would evaluate pos before u32()
+    // advanced it, ending the track four bytes short.
+    const chunkLength = u32();
+    const end = pos + chunkLength;
+    const track = { name: "", program: 0, notes: [] };
+    const open = new Map();
+    let tick = 0, status = 0;
+
+    while (pos < end) {
+      let shift = 0, delta = 0, byte;
+      do { byte = bytes[pos++]; delta = (delta << 7) | (byte & 0x7f); shift++; }
+      while (byte & 0x80 && shift < 5);
+      tick += delta;
+
+      if (bytes[pos] & 0x80) status = bytes[pos++];
+      const kind = status & 0xf0;
+
+      if (status === 0xff) {
+        const meta = bytes[pos++];
+        let length = 0;
+        do { byte = bytes[pos++]; length = (length << 7) | (byte & 0x7f); } while (byte & 0x80);
+        const payload = bytes.subarray(pos, pos + length);
+        pos += length;
+        if (meta === 0x51) {
+          tempos.push({ tick, usPerBeat: (payload[0] << 16) | (payload[1] << 8) | payload[2] });
+        } else if (meta === 0x58) {
+          timeSignature = { numerator: payload[0], denominator: 1 << payload[1] };
+        } else if (meta === 0x03 && !track.name) {
+          track.name = new TextDecoder().decode(payload);
+        }
+      } else if (status === 0xf0 || status === 0xf7) {
+        let length = 0;
+        do { byte = bytes[pos++]; length = (length << 7) | (byte & 0x7f); } while (byte & 0x80);
+        pos += length;
+      } else if (kind === 0xc0 || kind === 0xd0) {
+        const value = bytes[pos++];
+        if (kind === 0xc0) track.program = value;
+      } else {
+        const a = bytes[pos++], b = bytes[pos++];
+        if (kind === 0x90 && b > 0) {
+          open.set(a, { tick, velocity: b });
+        } else if (kind === 0x80 || (kind === 0x90 && b === 0)) {
+          const started = open.get(a);
+          if (started) {
+            open.delete(a);
+            track.notes.push({ startTick: started.tick, endTick: tick, pitch: a,
+                               velocity: started.velocity });
+          }
+        }
+      }
+    }
+    pos = end;
+    if (track.notes.length) {
+      track.notes.sort((x, y) => x.startTick - y.startTick || x.pitch - y.pitch);
+      tracks.push(track);
+    }
+  }
+
+  if (!tempos.length) tempos.push({ tick: 0, usPerBeat: 500000 });
+  tempos.sort((a, b) => a.tick - b.tick);
+  return { ticksPerBeat, tempos, timeSignature, tracks };
+}
+
+// Absolute tick -> seconds, walking the file's own tempo map. This is the only
+// place playback time is defined; nothing here assumes a section length.
+function makeTickToSeconds(midi) {
+  return function (tick) {
+    let seconds = 0, previousTick = 0, usPerBeat = midi.tempos[0].usPerBeat;
+    for (const change of midi.tempos) {
+      if (change.tick >= tick) break;
+      seconds += (change.tick - previousTick) * usPerBeat / 1e6 / midi.ticksPerBeat;
+      previousTick = change.tick;
+      usPerBeat = change.usPerBeat;
+    }
+    return seconds + (tick - previousTick) * usPerBeat / 1e6 / midi.ticksPerBeat;
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Notation geometry
+ * ------------------------------------------------------------------ */
+
+const LINE_GAP = 9;                 // distance between staff lines
+const STEP = LINE_GAP / 2;          // one staff position
+const STAFF_HEIGHT = LINE_GAP * 4;
+const STAFF_SPACING = 96;           // between the voices of a system
+const SYSTEM_PAD_TOP = 52;          // headroom for ledger lines and bar numbers
+const SYSTEM_PAD_BOTTOM = 30;
+const LEFT_GUTTER = 104;            // voice name, then clef
+const RIGHT_PAD = 18;
+const BARS_PER_SYSTEM = 4;
+
+// Semitone -> (diatonic degree, accidental) spelled for C major.
+const SPELLING = [[0,0],[0,1],[1,0],[1,1],[2,0],[3,0],[3,1],[4,0],[4,1],[5,0],[5,1],[6,0]];
+
+function diatonicIndex(pitch) {
+  const octave = Math.floor(pitch / 12) - 1;
+  return octave * 7 + SPELLING[pitch % 12][0];
+}
+function accidental(pitch) { return SPELLING[pitch % 12][1]; }
+
+// Bottom line of each clef: treble E4, bass G2. `height` and `above` say how
+// the glyph sits against the staff, in staff-heights - the glyph is scaled to
+// its measured bounding box rather than to a guessed font size, because the
+// musical Unicode characters come from whatever system font has them.
+const CLEFS = {
+  treble: { bottom: diatonicIndex(64), glyph: "\u{1D11E}", height: 2.05, above: 0.42 },
+  bass:   { bottom: diatonicIndex(43), glyph: "\u{1D122}", height: 1.05, above: 0.0 }
+};
+
+function drawClef(root, name, top, x) {
+  const clef = CLEFS[name];
+  const el = svg("text", { x: 0, y: 0, "font-size": 40, fill: "var(--staff)" });
+  el.textContent = clef.glyph;
+  root.appendChild(el);
+  const box = el.getBBox();
+  if (!box.height) return;                       // font lacks the glyph
+  const scale = (STAFF_HEIGHT * clef.height) / box.height;
+  const targetTop = top - STAFF_HEIGHT * clef.above;
+  el.setAttribute("transform",
+    `translate(${x - box.x * scale}, ${targetTop - box.y * scale}) scale(${scale})`);
+}
+
+function chooseClef(notes) {
+  const median = notes.map(n => n.pitch).sort((a, b) => a - b)[Math.floor(notes.length / 2)];
+  return median < 60 ? "bass" : "treble";
+}
+
+// Round a sounded duration to the note value it was written as. The MIDI is
+// written with an articulation gap, so the sounded length is a little short of
+// the notated one; the nearest candidate in log space recovers it.
+const VALUES = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+function notatedBeats(beats) {
+  let best = VALUES[0], bestError = Infinity;
+  for (const value of VALUES) {
+    const error = Math.abs(Math.log(beats / value));
+    if (error < bestError) { bestError = error; best = value; }
+  }
+  return best;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svg(name, attrs) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const key in attrs) node.setAttribute(key, attrs[key]);
+  return node;
+}
+
+/* ------------------------------------------------------------------ *
+ * Build the score
+ * ------------------------------------------------------------------ */
+
+const midi = parseMidi(decodeBase64(MIDI_BASE64));
+const tickToSeconds = makeTickToSeconds(midi);
+
+const beatsPerBar = midi.timeSignature.numerator * (4 / midi.timeSignature.denominator);
+const ticksPerBar = beatsPerBar * midi.ticksPerBeat;
+
+const voices = midi.tracks.map((track, index) => ({
+  name: track.name || ("Voice " + (index + 1)),
+  colour: getComputedStyle(document.documentElement).getPropertyValue("--v" + (index % 4)).trim(),
+  clef: chooseClef(track.notes),
+  notes: track.notes.map(note => ({
+    pitch: note.pitch,
+    start: tickToSeconds(note.startTick),
+    end: tickToSeconds(note.endTick),
+    beat: note.startTick / midi.ticksPerBeat,
+    beats: (note.endTick - note.startTick) / midi.ticksPerBeat
+  }))
+}));
+
+const endTick = Math.max(...midi.tracks.flatMap(t => t.notes.map(n => n.endTick)));
+const barCount = Math.max(1, Math.ceil(endTick / ticksPerBar));
+const systemCount = Math.ceil(barCount / BARS_PER_SYSTEM);
+const scoreEndSeconds = tickToSeconds(barCount * ticksPerBar);
+
+const scoreEl = document.getElementById("score");
+const systems = [];
+const noteEls = [];   // { el, start, end, colour }
+
+function buildSystem(index) {
+  const firstBar = index * BARS_PER_SYSTEM;
+  const lastBar = Math.min(firstBar + BARS_PER_SYSTEM, barCount);
+  const startSeconds = tickToSeconds(firstBar * ticksPerBar);
+  const endSeconds = tickToSeconds(lastBar * ticksPerBar);
+
+  const width = Math.max(scoreEl.clientWidth, 560);
+  const usable = width - LEFT_GUTTER - RIGHT_PAD;
+  const height = SYSTEM_PAD_TOP + voices.length * STAFF_SPACING + SYSTEM_PAD_BOTTOM;
+
+  const root = svg("svg", { class: "system", width: "100%", height,
+                            viewBox: `0 0 ${width} ${height}` });
+  // In the document before anything is drawn, so getBBox() can measure glyphs.
+  scoreEl.appendChild(root);
+
+  // seconds -> x. Proportional spacing means the cursor moves at a constant
+  // rate and every voice of the canon lines up vertically.
+  const xAt = seconds =>
+    LEFT_GUTTER + (seconds - startSeconds) / (endSeconds - startSeconds) * usable;
+
+  const staves = voices.map((voice, v) => {
+    const top = SYSTEM_PAD_TOP + v * STAFF_SPACING;
+    for (let line = 0; line < 5; line++) {
+      root.appendChild(svg("line", {
+        x1: LEFT_GUTTER - 10, x2: width - RIGHT_PAD, y1: top + line * LINE_GAP,
+        y2: top + line * LINE_GAP, stroke: "var(--staff)", "stroke-width": 1
+      }));
+    }
+    drawClef(root, voice.clef, top, LEFT_GUTTER - 38);
+
+    const label = svg("text", {
+      x: 4, y: top + STAFF_HEIGHT / 2 + 3.5, "font-size": 10.5, fill: voice.colour,
+      "font-family": "inherit", "letter-spacing": ".4"
+    });
+    label.textContent = voice.name;
+    root.appendChild(label);
+
+    return { top, bottomLineY: top + STAFF_HEIGHT, clef: CLEFS[voice.clef] };
+  });
+
+  const staffTop = staves[0].top;
+  const staffBottom = staves[staves.length - 1].top + STAFF_HEIGHT;
+
+  // Bar lines, drawn through every stave of the system.
+  for (let bar = firstBar; bar <= lastBar; bar++) {
+    const x = xAt(tickToSeconds(bar * ticksPerBar));
+    const last = bar === barCount;
+    root.appendChild(svg("line", {
+      x1: x, x2: x, y1: staffTop, y2: staffBottom,
+      stroke: "var(--staff)", "stroke-width": last ? 2.5 : 1
+    }));
+    if (bar < lastBar) {
+      const number = svg("text", { x: x + 3, y: staffTop - 28, "font-size": 9.5,
+                                   fill: "var(--dim)" });
+      number.textContent = bar + 1;
+      root.appendChild(number);
+    }
+  }
+
+  // Notes.
+  const STEM_LENGTH = 25;
+  voices.forEach((voice, v) => {
+    const staff = staves[v];
+    const inSystem = voice.notes.filter(
+      n => n.start >= startSeconds - 1e-6 && n.start < endSeconds - 1e-6);
+
+    // Lay every note out before drawing, so a beam can see the whole group.
+    const laid = inSystem.map(note => {
+      const value = notatedBeats(note.beats);
+      const position = diatonicIndex(note.pitch) - staff.clef.bottom;  // 0 = bottom line
+      return {
+        note, value, position,
+        x: xAt(note.start),
+        y: staff.bottomLineY - position * STEP,
+        stemUp: position < 4
+      };
+    });
+
+    // Beam runs of eighths (or shorter) that share a quarter-note beat.
+    const groups = new Map();
+    for (const item of laid) {
+      if (item.value >= 1) continue;
+      const key = Math.floor(item.note.beat + 1e-6);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    const beamed = new Map();   // item -> the beam it belongs to
+    const beams = [];
+    for (const mates of groups.values()) {
+      if (mates.length < 2) continue;
+      // One stem direction for the whole group, from its average position.
+      const stemUp = mates.reduce((sum, m) => sum + m.position, 0) / mates.length < 4;
+      const first = mates[0], last = mates[mates.length - 1];
+      const tipOf = item => item.y + (stemUp ? -STEM_LENGTH : STEM_LENGTH);
+      const beam = {
+        stemUp, mates,
+        x1: first.x + (stemUp ? 4.9 : -4.9),
+        x2: last.x + (stemUp ? 4.9 : -4.9),
+        y1: tipOf(first), y2: tipOf(last)
+      };
+      // Keep the beam clear of every notehead in the group.
+      const limit = stemUp
+        ? Math.min(...mates.map(tipOf)) : Math.max(...mates.map(tipOf));
+      const slope = (beam.y2 - beam.y1) / (beam.x2 - beam.x1 || 1);
+      for (const mate of mates) {
+        const onBeam = beam.y1 + slope * (mate.x + (stemUp ? 4.9 : -4.9) - beam.x1);
+        const overshoot = stemUp ? onBeam - limit : limit - onBeam;
+        if (overshoot > 0) { beam.y1 += stemUp ? -overshoot : overshoot;
+                             beam.y2 += stemUp ? -overshoot : overshoot; }
+      }
+      for (const mate of mates) { mate.stemUp = stemUp; beamed.set(mate, beam); }
+      beams.push(beam);
+    }
+
+    for (const item of laid) {
+      const { note, value, position, x, y, stemUp } = item;
+
+      for (let ledger = -2; ledger >= position; ledger -= 2) {
+        const ly = staff.bottomLineY - ledger * STEP;
+        root.appendChild(svg("line", { x1: x - 7.5, x2: x + 7.5, y1: ly, y2: ly,
+                                       stroke: "var(--staff)", "stroke-width": 1 }));
+      }
+      for (let ledger = 10; ledger <= position; ledger += 2) {
+        const ly = staff.bottomLineY - ledger * STEP;
+        root.appendChild(svg("line", { x1: x - 7.5, x2: x + 7.5, y1: ly, y2: ly,
+                                       stroke: "var(--staff)", "stroke-width": 1 }));
+      }
+
+      const group = svg("g", { class: "note", "data-voice": v, fill: voice.colour,
+                               stroke: voice.colour, color: voice.colour });
+      group.appendChild(svg("ellipse", {
+        cx: x, cy: y, rx: 5.2, ry: 3.9, transform: `rotate(-18 ${x} ${y})`,
+        fill: value >= 2 ? "none" : voice.colour, "stroke-width": value >= 2 ? 1.6 : 0.9
+      }));
+
+      if (value < 4) {
+        const stemX = x + (stemUp ? 4.9 : -4.9);
+        const beam = beamed.get(item);
+        let tipY;
+        if (beam) {
+          const slope = (beam.y2 - beam.y1) / (beam.x2 - beam.x1 || 1);
+          tipY = beam.y1 + slope * (stemX - beam.x1);
+        } else {
+          tipY = y + (stemUp ? -STEM_LENGTH : STEM_LENGTH);
+        }
+        group.appendChild(svg("line", { x1: stemX, x2: stemX, y1: y, y2: tipY,
+                                        "stroke-width": 1.3 }));
+        if (value < 1 && !beam) {
+          group.appendChild(svg("path", {
+            d: stemUp
+              ? `M${stemX},${tipY} q7,4 6.5,11 q-2.5,-6 -6.5,-7 z`
+              : `M${stemX},${tipY} q7,-4 6.5,-11 q-2.5,6 -6.5,7 z`,
+            "stroke-width": 0.5
+          }));
+        }
+      }
+
+      root.appendChild(group);
+      noteEls.push({ el: group, start: note.start, end: note.end });
+    }
+
+    for (const beam of beams) {
+      root.appendChild(svg("line", {
+        x1: beam.x1, x2: beam.x2, y1: beam.y1, y2: beam.y2,
+        stroke: voice.colour, "stroke-width": 3.2, "stroke-linecap": "butt"
+      }));
+    }
+  });
+
+  const cursor = svg("line", {
+    x1: LEFT_GUTTER, x2: LEFT_GUTTER, y1: staffTop - 12, y2: staffBottom + 12,
+    stroke: "var(--cursor)", "stroke-width": 2, opacity: 0
+  });
+  root.appendChild(cursor);
+  return { root, cursor, staves, startSeconds, endSeconds, xAt, index };
+}
+
+function buildScore() {
+  scoreEl.replaceChildren();
+  systems.length = 0;
+  noteEls.length = 0;
+  for (let i = 0; i < systemCount; i++) systems.push(buildSystem(i));
+}
+buildScore();
+
+// Legend
+const legend = document.getElementById("legend");
+voices.forEach(voice => {
+  const item = document.createElement("span");
+  const swatch = document.createElement("i");
+  swatch.className = "swatch";
+  swatch.style.background = voice.colour;
+  item.appendChild(swatch);
+  item.appendChild(document.createTextNode(voice.name));
+  legend.appendChild(item);
+});
+
+/* ------------------------------------------------------------------ *
+ * Playback and the cursor
+ * ------------------------------------------------------------------ */
+
+const audio = document.getElementById("audio");
+const playButton = document.getElementById("play");
+const seek = document.getElementById("seek");
+const clock = document.getElementById("clock");
+const warn = document.getElementById("warn");
+
+let seeking = false;
+let activeSystem = -1;
+const lit = new Set();
+
+function formatTime(seconds) {
+  if (!isFinite(seconds)) seconds = 0;
+  const whole = Math.floor(seconds);
+  return Math.floor(whole / 60) + ":" + String(whole % 60).padStart(2, "0");
+}
+
+function draw() {
+  const now = audio.currentTime;
+
+  // Which system is sounding. Past the last bar the cursor parks on the final
+  // barline while the render's tail decays.
+  let index = systems.findIndex(s => now >= s.startSeconds && now < s.endSeconds);
+  if (index === -1) index = now >= scoreEndSeconds ? systems.length - 1 : 0;
+  const system = systems[index];
+
+  if (index !== activeSystem) {
+    for (const other of systems) other.cursor.setAttribute("opacity", 0);
+    activeSystem = index;
+    system.root.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  const at = Math.min(Math.max(now, system.startSeconds), system.endSeconds);
+  const x = system.xAt(at);
+  system.cursor.setAttribute("x1", x);
+  system.cursor.setAttribute("x2", x);
+  system.cursor.setAttribute("opacity", 1);
+
+  for (const note of noteEls) {
+    const sounding = now >= note.start && now < note.end;
+    if (sounding && !lit.has(note)) { note.el.classList.add("on"); lit.add(note); }
+    else if (!sounding && lit.has(note)) { note.el.classList.remove("on"); lit.delete(note); }
+  }
+
+  const total = isFinite(audio.duration) ? audio.duration : scoreEndSeconds;
+  if (!seeking) seek.value = Math.round(now / total * 1000);
+  clock.textContent = formatTime(now) + " / " + formatTime(total);
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+playButton.addEventListener("click", () => {
+  if (audio.paused) audio.play(); else audio.pause();
+});
+audio.addEventListener("play", () => { playButton.innerHTML = "&#10073;&#10073;"; });
+audio.addEventListener("pause", () => { playButton.innerHTML = "&#9654;"; });
+audio.addEventListener("ended", () => { playButton.innerHTML = "&#9654;"; });
+
+seek.addEventListener("input", () => {
+  seeking = true;
+  const total = isFinite(audio.duration) ? audio.duration : scoreEndSeconds;
+  audio.currentTime = seek.value / 1000 * total;
+});
+seek.addEventListener("change", () => { seeking = false; });
+
+document.addEventListener("keydown", event => {
+  if (event.code === "Space") { event.preventDefault(); playButton.click(); }
+});
+
+// Some browsers refuse to load local media from a file:// page; offer a picker.
+audio.addEventListener("error", () => warn.classList.add("show"));
+document.getElementById("pick").addEventListener("change", event => {
+  const file = event.target.files[0];
+  if (file) { audio.src = URL.createObjectURL(file); warn.classList.remove("show"); }
+});
+
+let resizeTimer;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    buildScore();
+    activeSystem = -1;
+    lit.clear();
+  }, 150);
+});
+
+// Exposed so an automated pass can check the cursor against the audio clock.
+window.__player = {
+  audio,
+  systems,
+  scoreEndSeconds,
+  staffHeight: STAFF_HEIGHT,
+  cursorSeconds() {
+    const system = systems[activeSystem] || systems[0];
+    const x = parseFloat(system.cursor.getAttribute("x1"));
+    const span = system.endSeconds - system.startSeconds;
+    const usable = system.xAt(system.endSeconds) - system.xAt(system.startSeconds);
+    return system.startSeconds + (x - system.xAt(system.startSeconds)) / usable * span;
+  }
+};
+</script>
+</body>
+</html>

@@ -33,17 +33,34 @@ from claude_agent_sdk import (
 )
 
 from . import pricing
+from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
 from .store import SettingsStore, TaskStore
 from .diffs import preview_change
 from .models import Event, Task, TaskState
-from . import widgets
+from . import skills, surveyor, widgets
 from .permissions import PermissionPolicy
-from .prompts import DESIGN_SYSTEM, GENERATION_SYSTEM, design_prompt, generation_prompt
+from .prompts import (
+    DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM,
+    design_prompt, generation_prompt, survey_prompt,
+)
 
 
 log = logging.getLogger("dex.runner")
+
+#: Why a run that raised nothing can still have failed. A package task that
+#: ends its turn with an empty directory has not done its job, however calmly
+#: it said so — and the usual way to get here is an agent that decided to wait
+#: for something and ended its turn to do the waiting. Nothing re-invokes a
+#: finished task, so that wait never ends and the run is lost in silence.
+#: Failing it says so out loud and keeps the session, so picking it back up is
+#: one press rather than a fresh start.
+EMPTY_PACKAGE = (
+    "ended its turn without writing anything into its package. If it stopped "
+    "to wait for something, nothing would have woken it up again — resume the "
+    "task to carry on in the same session."
+)
 
 
 def manim_available() -> bool:
@@ -144,6 +161,14 @@ class TaskRunner:
         self.store = store
         self.settings = settings
         self.task_dir = task.output_dir(config.assets_dir, config.default_project)
+        #: The enabled skills as they were before this task ran, so a
+        #: promotion can publish a new version without losing the old one.
+        self._skill_snapshot: dict[str, Path] = {}
+        self._skill_snapshot_dir: Path | None = None
+        #: Set by the queue for a survey run, so its result reaches the planner.
+        #: Declared here so a runner built directly — in a test, say — has the
+        #: attribute rather than failing on the one line that reads it.
+        self.surveyed: Any = None
         #: Streaming block index -> the id the UI accumulates deltas under.
         self._blocks: dict[int, str] = {}
         self._block_kinds: dict[int, str] = {}
@@ -366,7 +391,34 @@ class TaskRunner:
             # projects and therefore live at the top level rather than inside
             # the project it is editing.
             extra_writable=(
-                (widgets.widgets_dir(self.config.workspace),) if self.task.is_design else ()
+                # A project's source data. Every task may read and write here:
+                # a corpus to index, a PDF to translate, a scratch database
+                # built beside it — none of that belongs in the package the
+                # task produces, and a task that had to ask before touching it
+                # would stop on its first real step.
+                (self.config.project_datasets(self.task.project),)
+                # The `utils/` of every skill this project has enabled. A
+                # promoted helper belongs in the skill: the project's own
+                # `utils/` is materialised from these, so a module written
+                # there is gone at the next enable and the skill it should
+                # have joined never learns it exists.
+                # A design turn authors skills: it forks one to a draft,
+                # edits the draft, and dex publishes it. That means creating
+                # directories under `skills/`, so the root is writable for
+                # this scope only — a generation task may write into the
+                # `utils/` of a skill it was given, and nothing more.
+                + ((skills.skills_dir(self.config.workspace),)
+                   if self.task.is_design else ())
+                + skills.enabled_utils_dirs(
+                    self.config.workspace,
+                    self.task.project_dir(
+                        self.config.assets_dir, self.config.default_project
+                    ),
+                )
+                # A design turn also authors widgets, which are shared across
+                # projects and therefore live at the top level rather than
+                # inside the project it is editing.
+                + ((widgets.widgets_dir(self.config.workspace),) if self.task.is_design else ())
             ),
             escalate=self._escalate,
         )
@@ -389,7 +441,11 @@ class TaskRunner:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": DESIGN_SYSTEM if self.task.is_design else GENERATION_SYSTEM,
+                "append": (
+                    SURVEY_SYSTEM if self.task.is_survey
+                    else DESIGN_SYSTEM if self.task.is_design
+                    else GENERATION_SYSTEM
+                ),
             },
             permission_mode="default",
             # Stream token deltas so the UI can render text as it arrives
@@ -403,8 +459,40 @@ class TaskRunner:
             # the panel's collapsed thinking step fills in as it arrives.
             thinking={"type": "adaptive", "display": "summarized"},
             can_use_tool=decide,
-            mcp_servers={"dex": self._ask_user_server()},
-            max_turns=self.config.max_turns,
+            mcp_servers=(
+                {
+                    "survey": surveyor.survey_server(
+                        self.config.project_datasets(self.task.project),
+                        # Only what this message brought. The project's data
+                        # directory keeps every upload ever made to it, and a
+                        # survey shown the lot spends its first turns working
+                        # out which of them the operator actually meant.
+                        self.task.survey_payload()["attachments"],
+                    ),
+                    # A survey asks too. Pre-planning is where a question
+                    # belongs: it is the one step that has read the guide and
+                    # looked at the material, and asking here parks a task with
+                    # an activity pane rather than leaving a sentence in the
+                    # chat that the next planning call will not remember.
+                    "dex": self._ask_user_server(),
+                }
+                if self.task.is_survey
+                else {"dex": self._ask_user_server()}
+            ),
+            # A survey reads structure and writes nothing, so it is given the
+            # four survey tools and denied every built-in one. This is the
+            # guarantee that a thousand-page document never enters the context:
+            # not a line in the prompt asking nicely, but the absence of any
+            # tool that could do it. `allowed_tools` is left unset for every
+            # other scope, where the permission callback is what decides.
+            **(
+                {"allowed_tools": surveyor.TOOL_NAMES + ["mcp__dex__ask_user"]}
+                if self.task.is_survey
+                else {}
+            ),
+            max_turns=(
+                surveyor.MAX_TURNS if self.task.is_survey else self.config.max_turns
+            ),
             # Read at task start, so a change applies to new work while runs
             # already going keep the effort they were planned with.
             effort=effort,  # type: ignore[arg-type]
@@ -416,7 +504,17 @@ class TaskRunner:
         )
 
         self._refresh_utils_index()
-        if self.task.is_design:
+        self._snapshot_skills()
+        if self.task.is_survey:
+            payload = self.task.survey_payload()
+            prompt = survey_prompt(
+                message=payload["message"],
+                attachments=payload["attachments"],
+                urls=payload["urls"],
+                project=self.task.project or self.config.default_project,
+                guide=payload["guide"],
+            )
+        elif self.task.is_design:
             # A design turn carries its conversation in `problem`, packed by the
             # API, because a task has one prompt field and the chat has a
             # history the model needs.
@@ -438,7 +536,16 @@ class TaskRunner:
                 manim_available=manim_available(),
                 project_wide=self.task.project_wide,
                 workspace=self.config.workspace,
+                datasets_dir=self.config.project_datasets(self.task.project),
+                skills=self._enabled_skills(),
             )
+
+        # Taken before the agent runs, so what it wrote can be told apart from
+        # what it inherited: a resumed attempt continues its parent's package,
+        # and siblings sharing one open onto a directory that already has files
+        # in it. Against emptiness alone, both would pass without lifting a
+        # finger.
+        before = self._artifacts() if self.task.builds_package else {}
 
         try:
             async with asyncio.timeout(self.config.task_timeout_s):
@@ -465,8 +572,23 @@ class TaskRunner:
         else:
             self.task.finished_at = time.time()
             self.task.activity = None
-            if self.task.state is not TaskState.FAILED:
+            if self.task.state is TaskState.FAILED:
+                pass
+            # A clean exit is not the same thing as a result. Checked here and
+            # not left to the operator's eye, because an empty package looks
+            # exactly like a full one in a list of green rows.
+            elif self.task.builds_package and not self._wrote_anything(before):
+                self._fail(EMPTY_PACKAGE)
+            else:
                 self.set_state(TaskState.SUCCEEDED)
+            # After the verdict, so a run that failed its own checks does not
+            # publish a helper it wrote on the way. Only a task that finished
+            # clean gets its promotion materialised for everybody.
+            if self.task.state is TaskState.SUCCEEDED:
+                if self.task.is_design:
+                    self._adopt_drafts()
+                else:
+                    self._resync_skills()
         finally:
             for future in list(self.task.pending.values()):
                 if not future.done():
@@ -508,7 +630,21 @@ class TaskRunner:
         except Exception:
             log.exception("could not record cost for %s", self.task.id)
 
-    async def _post_design_reply(self, thread_id: str, summary: str) -> None:
+    async def _hand_survey_on(self, result: str) -> None:
+        """Give a finished survey to whoever plans from it."""
+        if self.surveyed is None:
+            log.warning("survey %s finished with nobody to plan from it", self.task.id)
+            return
+        try:
+            await self.surveyed(self.task, result)
+        except Exception:
+            # The survey itself succeeded and its activity is on record; a
+            # failure to plan from it must not mark the run as failed.
+            log.exception("could not plan from survey %s", self.task.id)
+
+    async def _post_design_reply(
+        self, thread_id: str, summary: str, failed: bool = False
+    ) -> None:
         """Append a design turn's answer to its thread.
 
         Written through the same store the API uses, so a reload shows it; the
@@ -520,7 +656,13 @@ class TaskRunner:
 
             message = ThreadMessage(
                 role="dex", kind="text", text=summary.strip()[:4000],
-                data={"project": self.task.project, "taskId": self.task.id},
+                # `taskId` is what lets the reader open the run behind the
+                # reply; without it a finished turn's activity is unreachable.
+                data={
+                    "project": self.task.project,
+                    "taskId": self.task.id,
+                    "failed": failed,
+                },
             )
             await ThreadStore(self.store.db).append(thread_id, message)
             self.bus.publish(
@@ -545,6 +687,111 @@ class TaskRunner:
             await self.store.set_session(self.task.id, session_id)
         except Exception:
             log.exception("could not record session for %s", self.task.id)
+
+    def _enabled_skills(self) -> list[tuple[str, str, str, bool]]:
+        """Every enabled skill: name, description, directory, and whether it
+        has `utils/` a helper could be promoted into.
+
+        The path is the versioned one, because that is the only path the
+        permission policy allows. A widget-only skill is still listed — its
+        `SKILL.md` is worth reading — but without the promote line, since there
+        is nowhere in it to put a module.
+        """
+        try:
+            project_dir = self.task.project_dir(
+                self.config.assets_dir, self.config.default_project
+            )
+            on = skills.read_enabled(project_dir).skills
+            # Matched on name *and* version. Two versions of a skill can sit
+            # side by side, and matching the name alone listed both — which
+            # tells a task to read two sets of instructions and leaves it to
+            # guess which directory it may write to.
+            return [
+                (s.name, s.description, str(s.path), s.utils_dir.is_dir())
+                for s in skills.all_skills(self.config.workspace)
+                if on.get(s.name) == s.version
+            ]
+        except Exception:
+            log.exception("could not read the enabled skills for %s", self.task.id)
+            return []
+
+    def _snapshot_skills(self) -> None:
+        """Copy the enabled skills aside before the agent can write to one.
+
+        A promotion publishes a new version, which renames the directory. The
+        version this project was on has to survive that, or every other project
+        still recorded against it breaks. Skills are small; this is the cheap
+        way to keep both versions on disk.
+        """
+        try:
+            import tempfile
+
+            self._skill_snapshot_dir = Path(tempfile.mkdtemp(prefix="dex-skills-"))
+            self._skill_snapshot = skills.snapshot(
+                self.config.workspace,
+                self.task.project_dir(
+                    self.config.assets_dir, self.config.default_project
+                ),
+                self._skill_snapshot_dir,
+            )
+        except Exception:
+            # Without it a promotion still works; it just moves the skill
+            # forward instead of leaving the old version behind.
+            log.exception("could not snapshot skills for %s", self.task.id)
+            self._skill_snapshot = {}
+
+    def _adopt_drafts(self) -> None:
+        """Publish what a design turn authored, and move every project onto it.
+
+        Different from a task's promotion on purpose. A task writing a helper
+        is doing it in passing, so only its own project moves. A design turn is
+        an authoring act — deliberate, and tested before it lands — so
+        everything on that skill moves, or the thing just designed is running
+        nowhere.
+        """
+        try:
+            done = skills.adopt(self.config.workspace, self.config.assets_dir)
+            for name, version, moved in done:
+                log.info("published %s@%s onto %s", name, version, moved or "nobody")
+                where = ", ".join(moved) if moved else "no project yet"
+                self.emit(
+                    "text",
+                    text=f"Published `{name}@{version}` — {where} now on it.",
+                )
+        except Exception:
+            log.exception("could not adopt drafts after %s", self.task.id)
+
+    def _resync_skills(self) -> None:
+        """Publish and materialise any skill this task wrote into.
+
+        After the run, not during it: a task that promoted a helper and then
+        failed its own checks should not leave a published version behind.
+        Never fails a task — the work is done and on disk either way.
+        """
+        try:
+            project_dir = self.task.project_dir(
+                self.config.assets_dir, self.config.default_project
+            )
+            changed = skills.resync(
+                self.config.workspace, project_dir, self._skill_snapshot
+            )
+            if changed:
+                log.info("task %s changed skill(s): %s", self.task.id, ", ".join(changed))
+                self.emit(
+                    "text",
+                    text=f"Published a new version of {', '.join(changed)}. "
+                    "This project is on it; others stay where they are until "
+                    "somebody moves them.",
+                )
+        except Exception:
+            log.exception("could not resync skills after %s", self.task.id)
+        finally:
+            cleanup = getattr(self, "_skill_snapshot_dir", None)
+            if cleanup is not None:
+                import shutil
+
+                shutil.rmtree(cleanup, ignore_errors=True)
+                self._skill_snapshot_dir = None
 
     def _refresh_utils_index(self) -> None:
         """Rewrite the project's `utils/API.md` before the agent reads it.
@@ -596,6 +843,41 @@ class TaskRunner:
             if block_id is not None:
                 self.emit("block_end", id=block_id)
 
+    def _artifacts(self) -> dict[Path, int]:
+        """Every artifact in the package, and when it was last written.
+
+        The watcher's own test, so what it already declines to announce —
+        `__pycache__`, `.cues`, a half-written `.part` — is not counted here
+        either. Relative paths, because the ignore list is matched against path
+        parts and the absolute prefix is none of its business.
+        """
+        found: dict[Path, int] = {}
+        if not self.task_dir.is_dir():
+            return found
+        for path in self.task_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(self.task_dir)
+            if not is_artifact(relative):
+                continue
+            try:
+                found[relative] = path.stat().st_mtime_ns
+            except OSError:  # vanished mid-walk; it is not output either way
+                continue
+        return found
+
+    def _wrote_anything(self, before: dict[Path, int]) -> bool:
+        """Whether this run put a file worth showing into its package.
+
+        A file nobody had before, or one whose contents were rewritten. Asking
+        only whether the directory is non-empty would let a run that inherited
+        a full package coast on somebody else's work.
+        """
+        return any(
+            before.get(relative) != written
+            for relative, written in self._artifacts().items()
+        )
+
     def _fail(self, message: str) -> None:
         if self.task.archived:
             # Archived out from under the run. The SDK reports the vanished
@@ -622,6 +904,17 @@ class TaskRunner:
         self.task.activity = None
         self.emit("error", message=message, fatal=True)
         self.set_state(TaskState.FAILED, error=message)
+        if self.task.is_design and self.task.thread_id:
+            # A design turn that succeeds posts its answer into the thread, and
+            # that message is the only thing linking back to the run. One that
+            # failed posted nothing, so the turn vanished from the conversation
+            # the moment it stopped being live — no reply, no chip, no way back
+            # to the activity that would say what went wrong.
+            asyncio.create_task(
+                self._post_design_reply(
+                    self.task.thread_id, f"That turn failed.\n\n{message}", failed=True
+                )
+            )
 
     # ------------------------------------------------------------- translate
 
@@ -735,7 +1028,13 @@ class TaskRunner:
                 self.task.tokens = counts
                 asyncio.create_task(self._store_tokens(counts))
             self.task.turns = message.num_turns
-            if self.task.is_design and self.task.thread_id and message.result:
+            if self.task.is_survey and self.task.thread_id and message.result:
+                # A survey is a means, not an end: nothing it says is useful
+                # until the planner has turned it into tasks the operator can
+                # choose from. Handing it straight on is what makes the two
+                # runs read as one step in the thread.
+                asyncio.create_task(self._hand_survey_on(message.result))
+            elif self.task.is_design and self.task.thread_id and message.result:
                 # The design thread is a conversation, so it needs the reply in
                 # line. The task panel still holds the whole run; this is the
                 # part somebody reading the thread should not have to dig for.

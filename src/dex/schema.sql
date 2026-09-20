@@ -172,6 +172,12 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'package'
 -- Older databases have no notion of a pause dex must not undo.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS held BOOLEAN NOT NULL DEFAULT false;
 
+-- Where in the operator's attached material a task's work came from, as the
+-- survey anchored it: `{source, label, page, endPage, ...}` or a URL. JSONB
+-- rather than columns because the shape differs per kind of source -- a PDF
+-- has pages, a workbook has a sheet, a link has neither.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS anchor JSONB;
+
 -- Tokens, as the agent's own result reported them. Only dollars were kept
 -- before, which made "what did the thinking cost" unanswerable: thinking bills
 -- as output and is already inside `output_tokens`, so nothing was missing from

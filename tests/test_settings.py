@@ -190,8 +190,10 @@ def test_the_brief_makes_a_task_check_the_switch_before_promoting():
 def test_the_guides_gate_sharing_on_the_switch():
     from pathlib import Path
 
-    for project in ("algorithms", "yoga"):
-        guide = (Path("assets") / project / "AGENTS.md").read_text(encoding="utf-8")
+    # The sharing protocol is the same everywhere, so it lives in the common
+    # guide rather than in four copies that could disagree about it.
+    for project in ("common",):
+        guide = Path("AGENTS.common.md").read_text(encoding="utf-8")
         assert "mcp__dex__utility_proposals_enabled" in guide, project
         # Disabled means leave the tree alone; enabled means ask, and dex
         # answers on the operator's behalf.

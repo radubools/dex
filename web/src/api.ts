@@ -2,7 +2,7 @@ import type {
   AssetResponse, CostTotals, CostsResponse, DexEvent, Health, Plan, PlannedTask,
   AnimationInfo, FeedResponse, GuideResponse, Project, ProjectsResponse, Settings,
   SettingsResponse, Task, TaskMessage, Thread, ThreadSummary, DesignReply,
-  PackageEntry, TagCount,
+  PackageEntry, TagCount, UploadBatch, SkillsResponse, SkillVersion,
 } from './types'
 
 /**
@@ -105,11 +105,20 @@ export const deleteThread = (id: string) =>
  * Says something in a thread. A chat thread answers with a plan to confirm; a
  * design thread answers by redrafting the project's guide.
  */
-export const sendMessage = (threadId: string, text: string) =>
-  post<{ plan?: Plan; design?: DesignReply }>(`/api/threads/${threadId}/messages`, { text })
+export const sendMessage = (threadId: string, text: string, uploads: string[] = []) =>
+  post<{ plan?: Plan; design?: DesignReply }>(`/api/threads/${threadId}/messages`, {
+    text,
+    uploads,
+  })
 
-export const confirmPlan = (threadId: string, tasks: PlannedTask[]) =>
-  post<{ tasks: Task[] }>('/api/chat/confirm', { tasks, thread_id: threadId }).then((r) => r.tasks)
+export const confirmPlan = (threadId: string, tasks: PlannedTask[], uploads: string[] = []) =>
+  post<{ tasks: Task[] }>('/api/chat/confirm', {
+    tasks,
+    thread_id: threadId,
+    // The files were attached to the request, so every task the planner split
+    // it into gets them.
+    uploads,
+  }).then((r) => r.tasks)
 
 export const getSettings = () => request<SettingsResponse>('/api/settings')
 
@@ -159,8 +168,70 @@ export const getTaskMessages = (id: string) =>
   request<{ messages: TaskMessage[] }>(`/api/tasks/${id}/messages`).then((r) => r.messages)
 
 /** Held while the task runs; delivered as the brief for its next attempt. */
-export const sendTaskMessage = (id: string, text: string) =>
-  post<{ message: TaskMessage }>(`/api/tasks/${id}/messages`, { text })
+export const sendTaskMessage = (id: string, text: string, uploads: string[] = []) =>
+  post<{ message: TaskMessage }>(`/api/tasks/${id}/messages`, { text, uploads })
+
+/**
+ * Store files in the project's `datasets/` directory, for tasks to read and
+ * write. A message then names them, and the server re-checks each name against
+ * that directory rather than trusting it. `content-type` is left unset on
+ * purpose — the browser has to set the multipart boundary itself.
+ */
+export const uploadSources = async (
+  files: File[],
+  project?: string,
+): Promise<UploadBatch> => {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  const query = project ? `?project=${encodeURIComponent(project)}` : ''
+  const response = await fetch(`/api/uploads${query}`, {
+    method: 'POST',
+    body: form,
+    credentials: 'same-origin',
+    headers: { 'x-dex-token': token },
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(detail ? safeDetail(detail) : `upload failed (${response.status})`)
+  }
+  return response.json() as Promise<UploadBatch>
+}
+
+/** Every skill, with its version and the projects it is enabled for. */
+export const listSkills = () => request<SkillsResponse>('/api/skills')
+
+/** Turn one skill on or off for one project; the server materialises. */
+export const setSkillEnabled = (
+  name: string,
+  version: string,
+  project: string,
+  on: boolean,
+) =>
+  request<{ project: string; skills: Record<string, string> }>(
+    `/api/skills/${encodeURIComponent(name)}/projects/${encodeURIComponent(project)}` +
+      `?version=${encodeURIComponent(version)}`,
+    { method: on ? 'POST' : 'DELETE', body: '{}' },
+  )
+
+/** The skills one project has on, for the design thread's picker. */
+export const projectSkills = (slug: string) =>
+  request<{ skills: SkillVersion[] }>(`/api/projects/${slug}/skills`)
+
+export const getSkillDoc = (name: string, version: string) =>
+  request<{ name: string; version: string; path: string; text: string }>(
+    `/api/skills/${encodeURIComponent(name)}/doc?version=${encodeURIComponent(version)}`,
+  )
+
+/**
+ * Edit a skill's instructions. The server forks and publishes rather than
+ * writing in place, so this comes back with a *new* version and the projects
+ * it moved.
+ */
+export const putSkillDoc = (name: string, version: string, text: string) =>
+  request<{ ok: boolean; version: string; moved: string[]; text: string }>(
+    `/api/skills/${encodeURIComponent(name)}/doc?version=${encodeURIComponent(version)}`,
+    { method: 'PUT', body: JSON.stringify({ text }) },
+  )
 
 export const cancelTask = (id: string) => post<{ ok: boolean }>(`/api/tasks/${id}/cancel`)
 
@@ -250,6 +321,17 @@ export const getTaskEvents = (id: string) =>
 
 export const assetUrl = (path: string) =>
   `/api/assets/raw?path=${encodeURIComponent(path)}&t=${encodeURIComponent(token)}`
+
+/**
+ * A file an operator attached, addressed by project and name rather than by
+ * path: `datasets/` is not the assets tree and has no path-shaped identity in
+ * the UI. The token rides in the query because an `<iframe>` and an `<img>`
+ * send no headers.
+ */
+export const sourceUrl = (project: string, name: string) =>
+  `/api/datasets/raw?project=${encodeURIComponent(project)}&name=${encodeURIComponent(
+    name,
+  )}&t=${encodeURIComponent(token)}`
 
 /**
  * Subscribes to the server's event stream, reconnecting with the last seen

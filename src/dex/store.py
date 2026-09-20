@@ -27,7 +27,7 @@ TASK_COLUMNS = """
     extract(epoch from started_at)::float8 AS started_at,
     extract(epoch from finished_at)::float8 AS finished_at,
     error, cost_usd, turns, session_id, attempt, parent_id, resumed_from, output_slug,
-    model, cost_is_estimate, project, scope, held
+    model, cost_is_estimate, project, scope, held, anchor
 """
 
 
@@ -57,6 +57,17 @@ def task_from_row(row: asyncpg.Record) -> Task:
     task.project = row["project"]
     task.scope = row["scope"]
     task.held = row["held"]
+    # JSONB comes back as text through asyncpg unless a codec is registered,
+    # and every other column here is a scalar — decoding the one field is
+    # cheaper than teaching the pool about JSON for it.
+    raw_anchor = row["anchor"]
+    if isinstance(raw_anchor, str):
+        try:
+            task.anchor = json.loads(raw_anchor)
+        except ValueError:
+            task.anchor = None
+    else:
+        task.anchor = raw_anchor
     return task
 
 
@@ -210,13 +221,14 @@ class TaskStore:
         await self.db.pool.execute(
             """INSERT INTO tasks (id, thread_id, title, slug, problem, state, created_at,
                                   attempt, parent_id, session_id, output_slug, resumed_from,
-                                  model, project, scope, held)
+                                  model, project, scope, held, anchor)
                VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8, $9, $10, $11, $12, $13, $14,
-                       $15, $16)""",
+                       $15, $16, $17)""",
             task.id, task.thread_id, task.title, task.slug, task.problem,
             task.state.value, task.created_at, task.attempt, task.parent_id, task.session_id,
             task.output_slug, task.resumed_from, task.model, task.project, task.scope,
             task.held,
+            json.dumps(task.anchor) if task.anchor else None,
         )
         return task
 

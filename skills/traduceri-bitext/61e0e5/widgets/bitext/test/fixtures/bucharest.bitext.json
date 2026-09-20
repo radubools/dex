@@ -1,0 +1,58 @@
+{
+  "title": "Bucharest",
+  "mode": "translate",
+  "source": { "lang": "en", "origin": "https://en.wikipedia.org/wiki/Bucharest" },
+  "target": { "lang": "ro", "file": "bucharest.ro.md" },
+  "segments": [
+    {
+      "n": 1,
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "Bucharest (Romanian: București [bukuˈreʃtʲ] ⓘ) is the capital and largest city of Romania. The metropolis stands on the River Dâmbovița in south-eastern Romania. Its population is officially estimated at 1.71 million residents within a greater metropolitan area of 2.33 million residents, which makes Bucharest the 9th most-populous city by population within city limits in the European Union. The city has an area of 239 km2 (92 sq mi), while the metropolitan area covers 1,803 km2 (696 sq mi). The city proper is administratively known as the \"Municipality of Bucharest\" (Romanian: Municipiul București), and has the same administrative level as that of a national county, being further subdivided into six sectors, each governed by a local mayor. Bucharest is a major cultural, political and economic hub, the country's seat of government, and the capital of the Muntenia region. It is an enclave completely surrounded by Ilfov County.",
+      "target": "București (în română: București [bukuˈreʃtʲ]) este capitala și cel mai mare oraș al României. Metropola se află pe râul Dâmbovița, în sud-estul României. Populația îi este estimată oficial la 1,71 milioane de locuitori, într-o zonă metropolitană extinsă de 2,33 milioane de locuitori, ceea ce face din București al nouălea oraș ca populație în limitele administrative din Uniunea Europeană. Orașul are o suprafață de 239 km2 (92 de mile pătrate), în timp ce zona metropolitană acoperă 1.803 km2 (696 de mile pătrate). Orașul propriu-zis este cunoscut administrativ drept „Municipiul București” și are același nivel administrativ ca un județ, fiind împărțit la rândul lui în șase sectoare, fiecare condus de un primar local. Bucureștiul este un important centru cultural, politic și economic, sediul guvernului țării și capitala regiunii Muntenia. Este o enclavă înconjurată complet de județul Ilfov."
+    },
+    {
+      "n": 2,
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "Bucharest was first mentioned in 1459, and became a centre of Wallachian commerce and governance in the 16th and 17th centuries. The city became the capital of the Romanian United Principalities in 1862, and boomed after the 1881 founding of the Romanian Kingdom. In the following decades, the city became known for its cosmopolitanism and eclectic architecture, being nicknamed \"Paris of the East\". However, it was severely damaged in the Second World War. Under the Socialist Republic of Romania, the city again grew massively in population and area, and new developments were characterised by socialist architecture and planning, particularly Nicolae Ceaușescu's program of systematization. In recent years, the city has been experiencing an economic and cultural boom. It is one of the fastest-growing high-tech cities in Europe. In 2016, the historical city centre was listed as \"endangered\" by the World Monuments Watch.",
+      "target": "Bucureștiul este menționat pentru prima dată în 1459 și devine un centru al comerțului și al cârmuirii Țării Românești în secolele al XVI-lea și al XVII-lea. Orașul ajunge capitala Principatelor Unite Române în 1862 și cunoaște un avânt după întemeierea Regatului României, în 1881. În deceniile următoare devine cunoscut pentru cosmopolitismul și arhitectura lui eclectică, fiind supranumit „Parisul Estului”. A fost însă grav avariat în Al Doilea Război Mondial. Sub Republica Socialistă România, orașul a crescut din nou masiv ca populație și ca suprafață, iar construcțiile noi au stat sub semnul arhitecturii și al urbanismului socialist, în special sub programul de sistematizare al lui Nicolae Ceaușescu. În ultimii ani, orașul trăiește un avânt economic și cultural. Este unul dintre orașele high-tech cu cea mai rapidă creștere din Europa. În 2016, centrul istoric a fost trecut de World Monuments Watch pe lista monumentelor „în pericol”."
+    },
+    {
+      "n": 3,
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "Bucharest is by far the most populous city of Romania, having reached one million inhabitants in the 1940s. In 2017, Bucharest was the European city with the highest growth of tourists who stay over night, according to the Mastercard Global Index of Urban Destinations. In 2018 and 2019, Bucharest ranked as the European destination with the highest potential for development according to the same study.",
+      "target": "Bucureștiul este de departe cel mai populat oraș al României, ajungând la un milion de locuitori în anii 1940. În 2017 a fost orașul european cu cea mai mare creștere a numărului de turiști care înnoptează, potrivit Mastercard Global Index of Urban Destinations. În 2018 și în 2019, tot potrivit aceluiași studiu, Bucureștiul s-a clasat drept destinația europeană cu cel mai mare potențial de dezvoltare."
+    },
+    {
+      "n": 4,
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "Economically, Bucharest is the most prosperous city in Romania and the richest capital and city in the region, having surpassed Budapest since 2017. The city has a number of large convention facilities, educational institutes, cultural venues, traditional \"shopping arcades\" and recreational areas.",
+      "target": "Economic, Bucureștiul este cel mai prosper oraș din România și cea mai bogată capitală și cel mai bogat oraș din regiune, după ce a depășit Budapesta în 2017. Orașul are mai multe centre mari de conferințe, instituții de învățământ, spații culturale, „pasaje comerciale” tradiționale și zone de agrement."
+    },
+    {
+      "n": 5,
+      "kind": "heading",
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "Etymology",
+      "target": "Etimologie"
+    },
+    {
+      "n": 6,
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "The Romanian name București has an unverified origin. Tradition connects the founding of Bucharest with the name of Bucur, who was a prince, an outlaw, a fisherman, a shepherd or a hunter, according to different legends. In Romanian, the word stem bucurie means 'joy' ('happiness'), hence the city Bucharest means 'city of joy'.",
+      "target": "Numele românesc București are o origine neverificată. Tradiția leagă întemeierea Bucureștiului de numele lui Bucur, care ar fi fost, după legende diferite, principe, haiduc, pescar, cioban sau vânător. În română, rădăcina bucurie înseamnă „veselie” („fericire”), de unde orașul București ar însemna „orașul bucuriei”."
+    },
+    {
+      "n": 7,
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "Other etymologies are given by early scholars, including the one of an Ottoman traveller, Evliya Çelebi, who claimed that Bucharest was named after a certain \"Abu-Kariș\", from the tribe of \"Bani-Kureiș\". In 1781, Austrian historian Franz Sulzer claimed that it was related to bucurie (joy), bucuros (joyful), or a se bucura (to be joyful), while an early 19th-century book published in Vienna assumed its name to be derived from \"Bukovie\", a beech forest. In English, the city's name was formerly rendered as Bukarest. A native or resident of Bucharest is called a \"Bucharester\" (Romanian: bucureștean).",
+      "target": "Alte etimologii vin de la cercetători mai vechi, între care aceea a unui călător otoman, Evliya Çelebi, care susținea că Bucureștiul poartă numele unui anume „Abu-Kariș”, din tribul „Bani-Kureiș”. În 1781, istoricul austriac Franz Sulzer afirma că numele ar fi legat de bucurie, bucuros sau a se bucura, în timp ce o carte publicată la Viena la începutul secolului al XIX-lea presupunea că vine din „Bukovie”, o pădure de fagi. În engleză, numele orașului era redat odinioară Bukarest. Cine s-a născut sau locuiește în București se numește „bucureștean”."
+    },
+    {
+      "n": 8,
+      "kind": "heading",
+      "ref": "https://en.wikipedia.org/wiki/Bucharest",
+      "source": "History",
+      "target": "Istorie"
+    }
+  ]
+}

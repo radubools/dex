@@ -1,0 +1,7 @@
+{
+  "name": "yoga-pose-viewer",
+  "description": "Draws a 20-landmark pose as an orbitable 3D skeleton. The drawing dex used to ship built in, moved out to the project that needs it.",
+  "version": "965e70",
+  "updated": 1789893635.53539,
+  "requires": []
+}

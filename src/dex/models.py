@@ -185,6 +185,11 @@ class Task:
     #: goes again by itself when there is capacity; one the operator paused
     #: waits to be told, or the button means nothing.
     held: bool = False
+    #: Where in the operator's own material this task's work came from — a
+    #: range of a PDF, a section of a document, a URL they gave. Set from the
+    #: survey segment the planner built this task out of, and kept so the Files
+    #: tab can show what went *in* beside what came out.
+    anchor: dict[str, Any] | None = None
 
     @property
     def project_wide(self) -> bool:
@@ -216,6 +221,40 @@ class Task:
         return {"message": self.problem, "guide": "", "history": "(nothing yet)"}
 
     @property
+    def is_survey(self) -> bool:
+        """A pre-planning pass over the attached sources, run as a task.
+
+        Same reasoning as `is_design`: it is a real agent run with tools, so
+        making it a task gives it the activity surface, the cost accounting and
+        the retry behaviour rather than reimplementing all three beside the
+        chat. It produces no package — its output is a JSON survey that the
+        planner then reads.
+        """
+        return self.scope == "survey"
+
+    def survey_payload(self) -> dict[str, Any]:
+        """What a survey turn carries, unpacked.
+
+        Packed into `problem` for the same reason a design turn's is: one
+        string field, several things to say, and no appetite for four nullable
+        columns that only one scope ever fills.
+        """
+        import json
+
+        try:
+            packed = json.loads(self.problem)
+        except (ValueError, TypeError):
+            packed = None
+        if not isinstance(packed, dict):
+            return {"message": self.problem, "attachments": [], "urls": [], "guide": ""}
+        return {
+            "message": str(packed.get("message", "")),
+            "attachments": [str(a) for a in packed.get("attachments") or []],
+            "urls": [str(u) for u in packed.get("urls") or []],
+            "guide": str(packed.get("guide", "")),
+        }
+
+    @property
     def is_design(self) -> bool:
         """A turn of the project design chat, run as a task.
 
@@ -230,6 +269,17 @@ class Task:
         chosen = self.project or project
         return assets_dir / chosen if chosen else assets_dir
 
+    @property
+    def builds_package(self) -> bool:
+        """Whether this task has a package directory of its own to fill.
+
+        The three scopes that do not — a project-wide sweep, a design turn, a
+        survey — work in the project root or write nothing at all, so neither
+        their output directory nor the check on what landed in it can be about
+        a package.
+        """
+        return not (self.project_wide or self.is_design or self.is_survey)
+
     def output_dir(self, assets_dir: Path, project: str | None = None) -> Path:
         """Where this task writes: its package, or the whole project.
 
@@ -237,7 +287,7 @@ class Task:
         are already there — so its directory is the project root.
         """
         root = self.project_dir(assets_dir, project)
-        if self.project_wide or self.is_design:
+        if not self.builds_package:
             return root
         return root / (self.output_slug or self.slug)
 
@@ -269,6 +319,7 @@ class Task:
             "model": self.model,
             "scope": self.scope,
             "held": self.held,
+            "anchor": self.anchor,
             "costIsEstimate": self.cost_is_estimate,
             "tokens": self.tokens or None,
             "canResume": self.state.resumable,
@@ -296,3 +347,28 @@ def slugify(text: str, taken: set[str] | None = None) -> str:
             suffix += 1
         slug = f"{slug}-{suffix}"
     return slug
+
+
+def continued_problem(task: "Task", note: str) -> str:
+    """The brief for a follow-up or resumed attempt at `task`.
+
+    An ordinary task's problem is prose, so the note is appended to it. A
+    design turn's is JSON — the message, the guide as it stood, and the
+    history — and appending prose to that leaves a string that no longer
+    parses. `design_payload` then falls back to treating the whole blob as the
+    message, so the continued turn ran with an empty guide and no history: it
+    would rewrite the project's guide from nothing. The note goes inside the
+    message instead, and the rest of the conversation is carried through
+    untouched.
+    """
+    import json
+
+    if not task.is_design:
+        return f"{task.problem}\n\n{note}"
+
+    payload = task.design_payload()
+    return json.dumps({
+        "message": f"{payload['message']}\n\n{note}",
+        "guide": payload["guide"],
+        "history": payload["history"],
+    })

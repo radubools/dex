@@ -96,10 +96,11 @@ erDiagram
         text project FK "SET NULL"
         text thread_id FK "SET NULL"
         text problem
-        text scope "package project design"
+        text scope "package project design survey"
         text state
         text activity
         bool held "operator pause"
+        jsonb anchor "where in the source material"
         text session_id "agent session"
         text resumed_from
         int attempt
@@ -159,6 +160,8 @@ flowchart LR
 | `held` | A second paused state | Both are paused; only dex's own pauses resume themselves |
 | `claimed_by`, `claimed_at` | In-memory ownership | A crashed worker's task is distinguishable from a live one, across processes |
 | Design turn packed into `problem` as JSON | Three nullable columns | Only one scope has them |
+| Survey brief packed into `problem` as JSON | Four nullable columns | Same reason; see [14](14_survey_and_anchors.md) |
+| `tasks.anchor` as `JSONB` | Columns per position | The shape differs by source: a PDF has pages, a workbook a sheet, a link neither |
 | `thinking_tokens` beside `output_tokens` | Adding them | Thinking is a subset of output; summing double-counts |
 
 The `projects` foreign keys differ on purpose: deleting a project **cascades**

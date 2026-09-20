@@ -8,7 +8,7 @@
   right thing from the right file, and fighting an opaque origin to assert that
   only makes them flaky.
 
-    /widgets/harness.html?widget=pose-3d
+    /widgets/harness.html?widget=pose-skeleton
 
   The test supplies the file with `window.__mount({path, text, assets})`.
 -->
@@ -21,8 +21,15 @@
 <div id="root"></div>
 <pre id="error" hidden></pre>
 <script type="module">
-  const name = new URLSearchParams(location.search).get('widget')
-  const mod = await import(`/widgets/${name}/dist/index.js`)
+  // A widget lives inside the skill that provides it, and that path carries
+  // the skill's version — so a bare name cannot be turned into a path here.
+  // `build.mjs` writes the mapping on every build, which is when tests run.
+  const params = new URLSearchParams(location.search)
+  const name = params.get('widget')
+  const index = await fetch('/widgets/index.json').then((r) => r.json())
+  const src = params.get('src') ?? index[name]
+  if (!src) throw new Error(`no widget ${name} — run node widgets/build.mjs`)
+  const mod = await import(`/${src.replace(/^\/+/, '')}`)
 
   /** Mount the widget. Resolves when it has finished, or rejects with its error. */
   window.__mount = async ({ path, text, assets = {}, theme = 'dark' }) => {

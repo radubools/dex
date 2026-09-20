@@ -1,0 +1,5 @@
+{
+  "name": "pose-skeleton",
+  "title": "Pose skeleton",
+  "description": "Draws a 20-landmark pose as an orbitable 3D skeleton: joints as spheres, bones as cylinders, warm on the left and cool on the right, on a floor grid."
+}

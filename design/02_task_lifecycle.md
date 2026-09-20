@@ -31,8 +31,8 @@ stateDiagram-v2
     running --> awaiting_input: ask_user or a tool approval
     awaiting_input --> running: answered
 
-    running --> succeeded: agent finished
-    running --> failed: error or timeout
+    running --> succeeded: agent finished,<br/>and wrote something
+    running --> failed: error, timeout,<br/>or nothing written
     running --> cancelled: Stop
     running --> paused: dex made room,<br/>or the server died
     awaiting_input --> paused: dex made room
@@ -68,6 +68,32 @@ driven by those groups rather than by listing states:
 | `resumable` | failed, cancelled | forking *Resume* |
 | `continuable` | paused, failed, cancelled | *Continue* — same row back in the queue |
 | `pausable` | queued, running, awaiting_input | *Pause* |
+
+### A clean exit is not a result
+
+A package task that ends its turn having written nothing is failed, not
+succeeded — `EMPTY_PACKAGE` in `runner.py` says so in the error. The agent
+raising nothing only means it stopped talking; it is the package that says
+whether the work happened.
+
+The way this goes wrong is always the same: the agent decides to wait for
+something — a file a sibling task is writing, a result that has not landed —
+and ends its turn in order to do the waiting. Nothing re-invokes a finished
+task, so that wait never ends, and before this check the run came out green
+with nothing in it. The brief now tells the agent this outright, and the two
+have to keep saying the same thing: the prompt promises the task is marked
+failed, and this is where that promise is kept.
+
+"Wrote something" is measured against a snapshot of the package taken before
+the agent starts, not against the directory being empty. A resumed attempt
+continues its parent's package and siblings sharing one open onto a directory
+that already has files in it: asked only whether anything is there, both would
+pass without lifting a finger.
+
+Only the scopes that own a package are judged this way. A project-wide sweep, a
+design turn and a survey write somewhere else or write nothing at all, which is
+what `Task.builds_package` is for — the same test that decides where the task
+writes decides whether that directory is worth checking.
 
 **`paused` means one thing: start it again.** A task stopped by dex to make room
 and a task stranded by a crashed server need the same action, so they share a

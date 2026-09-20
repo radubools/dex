@@ -190,6 +190,10 @@ Nullable columns for fields only one scope uses would be three empty columns on
 every other row. A `problem` that is not JSON — a design task created before this
 format — is read as the message on its own, which is still a usable turn.
 
+Both halves of this — running a non-generation turn as a task, and packing its
+several inputs into `problem` — were copied wholesale by the pre-planning
+survey. See [14](14_survey_and_anchors.md).
+
 ### What the designer may touch
 
 ```mermaid

@@ -1,0 +1,10 @@
+{
+  "name": "music-synth",
+  "description": "Render a parsed MIDI to stereo audio with a per-instrument additive synthesiser \u2014 pretty_midi's own synthesize() ignores MIDI programs, so a four-voice canon comes out as one timbre.",
+  "version": "b25829",
+  "updated": 1789893635.504941,
+  "requires": [
+    "numpy",
+    "scipy"
+  ]
+}

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import type { PlannedTask, Task, TaskState, ThreadMessage } from '../types'
+import type { PlannedTask, SourceAnchor, Task, TaskState, ThreadMessage } from '../types'
 import { actOnTasks } from '../api'
 import { ErrorNote } from './ErrorNote'
 import { Prose } from './Prose'
@@ -12,6 +12,19 @@ const escapeForSlug = (slug: string) => slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$
 
 const ACTIVE_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused'])
 
+/** A glance at what a source is, before it is worth opening the pane for. */
+function iconFor(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  if (ext === 'pdf') return '\u{1F4C4}'
+  if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return '\u{1F4DD}'
+  if (['xls', 'xlsx', 'xlsm', 'ods', 'csv', 'tsv'].includes(ext)) return '\u{1F4CA}'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif'].includes(ext)) return '\u{1F5BC}'
+  if (['mp4', 'webm', 'mov'].includes(ext)) return '\u{1F3AC}'
+  if (['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac'].includes(ext)) return '\u{1F50A}'
+  if (['zip', 'tar', 'gz', '7z'].includes(ext)) return '\u{1F4E6}'
+  return '\u{1F4CE}'
+}
+
 /** The conversation: what you asked, what dex proposed, what it started. */
 export function Chat({
   messages,
@@ -20,6 +33,7 @@ export function Chat({
   threadId,
   onConfirm,
   onOpenTask,
+  onOpenSource,
   onActed,
   activeTaskId,
 }: {
@@ -30,11 +44,18 @@ export function Chat({
   threadId: string | null
   onConfirm: (tasks: PlannedTask[]) => void
   onOpenTask: (taskId: string) => void
+  /**
+   * Opens an attached source in the preview pane. The anchor is given when
+   * the click came from a plan row rather than from the chip on a message,
+   * and it is what makes the pane land on the right page.
+   */
+  onOpenSource?: (name: string, anchor?: SourceAnchor) => void
   /** Called after a pause / restart / archive, so the thread reloads. */
   onActed?: () => void
   activeTaskId?: string
 }) {
   const bottom = useRef<HTMLDivElement>(null)
+
 
   // Tasks this thread started that have not finished. `paused` counts: dex
   // stopped it to make room and will pick it up again, so the thread is still
@@ -177,6 +198,7 @@ export function Chat({
           planState={planState}
           onConfirm={onConfirm}
           onOpenTask={onOpenTask}
+          onOpenSource={onOpenSource}
           activeTaskId={activeTaskId}
         />
       ))}
@@ -220,6 +242,7 @@ function Message({
   planState,
   onConfirm,
   onOpenTask,
+  onOpenSource,
   activeTaskId,
 }: {
   message: ThreadMessage
@@ -231,9 +254,35 @@ function Message({
   planState: (slug: string) => 'done' | 'running' | 'failed' | 'new'
   onConfirm: (tasks: PlannedTask[]) => void
   onOpenTask: (taskId: string) => void
+  onOpenSource?: (name: string, anchor?: SourceAnchor) => void
   activeTaskId?: string
 }) {
-  if (message.role === 'user') return <div className="bubble user">{message.text}</div>
+  if (message.role === 'user') {
+    // Files attached to what was typed. Shown under the bubble rather than
+    // inside it: the text is what was said, and the files are what came with
+    // it — and until this existed an upload left no trace in the thread at all.
+    const attached = message.data?.attachments ?? []
+    return (
+      <div className="bubble-group">
+        <div className="bubble user">{message.text}</div>
+        {attached.length > 0 && (
+          <div className="bubble-sources">
+            {attached.map((name) => (
+              <button
+                key={name}
+                className="source-chip"
+                title={`Preview ${name}`}
+                onClick={() => onOpenSource?.(name)}
+              >
+                <span className="source-chip-icon" aria-hidden="true">{iconFor(name)}</span>
+                <span className="source-chip-name">{name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
   if (message.kind === 'error') {
     return <ErrorNote text={message.text} detail={message.data?.detail as string | undefined} />
   }
@@ -241,12 +290,34 @@ function Message({
   // A design thread replies in prose; so does a chat thread when it has a
   // question rather than a plan. Both are markdown.
   if (message.kind === 'text') {
+    // A design turn runs as a task, but posts no chip — so once it stops being
+    // live there was nothing left to click and its activity became
+    // unreachable. The reply carries the id of the run that wrote it, which is
+    // the way back in.
+    const from = message.data?.taskId as string | undefined
+    const failed = message.data?.failed === true
+    // A survey reply is the reasoning the plan beneath it was built on, not an
+    // answer in its own right; it is set apart so it reads that way.
+    const surveyed = message.data?.survey != null
     return (
-      <div className={`prose ${message.data?.guideChanged ? 'guide-changed' : ''}`}>
+      <div
+        className={`prose ${message.data?.guideChanged ? 'guide-changed' : ''} ${
+          failed ? 'turn-failed' : ''
+        } ${surveyed ? 'from-survey' : ''}`}
+      >
+        {surveyed && <span className="card-kind">Surveyed the attached sources</span>}
         {message.data?.guideChanged === true && (
           <span className="card-kind">AGENTS.md updated</span>
         )}
         <Prose text={message.text} />
+        {from && (
+          <button
+            className={`turn-activity ${activeTaskId === from ? 'on' : ''}`}
+            onClick={() => onOpenTask(from)}
+          >
+            {failed ? 'What went wrong' : 'Activity'}
+          </button>
+        )}
       </div>
     )
   }
@@ -259,6 +330,7 @@ function Message({
         startedSlugs={startedSlugs}
         planState={planState}
         onConfirm={onConfirm}
+        onOpenAnchor={(anchor) => onOpenSource?.(anchor.source, anchor)}
       />
     )
   }
@@ -298,6 +370,7 @@ function PlanCard({
   startedSlugs,
   planState,
   onConfirm,
+  onOpenAnchor,
 }: {
   text: string
   tasks: PlannedTask[]
@@ -306,6 +379,8 @@ function PlanCard({
   /** What each planned slug has come to across every attempt at it. */
   planState: (slug: string) => 'done' | 'running' | 'failed' | 'new'
   onConfirm: (tasks: PlannedTask[]) => void
+  /** Opens the source at a task's anchor, in the preview pane. */
+  onOpenAnchor?: (anchor: SourceAnchor) => void
 }) {
   const [dropped, setDropped] = useState<Set<string>>(new Set())
   const [sent, setSent] = useState(false)
@@ -365,6 +440,7 @@ function PlanCard({
                     started={locked}
                     checked={!dropped.has(task.slug)}
                     onToggle={() => toggle(task.slug)}
+                    onOpenAnchor={onOpenAnchor}
                   />
                   {/* A thirty-row plan has the same problem as a long chip
                       group: the way back is otherwise only at the bottom. */}
@@ -747,12 +823,14 @@ function PlanRow({
   disabled,
   started,
   onToggle,
+  onOpenAnchor,
 }: {
   task: PlannedTask
   checked: boolean
   disabled: boolean
   started: boolean
   onToggle: () => void
+  onOpenAnchor?: (anchor: SourceAnchor) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -766,6 +844,18 @@ function PlanRow({
           {started && <span className="plan-badge">already started</span>}
         </span>
         <span className="plan-slug">{task.slug}</span>
+        {/* Where in the material this task's work is. It is a button rather
+            than a label because the whole reason the survey records an anchor
+            is so the operator can check it before choosing the task. */}
+        {task.anchor && (
+          <button
+            className="plan-anchor"
+            title={`Open ${task.anchor.source} at ${task.anchor.label}`}
+            onClick={() => task.anchor && onOpenAnchor?.(task.anchor)}
+          >
+            <span aria-hidden="true">📍</span> {task.anchor.label}
+          </button>
+        )}
         <p className={`plan-problem ${expanded ? 'open' : ''}`}>{task.problem}</p>
         <button className="plan-more" onClick={() => setExpanded((v) => !v)}>
           {expanded ? 'Show less' : 'Show full problem'}

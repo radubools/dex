@@ -286,3 +286,16 @@ blob-report/
 # Claude Code's own state for this checkout: session transcripts, settings and
 # the agent's memory. Local to this machine, not part of the project.
 .claude/
+
+# A skill ships its widget already built. The blanket `dist/` above is for
+# build output nobody should commit; a skill's bundle is the artefact itself —
+# an install that had to run a bundler is one that fails on a machine without
+# node, which is the opposite of portable. Both lines are needed: git will not
+# re-include a file whose parent directory is still excluded.
+!skills/**/dist/
+!skills/**/dist/**
+
+# Written by `widgets/build.mjs` so the test harness can turn a widget name
+# into a path. Derived from whatever skills are on disk, so it is different on
+# every install and belongs to nobody.
+widgets/index.json

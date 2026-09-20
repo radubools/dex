@@ -1,0 +1,5 @@
+{
+  "name": "bitext",
+  "title": "Bitext",
+  "description": "Reads a .bitext.json as numbered chunks, each source chunk followed by its translation and any proofreading note."
+}

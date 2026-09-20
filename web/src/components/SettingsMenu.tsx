@@ -22,6 +22,7 @@ export function SettingsMenu({
   onOpenCosts,
   me,
   onOpenUsers,
+  onOpenSkills,
   onChangePassword,
 }: {
   autoApprove: boolean
@@ -30,6 +31,8 @@ export function SettingsMenu({
   /** Who is signed in, or null on an install with no sign-in configured. */
   me?: Me | null
   onOpenUsers?: () => void
+  /** Which capabilities each project has on. Admin-only. */
+  onOpenSkills?: () => void
   /** Offered only to an account that signs in with a password. */
   onChangePassword?: () => void
 }) {
@@ -366,6 +369,17 @@ export function SettingsMenu({
                     }}
                   >
                     Users and access
+                  </button>
+                )}
+                {can(me.user, 'manage_users') && onOpenSkills && (
+                  <button
+                    className="ghost-btn small"
+                    onClick={() => {
+                      setOpen(false)
+                      onOpenSkills()
+                    }}
+                  >
+                    Skills
                   </button>
                 )}
                 {onChangePassword && me.user.username && (

@@ -1,0 +1,62 @@
+{
+  "title": "RSMeans Building Construction Cost Data 2014 — How the Book Is Built",
+  "mode": "proofread",
+  "source": { "lang": "en", "origin": "RSMeans building construction cost data 2014.pdf" },
+  "target": { "lang": "ro", "file": "rsmeans.ro.md" },
+  "segments": [
+    {
+      "n": 1,
+      "ref": "p7",
+      "source": "How the Boo an Overview The Construction Specifications Institute (CSI) and Construction Specifications Canada (CSC) have produced the 2012 edition of MasterFormat®, a system of titles and numbers used extensively to organize construction information.",
+      "target": "Cum este construită cartea: o prezentare generală. Institutul de Specificații în Construcții (CSI) și Construction Specifications Canada (CSC) au produs ediția 2012 a MasterFormat®, un sistem de titluri și numere folosit pe scară largă pentru organizarea informației din construcții.",
+      "note": "Sursa este trunchiată la extragere: „How the Boo an Overview” este de fapt titlul „How the Book Is Built: an Overview”. Traducerea a ghicit corect, dar segmentul trebuie re-extras înainte de a fi acceptat."
+    },
+    {
+      "n": 2,
+      "ref": "p7",
+      "source": "All unit price data in the RSMeans cost data books is now arranged in the 50-division MasterFormat® 2012 system.",
+      "target": "Toate datele de preț unitar din culegerile RSMeans sunt acum organizate după sistemul MasterFormat® 2012, cu 50 de diviziuni."
+    },
+    {
+      "n": 3,
+      "ref": "p7",
+      "source": "A Powerful Construction Tool You have in your hands one of the most powerful construction tools available today. A successful project is built on the foundation of an accurate and dependable estimate. This book will enable you to construct just such an estimate.",
+      "target": "Un instrument puternic de construcție. Aveți în mâini unul dintre cele mai puternice instrumente de construcție disponibile astăzi. Un proiect de succes este construit pe fundația unei estimări precise și de încredere. Această carte vă va permite să construiți exact o astfel de estimare.",
+      "note": "„construction tool” înseamnă aici un instrument pentru domeniul construcțiilor, nu o unealtă cu care se construiește. Fraza a doua calchiază „is built on the foundation of”.",
+      "suggestion": "Un instrument puternic pentru construcții. Aveți în mâini unul dintre cele mai puternice instrumente disponibile astăzi în domeniul construcțiilor. Un proiect reușit se sprijină pe o estimare exactă și de încredere. Cartea de față vă ajută să întocmiți tocmai o asemenea estimare."
+    },
+    {
+      "n": 4,
+      "ref": "p7",
+      "source": "For the casual user the book is designed to be:",
+      "target": "Pentru utilizatorul ocazional, cartea este concepută să fie:"
+    },
+    {
+      "n": 5,
+      "ref": "p7",
+      "source": "• quickly and easily understood so you can get right to your estimate.",
+      "target": "• înțeleasă repede și ușor, ca să treceți direct la estimare."
+    },
+    {
+      "n": 6,
+      "ref": "p7",
+      "source": "• filled with valuable information so you can understand the necessary factors that go into the cost estimate.",
+      "target": "• plină de informații folositoare, ca să înțelegeți factorii care intră în estimarea costului.",
+      "note": "„valuable” a devenit „folositoare”; „valoroase” păstrează registrul promoțional al originalului.",
+      "suggestion": "• plină de informații valoroase, ca să înțelegeți factorii necesari care intră în estimarea costului."
+    },
+    {
+      "n": 7,
+      "ref": "p7",
+      "source": "For the regular user, the book is designed to he: • a handy desk reference that can be quickly",
+      "target": "",
+      "note": "Lăsat netradus, și pe bună dreptate: sursa este ruptă în două locuri („to he:” în loc de „to be:”, iar propoziția se oprește la „quickly”). Re-extrageți pagina 7 înainte de a traduce segmentul."
+    },
+    {
+      "n": 8,
+      "ref": "p7",
+      "source": "• a comprehensive, fully reliable source of current construction costs and productivity rates so you'll be prepared to estimate any project.",
+      "target": "• o sursă cuprinzătoare și pe deplin fiabilă de costuri curente de construcție și de indici de productivitate, ca să fiți pregătit să estimați orice proiect."
+    }
+  ]
+}

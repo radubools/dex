@@ -2,6 +2,25 @@
 
 ## Summary
 
+> **`utils/API.md` earns its place, and is still generated.** It is the
+> *signature* index — every public function, its arguments, and one line about
+> it, at about a tenth of the modules' bytes. A `SKILL.md` says what a skill is
+> *for* and what it will not do; the index says what you can actually call.
+> Different jobs, and a task needs both.
+>
+> Each module's heading now names the skill it came from
+> (``## `rig` — from `yoga-figure` ``), because `utils/` is materialised from
+> several skills and a promotion targets one. Without it nothing joins the
+> skills in the brief to the module names a reader has in hand.
+>
+> **Utilities ship inside skills now.** A module lives in
+> `skills/<name>/<version>/utils/`, and `assets/<project>/utils/` is
+> materialised from the skills a project has enabled — so it is derived state,
+> and a task promoting a helper writes to the skill. Everything below still
+> describes the protocol: when a helper is worth sharing, how it is proposed,
+> and how a refusal is recorded. See [15](15_skills.md) for where it lands.
+
+
 Tasks in one project keep writing the same helpers: a validator every package
 needs, a conversion step, a geometry solver. Copied from package to package they
 drift into six subtly different versions. The **shared utilities protocol** lets

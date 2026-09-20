@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+#: The guide every project shares, at the workspace root. Not `AGENTS.md`
+#: there — that one is instructions for whoever is working on dex itself.
+COMMON_GUIDE = "AGENTS.common.md"
+
 GENERATION_SYSTEM = """\
 You are dex, an agent that turns one request into a complete, verified package \
 of study material.
@@ -32,6 +36,19 @@ absolute paths instead.
 - If the request is ambiguous in a way that changes what you would build, call \
 `mcp__dex__ask_user` once with concrete options rather than guessing. Do not use \
 it for cosmetic choices.
+- **Your turn is the task.** When you stop producing output the task is over \
+and its outcome is recorded. Nothing re-invokes you: no background command you \
+started is ever read again, no watcher will call you back, and no file \
+appearing later will wake you up. If you need something that is not there yet, \
+either wait for it inside this turn — a command that blocks until it arrives, \
+whose output you then read — or call `mcp__dex__ask_user`, which holds the \
+task open until somebody answers. Ending your turn in order to wait is the one \
+move that always loses the work: the package stays empty and the task is \
+marked failed.
+- **Other tasks are not a sequence.** Anything queued alongside you is running \
+right now, not before you, so a plan that needs another task's output first \
+cannot come out. Build from what is on disk when you look. If what you need is \
+genuinely missing, say so and stop — do not idle until you are stopped.
 """
 
 
@@ -52,26 +69,34 @@ def project_instructions(
     # Falling back to the layout — `<workspace>/assets/<project>/` — rather than
     # demanding the argument, so the older call sites and the tests still work.
     workspace = workspace or project_dir.parent.parent
-    try:
-        text = guide.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    # The guide names paths and the interpreter it should be run with, neither
-    # of which it can know when it is written.
-    # `{workspace}` as well as `{python}` and `{task_dir}`: a guide that says
-    # `node widgets/build.mjs` is wrong from a task's own directory, and the
-    # repository root is not something a static guide can know.
-    filled = (
-        text.replace("{python}", str(python))
-        .replace("{task_dir}", str(task_dir))
-        .replace("{workspace}", str(workspace))
-    )
-    return (
-        "\n# Project instructions\n\n"
-        "These define what this task must produce, and how. Follow them.\n\n"
-        + filled
-        + "\n"
-    )
+    # The common guide first, then this project's own. They used to be one
+    # file copied per project, which meant four copies of the same 289 lines
+    # drifting apart and a fix to one reaching nobody else.
+    parts: list[str] = []
+    for source, heading, preamble in (
+        (workspace / COMMON_GUIDE, "How work is done here",
+         "The same in every project. The environment, the operator's source\n"
+         "material, the viewers, and how a helper becomes shared."),
+        (guide, "What this project produces",
+         "This project's own brief. It defines what this task must produce,\n"
+         "and how. Follow it."),
+    ):
+        try:
+            text = source.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # A guide names paths and the interpreter it should be run with,
+        # neither of which it can know when it is written. `{workspace}` as
+        # well: a guide saying `node widgets/build.mjs` is wrong from a task's
+        # own directory, and the repository root is not something a static
+        # file can know.
+        filled = (
+            text.replace("{python}", str(python))
+            .replace("{task_dir}", str(task_dir))
+            .replace("{workspace}", str(workspace))
+        )
+        parts.append(f"\n# {heading}\n\n{preamble}\n\n{filled}\n")
+    return "".join(parts)
 
 
 DESIGN_SYSTEM = """\
@@ -86,9 +111,38 @@ reads before it starts. A good one states what to produce, the conventions to \
 follow, and which tools are already available, so no task wastes turns \
 rediscovering them. Specific and short; it does not explain what an agent could \
 work out, and it does not hedge.
-- The project's viewers — `widgets.json` beside that guide, and the widget code \
-under `widgets/` at the top level. The guide itself describes how both work; \
-read it before you write either.
+- The project's **skills** — a capability as one directory: the helpers its \
+tasks import, the widgets that open its files, and a `SKILL.md` saying what \
+each is for. This is where viewer code and shared modules live now.
+
+How to change a skill:
+
+**Never edit a published version in place.** A published `skills/<name>@<hash>/`
+is what some project is running on and what another install may have copied; its
+version *is* a hash of its contents, so editing it leaves the name describing
+something that no longer exists.
+
+Work on a copy instead:
+
+1. **Fork.** Copy `skills/<name>@<hash>/` to `skills/<name>@draft/` — the whole
+   directory. For a new skill, create `skills/<name>@draft/` with a
+   `skill.json` carrying a `name` and a `description`, and a `SKILL.md`.
+2. **Change only the draft.** Never touch the version you copied from.
+3. **Write the `SKILL.md`.** It is read by every task that uses the skill,
+   before it touches a module — what the modules are for, what they will not
+   do, what to know before changing them. `description` in `skill.json` is the
+   one line that decides whether a task reads further, so make it say what the
+   skill is *for*.
+4. **Test it with fixtures**, in the draft, before you finish. A widget has
+   `test/`; a module gets a small script you actually run. An untested draft
+   published onto every project is the worst thing you can do here.
+5. **Build a widget** you changed with the build command in the project guide.
+   It builds the bundle inside the draft, so the skill ships the bundle beside
+   the source it was built from.
+
+Then stop. dex publishes the draft when this turn finishes clean — it computes
+the real version, renames the directory, and **moves every project on that
+skill to it**. You do not rename anything and you do not edit `skills.json`.
 
 Rules for this conversation:
 - **Look before you write.** You have read access to the whole repository. Open \
@@ -233,6 +287,9 @@ def generation_prompt(
     manim_available: bool,
     project_wide: bool = False,
     workspace: Path | None = None,
+    datasets_dir: Path | None = None,
+    #: `(name, description, skill path, has utils)` per enabled skill.
+    skills: list[tuple[str, str, str, bool]] | None = None,
 ) -> str:
     """The full brief for one task.
 
@@ -262,6 +319,52 @@ def generation_prompt(
         else ""
     )
     guide = project_instructions(task_dir, python, project_wide, workspace)
+    # Named rather than described: a brief that says "the project's data
+    # directory" and leaves the agent to guess the path sends it looking.
+    datasets_line = (
+        f"It is `{datasets_dir}`.\n"
+        if datasets_dir is not None
+        else "It is the project's directory under `datasets/`.\n"
+    )
+    # Which skills this project has on, and where each one's source is. The
+    # guide tells a task to promote a helper into a skill; this is the list it
+    # picks from, and it is generated rather than written down so it cannot
+    # name a skill that was disabled last week.
+    # Two tiers, which is how every agent harness worth copying does this.
+    #
+    # Always present: one line per skill — name, a sentence, and where it is.
+    # That is what makes the agent *know* a capability exists, and it costs a
+    # line each however many there are.
+    #
+    # On demand: the skill's own SKILL.md, read only once the agent has decided
+    # it is relevant. Putting all of them in every brief would be several
+    # thousand tokens of instructions for capabilities most tasks never touch,
+    # and it would grow without limit as skills are added.
+    #
+    # The description is therefore load-bearing: it is the only thing the agent
+    # sees when deciding whether to look further.
+    skills_block = (
+        "\n**Skills enabled for this project.** Each is a capability with its"
+        " own\ninstructions. The line here is a summary; `SKILL.md` is the"
+        " whole of it.\n\n"
+        "**Read a skill's `SKILL.md` before you first use it** — before"
+        " importing one\nof its modules or changing anything in it. It says"
+        " what the modules are for,\nwhat they will not do, and what to know"
+        " before touching them.\n\n"
+        + "\n".join(
+            f"- `{name}` — {description}\n"
+            f"  Read `{path}/SKILL.md`."
+            + (f" Promote a helper into `{path}/utils/`." if has_utils else "")
+            for name, description, path, has_utils in skills
+        )
+        + "\n\n`utils/` in the project is materialised from these. Never write"
+        " there:\nthe next materialise erases it, and the skill it should have"
+        " joined never\nlearns it exists. Write to the path above, exactly as"
+        " given — the version is\npart of the directory name and nothing else"
+        " is writable.\n"
+        if skills
+        else ""
+    )
     # A project with no guide would otherwise leave the agent to invent a
     # format. Saying so is better than letting it guess, which is how a whole
     # project's output silently became whatever the prompt happened to imply.
@@ -290,10 +393,11 @@ and nothing else.
 - Do not regenerate, rewrite, or improve packages. Do not fix things you notice
   in passing. A package you were not asked to change must come out byte for
   byte as it went in.
-- Do not create packages, and do not create directories. The project's own
-  `utils/` is the one exception, and only under the shared-utilities protocol in
-  the instructions above — which still means asking the operator first, at the
-  end, about code you have already run.
+- Do not create packages, and do not create directories. A skill's `utils/` is
+  the one exception, and only under the shared-utilities protocol in the
+  instructions above — which still means asking the operator first, at the end,
+  about code you have already run. Not the project's own `utils/`: that one is
+  materialised from the skills and anything written there is undone.
 - Read what you need with `grep`, `sed`, and small scripts run through
   `{python}`. Prefer one pass over the whole project to a hundred separate
   reads.
@@ -338,6 +442,18 @@ packages, other projects, dex's own source, or anything else in the repository
 around you; the brief above is the whole job. A tool that writes where it is run — `manim` on
 its own is the usual one — writes inside your directory, which is correct. Reach
 for an absolute path outside it and you are somewhere you should not be.
+
+**The project's data directory is yours to read and write.**
+{datasets_line}{skills_block}
+Source material lives there: files the operator attached, a corpus, a PDF to
+work from, an index or scratch database you build beside them. It is not part
+of your package — your package is what you produce, that is what you were
+given — so keep generated deliverables out of it and sources out of them.
+Leave a file the operator put there as you found it unless the brief says to
+change it.
+
+When the brief has a `## Sources` section, those are the files attached to this
+particular request; read them wherever they are.
 
 **The one exception is shared utilities.** If the project instructions above
 define a `utils/` protocol, follow it — it is the sanctioned way to write
@@ -421,6 +537,7 @@ def planner_prompt(
     existing: list[str],
     project: str | None = None,
     guide: str = "",
+    survey: str = "",
 ) -> str:
     known = "\n".join(f"- {slug}" for slug in existing) or "- (none yet)"
     # The guide is the project's own definition of what it produces. Without
@@ -433,13 +550,24 @@ def planner_prompt(
         if project and guide.strip()
         else f"You are planning for the **{project or 'default'}** project.\n\n"
     )
+    # A survey ran first when the message brought sources with it. It is the
+    # only account of what is inside them: the planner has no tools and never
+    # sees the documents themselves, so without this it would be splitting a
+    # filename.
+    surveyed = (
+        f"\nA survey of the attached material found this. **Plan from it.** Each\n"
+        f"segment below is one candidate task, and the anchor on it says where in\n"
+        f"the source it is:\n\n<survey>\n{survey.strip()}\n</survey>\n"
+        if survey.strip()
+        else ""
+    )
     return briefing + f"""\
 The operator said:
 
 \"\"\"
 {message}
 \"\"\"
-
+{surveyed}
 Packages that already exist in this project:
 {known}
 
@@ -475,10 +603,13 @@ Respond with **only** a JSON object in a ```json fence, no prose around it:
       "problem": "Full self-contained brief for the generation agent, written for this project.",
       "slug": "kebab-case-slug",
       "scope": "package",
-      "updates": ""}}
+      "updates": "",
+      "package": "",
+      "anchor": null}}
   ],
   "notes": "One sentence for the operator: what you split and why. Empty string if obvious.",
   "needs_clarification": "",
+  "options": [],
   "remaining": "",
   "updates": ""
 }}
@@ -507,6 +638,22 @@ Rules:
   building something new is how a hundred and twenty packages ended up with a
   half-built twin beside them. If you are unsure a package exists under the
   name you mean, it is in the list above — use the spelling from that list.
+- **`package` is the rare exception, and the default is not to use it.** Tasks
+  are independent by design: each gets its own slug and its own directory, so
+  one of them failing leaves the rest whole and every task can be judged on
+  what is in front of it. Plan that way unless you cannot. Setting `package` to
+  the same name on several tasks points them all at one directory instead —
+  reach for it only when the tasks are parts of a single artefact that has to
+  come out as one piece, and where splitting it would produce fragments nobody
+  can use on their own. They still each get their own `slug`; only the output
+  directory is shared. Unlike `updates` the name need not already exist.
+- **Never plan a task that needs another task's output.** Everything in a plan
+  is queued at once and runs at the same time — there is no ordering, and no
+  way for one task to wait for another. A step that has to happen first belongs
+  *inside* the task that needs it, or the work is one task rather than several.
+  A shared `package` does not change this: siblings writing into one directory
+  still run concurrently and still cannot wait for each other, so each one's
+  brief must be doable from what is already on disk.
 - `scope` is `"package"` for ordinary work and `"project"` for the sweep
   described above. A project-scoped task edits packages that already exist: it
   gets the project directory rather than one of its own, so leave `updates`
@@ -515,11 +662,178 @@ Rules:
   the same request — it is one or the other.
 - If the message is too vague to write even one self-contained brief, return an
   empty `tasks` list and put the single most useful question in
-  `needs_clarification`.
+  `needs_clarification`. **Always give `options` with it** — two to four
+  concrete answers, each a few words, in the operator's terms rather than
+  yours. "Which target language?" with `["Romanian", "English", "Both"]` is
+  answered with one tap; the same question with no options is a writing task
+  handed to somebody holding a phone. Offer the likeliest answers; dex adds a
+  free-text box of its own, so you are not responsible for covering every case.
+  Leave `options` empty when `needs_clarification` is empty.
 - **At most 30 tasks in one reply.** Enumerating more runs past the reply limit
   and the whole plan is lost. If the request implies more — a whole book, a
   syllabus, "everything about X" — plan the 30 most useful now and describe the
   rest in `remaining`, precisely enough to carry on from: dex will ask you again
   with what has already been planned, until `remaining` is empty.
 - `remaining` is an empty string when this plan covers the whole request.
+- **`anchor` carries a survey segment through, unchanged.** When a task comes
+  from a segment above, copy that segment's anchor object into the task exactly
+  as it was given — same `source`, same page or line numbers. Do not invent
+  one, do not adjust the numbers, and do not anchor a task that no segment
+  produced: the operator clicks it to open the document at that spot, and an
+  anchor you improvised sends them to the wrong page. `null` when there was no
+  survey or the task does not come from one segment.
+- **A survey's segments are the split. One task each.** When the block above
+  lists twenty parts, plan twenty tasks — do not merge them back into one
+  because they came from a single document or a single link. That judgement
+  was already made, by a pass that had the material in front of it, and the
+  paragraph above about keeping one subject together is for a message with no
+  survey. Merge only when the survey itself says the material does not divide.
+  Splitting a segment further is allowed when one of them is plainly too big
+  for a single run; collapsing them is not.
+- **When a task has an anchor, say the same thing in `problem`.** Name the
+  source and the exact pages or lines the task covers, in words. The generation
+  agent reads `problem` and never sees the anchor, so a task whose brief says
+  "translate the document" will translate all nine hundred pages of it.
+"""
+
+
+SURVEY_SYSTEM = """\
+You survey source material so that it can be planned into separate tasks. You \
+do not do the work the material is for, and you do not write anything.
+
+Your whole job is to answer one question: **what is in here, and where does it \
+divide?**
+
+You are reading structure, not content. The tools you have return outlines, \
+anchors and one-line search hits; none of them will hand you a document to \
+read, and that is deliberate — the material may be a thousand pages and the \
+point of this pass is that it costs almost nothing. Work like an editor with \
+the table of contents in front of them, not like a reader starting at page one.
+
+You are also the only step that may **ask the operator a question**. You have \
+the guide and you have looked at the material, which is what makes a question \
+from here worth asking; nothing downstream of you can ask, so anything that \
+has to be settled before the work can be planned has to be settled by you.
+"""
+
+
+def survey_prompt(
+    message: str,
+    attachments: list[str],
+    urls: list[str],
+    project: str | None = None,
+    guide: str = "",
+) -> str:
+    """The brief for one pre-planning survey."""
+    listed = "\n".join(f"- {name}" for name in attachments) or "- (none)"
+    linked = "\n".join(f"- {u}" for u in urls) or "- (none)"
+    briefing = (
+        f"You are surveying for the **{project}** project. Its guide defines what\n"
+        f"a task in this project produces, which is what the material has to be\n"
+        f"divided *into*.\n\n<guide>\n{guide.strip()}\n</guide>\n\n"
+        if project and guide.strip()
+        else f"You are surveying for the **{project or 'default'}** project.\n\n"
+    )
+    return briefing + f"""\
+The operator said:
+
+\"\"\"
+{message}
+\"\"\"
+
+Files they attached:
+{listed}
+
+Links they gave:
+{linked}
+
+Survey the material, then say how it divides.
+
+**Read the guide above first.** It is what the material has to be divided
+*into* — segments that are not tasks of the kind this project produces are
+segments nobody can run.
+
+### Asking
+
+Use `ask_user` when something genuinely blocks planning and the material
+cannot settle it: which of two languages, which edition, how far to go. Offer
+concrete options; the operator may also type their own answer. Put what they
+said into `clarified` — the planner is a separate call that never sees the
+exchange, so an answer left out of `clarified` is an answer nobody acted on.
+
+Ask at most twice, and only about things that change what gets planned. A
+question you could answer by outlining one more file is not one of them.
+
+### When there is no material
+
+Sometimes there are no files and no links, and you were started only because
+the request was too vague to plan. Then there is nothing to outline: ask what
+is missing, put the answer in `clarified`, restate the request as `overview`,
+and return a single segment for the work. `single: true`.
+
+How to go about it:
+
+1. `list_sources` first, then `outline` every attached file and `outline_url`
+   every link. For most material the outline is the answer and you are nearly
+   done.
+2. When the outline is thin — a PDF with no bookmarks, a document with no
+   heading styles — go looking. `search` for the shape the material would have
+   if it had one: `table of contents`, `^chapter`, `^part \\d`, `^\\d+\\.\\s`,
+   a recurring section title. A scanned table of contents is often on page 2
+   to 8; find it with `search` and read it with one `peek`.
+3. `peek` only to settle a question the outline raised — what a section is,
+   where a part really begins. It returns a few thousand characters at most, so
+   it is for confirming, never for reading. If you find yourself peeking a
+   fourth time at the same source, you are reading it; stop and decide.
+
+What makes a good segment:
+
+- **Separable.** Someone could do one without having done the others. A
+  chapter, a section, a sheet, a chunk of a price book by division. Not
+  "introduction" and "the rest".
+- **Comparable in size.** Twelve chapters is twelve segments. Twelve chapters
+  where one is four hundred pages is thirteen, with that one split.
+- **Anchored.** Every segment carries the anchor you saw in the outline —
+  quote the page or line back exactly. A segment with no anchor is a guess and
+  the operator cannot check it.
+- **Whole.** Between them the segments must cover the material. If something
+  is unreachable — a scan with no extractable text, a link that was refused —
+  say so in `gaps` rather than pretending it is covered.
+
+Sometimes the answer is that it does not divide: a six-page letter is one piece
+of work. Say so with `"single": true` and one segment for the whole thing. Do
+not manufacture parts that are not there.
+
+Respond with **only** a JSON object in a ```json fence, no prose around it:
+
+```json
+{{
+  "overview": "One or two sentences: what this material is, and how much of it there is.",
+  "clarified": "What the operator settled when you asked, if you asked. Empty otherwise.",
+  "single": false,
+  "segments": [
+    {{"title": "Short name for this part, in the material's own words",
+      "summary": "One line on what it contains.",
+      "extent": "pp. 12-48, ~40,000 chars",
+      "anchor": {{"source": "<exact filename or URL>", "page": 12, "endPage": 48,
+                  "heading": "Chapter 3", "label": "pp. 12-48 · Chapter 3"}}}}
+  ],
+  "gaps": ""
+}}
+```
+
+Rules:
+- **A link the operator gave is itself a segment, and it comes first.** Its
+  outline lists the page at the top and the pages discovered from it below;
+  plan the named page as its own piece of work before any of them. Dropping it
+  because the sitemap looked more interesting loses the one page they actually
+  pointed at.
+- `source` in every anchor must be a name from the list above, spelled exactly.
+- Use `page`/`endPage` for PDFs, `line`/`endLine` for text and documents,
+  `sheet` for workbooks, `url` for links. Give what the source has; leave the
+  rest out.
+- `label` is what the operator will read on the plan card. Make it say where.
+- **At most 40 segments.** If the material has more natural parts than that,
+  group them into 40 and say in `overview` how you grouped.
+- `gaps` is an empty string when the segments cover everything.
 """

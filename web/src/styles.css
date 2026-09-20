@@ -212,6 +212,67 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
 
+/* =========================================================================
+   Wrapping — one policy, for every pane
+   =========================================================================
+   No pane scrolls sideways. Ever. Text wraps instead, including code.
+
+   This used to be a dozen rules bolted on one at a time, each after some
+   particular string had pushed some particular panel off screen: a tool row
+   holding an absolute path, a thinking block holding a URL, a code block
+   holding a line of JSON. Each fix was correct and the next overflow was
+   already waiting, because the default is wrong — `min-width: auto` on a flex
+   or grid item is as wide as its widest unbreakable child, and a long token
+   has no break in it.
+
+   So it is stated once, positively, and the exceptions are named below rather
+   than discovered.
+
+   Two properties do the work:
+     min-width: 0         lets an item be narrower than its content, which is
+                          what stops the content dictating the pane's width.
+     overflow-wrap: anywhere   breaks a token with no break in it. `anywhere`
+                          rather than `break-word` because only `anywhere`
+                          also shrinks the intrinsic size, which is the half
+                          that matters inside flex and grid.
+   ------------------------------------------------------------------------ */
+
+.chat, .panel-body, .viewer-body, .feed, .review-feed, .markdown, .prose, .prose-md,
+.thread-list, .reel-body, .explorer,
+.chat *, .panel-body *, .viewer-body *, .feed *, .review-feed *, .markdown *,
+.prose *, .prose-md *, .thread-list *, .reel-body *, .explorer * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Code wraps too, and keeps its indentation while doing it. A sideways
+   scrollbar inside a code block is still a pane you cannot read without
+   dragging, which is the thing being fixed — `pre-wrap` honours the newlines
+   and the leading spaces and lets the long lines fold. */
+pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* The named exceptions, and the whole list of them.
+   These are two-dimensional: their content is laid out across as well as
+   down, so folding a line does not make it readable, it makes it wrong. Each
+   scrolls *inside its own box*, never taking its pane with it — which is what
+   `min-width: 0` above guarantees.
+     .sheet-body    a spreadsheet grid, from an uploaded workbook
+     .mermaid-slot  a rendered diagram
+     .chart-scroll  the cost chart
+   An `<iframe>` (a PDF, an uploaded page) is a document of its own and does
+   its own scrolling; nothing out here applies to it. */
+.sheet-body, .mermaid-slot, .chart-scroll { overflow-x: auto; }
+.sheet-body td, .sheet-body th { white-space: nowrap; }
+
+/* A label that truncates with an ellipsis is not this. Those are deliberate
+   one-line summaries — a thread title, a chip, a filename — and they stay
+   `nowrap`; `overflow-wrap` has no effect on them, so the rule above leaves
+   them alone. */
+
 /* ---------------- chat ---------------- */
 
 .chat {
@@ -360,7 +421,10 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 /* ---------------- composer ---------------- */
 
 .composer {
-  display: flex; gap: 8px; align-items: flex-end;
+  /* Wraps so the attachment list can take a row of its own beneath the box.
+     Without it a 100%-basis child stays in the row and squeezes the textarea
+     and the send button into whatever is left. */
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line); background: var(--panel);
 }
@@ -404,9 +468,23 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   background: none; border: none; color: var(--accent); font-size: 26px;
   line-height: 1; padding: 0 8px;
 }
-/* An extra row when the paused note is showing; grid tolerates the spare. */
-.task-panel { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
-.task-panel.with-composer { grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+/* Rows by name, not by position. Two of these children are conditional — the
+   paused note, and the composer that only the Activity tab has — so counting
+   them put `minmax(0, 1fr)` under whichever child happened to be fifth. On a
+   paused task that was the tab strip: the flexible row collapsed to 1px while
+   its buttons stayed 44px tall, and Activity/Files painted over the feed. A
+   named row whose child is absent is simply an empty row. */
+.task-panel {
+  grid-template-areas: "head" "progress" "meta" "note" "tabs" "body" "composer";
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
+}
+.task-panel > .panel-head { grid-area: head; }
+.task-panel > .progress { grid-area: progress; }
+.task-panel > .panel-meta { grid-area: meta; }
+.task-panel > .paused-note { grid-area: note; }
+.task-panel > .tabs { grid-area: tabs; }
+.task-panel > .panel-body { grid-area: body; }
+.task-panel > .task-composer { grid-area: composer; }
 .viewer { grid-template-rows: auto minmax(0, 1fr); }
 
 .panel-head, .viewer-bar {
@@ -471,6 +549,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   color: var(--muted); font-size: 13px;
   border-left: 2px solid var(--line); padding-left: 10px;
 }
+
+
 .feed-thinking summary {
   cursor: pointer; display: flex; gap: 8px; align-items: baseline;
   list-style: none;
@@ -500,11 +580,11 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 .prose-md pre {
   background: #0e1117; border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; overflow-x: auto; font-size: 12px;
+  padding: 8px 10px; font-size: 12px;
 }
 .prose-md pre code { background: none; padding: 0; }
 .prose-md h1, .prose-md h2, .prose-md h3 { font-size: 14px; margin: 0.8em 0 0.3em; }
-.prose-md table { border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; }
+.prose-md table { border-collapse: collapse; font-size: 12px; width: 100%; table-layout: fixed; }
 .prose-md th, .prose-md td { border: 1px solid var(--line); padding: 4px 8px; }
 
 .feed-tool { display: flex; align-items: baseline; gap: 9px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
@@ -513,13 +593,11 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .feed-tool.ok .tool-dot { background: var(--add); }
 .feed-tool.error .tool-dot { background: var(--del); }
 .feed-tool .tool-title { color: var(--text); }
-/* The path being edited rides in these rows and is the thing that overflowed
-   the activity panel; nothing here is allowed to be unbreakable. */
-.feed-tool, .feed-tool * { min-width: 0; overflow-wrap: anywhere; }
+
 .tool-out {
   flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px; font-size: 12px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
-  white-space: pre-wrap; overflow-x: auto;
+  white-space: pre-wrap;
 }
 
 .feed-diff {
@@ -543,7 +621,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .error-box {
   margin: 0; padding: 10px 12px; font-size: 12px; white-space: pre-wrap;
   background: var(--del-bg); border: 1px solid color-mix(in srgb, var(--del) 40%, var(--line));
-  border-radius: 10px; color: var(--del); overflow-x: auto;
+  border-radius: 10px; color: var(--del);
 }
 
 .feed-card.approval.pending { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
@@ -564,7 +642,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 /* ---------------- task composer + queued notes ---------------- */
 
 .task-composer {
-  display: flex; gap: 8px; align-items: flex-end;
+  /* Wraps for the attachment list; see `.composer`. */
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line); background: var(--panel);
 }
@@ -602,10 +681,17 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 .asset-row.open { border-color: var(--accent); }
 .asset-icon { flex: none; }
+/* Name over tags, so the tags never eat into the width the name is measured
+   against. */
+.asset-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+}
 .asset-name {
   flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 12.5px;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
+.asset-main .asset-name { flex: none; max-width: 100%; }
 .asset-size { font-size: 11px; color: var(--muted); white-space: nowrap; }
 
 /* ---------------- viewer ---------------- */
@@ -618,7 +704,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   overflow: auto; -webkit-overflow-scrolling: touch;
   padding: 14px calc(14px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
 }
-.code-view { margin: 0; font-size: 12.5px; line-height: 1.6; white-space: pre; overflow-x: auto; }
+.code-view { margin: 0; font-size: 12.5px; line-height: 1.6; }
 
 .gif-view { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
 .gif-view img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); }
@@ -652,8 +738,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .markdown h2 { font-size: 17px; margin-top: 1.6em; }
 .markdown p, .markdown li { color: #d5d9e2; }
 .markdown code { background: var(--panel-2); padding: 1px 5px; border-radius: 5px; font-size: 0.88em; }
-.md-code { background: #0e1117; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
-.markdown table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; font-size: 13px; }
+.md-code { background: #0e1117; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; }
+.markdown table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 13px; }
 .markdown th, .markdown td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
 .markdown blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
 
@@ -893,7 +979,15 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 /* ---------------- review feed ---------------- */
 
 
-.feed { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+/* Named apart from the activity feed in the task panel, which is also a list
+   of things that happened but is a plain column: one `.feed` rule was landing
+   on both, and this one won by being later in the file. */
+.review-feed {
+  display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0;
+  /* The strip between the status bar and the first reel, which until the two
+     feeds were named apart came from the activity feed's rule. */
+  gap: 10px;
+}
 .feed-status {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 6px 14px; border-bottom: 1px solid var(--line);
@@ -1054,21 +1148,6 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 
 /* ---------------- 3D pose viewer ---------------- */
 
-.pose { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: 100%; min-height: 320px; }
-.pose-stage { position: relative; min-height: 0; border-radius: 10px; overflow: hidden; }
-/* The renderer sizes the drawing buffer only (updateStyle: false), so the
-   canvas is laid out by CSS. Absolute fill keeps it off the stage's own
-   height, which would otherwise feed back into the ResizeObserver. */
-.pose-stage canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
-/* The label layer sits over the scene and must not swallow orbit gestures. */
-.pose-stage .pose-labels { position: absolute; inset: 0; pointer-events: none; }
-.pose-controls {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding-top: 10px;
-}
-.pose-name { font-weight: 600; }
-.pose-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.pose-toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
 
 /* Search, an optional filter drawer, then the list. Flex rather than fixed grid
    rows: with a track per child, the drawer landed in the `1fr` track and
@@ -1134,6 +1213,54 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   .chip-row { flex-wrap: wrap; }
   .chip-actions { width: 100%; justify-content: flex-end; }
 }
+
+/* ---------------- a design turn's link back to its run ---------------- */
+
+.turn-activity {
+  align-self: flex-start;
+  margin-top: 8px; padding: 3px 10px; border-radius: 999px;
+  font: inherit; font-size: 11.5px; line-height: 1.5;
+  background: transparent; border: 1px dashed var(--line); color: var(--muted);
+  cursor: pointer;
+}
+.turn-activity:hover { color: var(--text); border-color: var(--muted); }
+.turn-activity.on { color: var(--accent); border-color: var(--accent); }
+/* A failed turn still says what it was, and the link says so too. */
+.prose.turn-failed { border-left: 2px solid var(--warn, #fbbf24); padding-left: 10px; }
+
+/* ---------------- attaching sources to a message ---------------- */
+
+.attach-btn {
+  flex: none; width: 34px; min-height: 38px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: inherit; font-size: 18px; line-height: 1;
+  background: transparent; border: 1px solid var(--line); border-radius: 8px;
+  color: var(--muted); cursor: pointer;
+}
+.attach-btn:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.attach-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* A row of its own, below everything else: file names are long, and beside
+   the textarea they left neither the name nor the box readable. `order`
+   carries it past the send button even though it is written before it. */
+.attached {
+  order: 99; flex-basis: 100%; width: 100%;
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px;
+}
+.attached-file {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; padding: 2px 4px 2px 10px; border-radius: 999px;
+  font-size: 11.5px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line);
+}
+.attached-size { color: var(--muted); }
+.attached-drop {
+  width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--muted); font: inherit; cursor: pointer;
+}
+.attached-drop:hover { color: var(--text); background: var(--panel); }
+.attached-error { font-size: 11.5px; color: var(--warn, #fbbf24); }
 
 /* ---------------- collapsed task groups ---------------- */
 
@@ -1203,18 +1330,14 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .tag-pill.on .tag-count { opacity: 0.85; }
 .tag-pill.clear { border-style: dashed; align-self: flex-start; }
 
-.asset-tags { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.asset-tags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
 .row-tag {
   font-size: 10px; padding: 1px 6px; border-radius: 999px;
   background: var(--panel); border: 1px solid var(--line); color: var(--muted);
   white-space: nowrap;
 }
 
-/* On a narrow screen the tag list would push the name to nothing, so it drops
-   under it instead of competing for the row. */
 @media (max-width: 620px) {
-  .asset-row { flex-wrap: wrap; }
-  .asset-tags { order: 3; width: 100%; justify-content: flex-start; }
   .tag-group { flex-direction: column; align-items: stretch; gap: 4px; }
 }
 
@@ -1386,18 +1509,48 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 
 /* ---------------- users and access ---------------- */
-.user-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+/* This list lives in the viewer column, which is `minmax(360px, 34vw)` wide —
+   never the width of the window. A viewport media query therefore says nothing
+   useful about the room a row actually has, so the row asks its own container
+   instead: at 1440px the window is "desktop" while this pane is 490px, and
+   four columns in 490px left the name 63px of it. */
+.user-list {
+  display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px;
+  container-type: inline-size;
+}
 .user-row {
-  display: grid; gap: 10px; padding: 12px;
-  grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1.6fr) auto;
+  display: grid; gap: 10px 12px; padding: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "who      who"
+    "role     actions"
+    "projects projects";
   align-items: center;
   border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+}
+.user-who { grid-area: who; }
+.user-role { grid-area: role; justify-self: start; }
+.user-projects { grid-area: projects; }
+.user-actions { grid-area: actions; }
+/* Only where the pane is genuinely wide enough for all four side by side. */
+@container (min-width: 760px) {
+  .user-row {
+    grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1.6fr) auto;
+    grid-template-areas: "who role projects actions";
+  }
 }
 /* An account with no role is the only row that needs the operator to act, so
    it is the only one that draws attention to itself. */
 .user-row.pending { border-color: var(--accent); }
-.user-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.user-who span { display: flex; flex-direction: column; min-width: 0; }
+/* Wrapping, so a chip drops below the name rather than taking width off it:
+   "temporary password" is 125px that the name would otherwise pay for. */
+.user-who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; min-width: 0; }
+/* The name and the handle it signs in with, stacked. Named rather than
+   `.user-who span`, which also caught the chips beside them: a chip made into
+   a zero-width column dropped "temporary password" down the page a letter at
+   a time. */
+.user-name { display: flex; flex-direction: column; min-width: 0; }
+.user-who .chip { flex: none; white-space: nowrap; }
 .user-who strong, .user-who small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-who small { color: var(--muted); }
 .user-avatar { width: 28px; height: 28px; border-radius: 50%; flex: none; }
@@ -1426,8 +1579,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 /* Only admin is coloured. The other three are peers, and tinting all of them
    would suggest a ranking the model deliberately does not have. */
-.role-pill.admin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
-.role-pill.none { color: var(--muted); border-style: dashed; }
+.role-pill.role-admin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.role-pill.role-none { color: var(--muted); border-style: dashed; }
 
 /* The new-account form, inside the same panel as the list. */
 .new-user {
@@ -1447,10 +1600,8 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 }
 .new-user-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-/* Narrow screens: the four-column row becomes a stack. */
+/* Narrow screens: the pill stops holding a column open beside the text. */
 @media (max-width: 720px) {
-  .user-row { grid-template-columns: 1fr; }
-  .user-actions { justify-self: start; justify-content: flex-start; }
   .role-key dl > div { grid-template-columns: 1fr; gap: 2px; }
 }
 
@@ -1480,3 +1631,181 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .audio-view audio { width: 100%; }
 .binary-view { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .binary-view p { margin: 0; }
+
+/* ---------------------------------------------------------------- sources */
+/* Files the operator attached, in the thread and in the preview pane. */
+
+.bubble-group { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.bubble-sources {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px;
+  max-width: 100%;
+}
+.source-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.source-chip:hover { border-color: var(--accent); }
+.source-chip-icon { flex: none; }
+/* A source keeps the name it was uploaded with, which can be long; the chip
+   truncates rather than pushing the bubble out of the column. */
+.source-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The frame fills the pane: a PDF viewer with a scrollbar of its own is the
+   whole point, and a height of `auto` collapses an iframe to nothing. */
+.source-frame {
+  width: 100%; height: 100%; min-height: 60vh;
+  border: 0; border-radius: 8px; background: #fff;
+}
+.source-image { max-width: 100%; height: auto; display: block; }
+.source-media { width: 100%; }
+.source-download { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+
+/* Converted Word output. It arrives as plain semantic HTML with no styling of
+   its own, so it needs a readable measure and the panel's own colours. */
+.source-doc {
+  max-width: 70ch; line-height: 1.6;
+  color: var(--text); overflow-wrap: anywhere;
+}
+.source-doc img { max-width: 100%; height: auto; }
+.source-doc table { border-collapse: collapse; }
+.source-doc td, .source-doc th { border: 1px solid var(--line); padding: 4px 8px; }
+
+.source-sheet { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.sheet-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.sheet-tab {
+  padding: 3px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font: inherit; font-size: 12px;
+  cursor: pointer;
+}
+.sheet-tab.on { color: var(--text); border-color: var(--accent); }
+/* A workbook is wider than the pane far more often than not. */
+.sheet-body { overflow: auto; }
+.sheet-body table { border-collapse: collapse; font-size: 12px; }
+.sheet-body td, .sheet-body th {
+  border: 1px solid var(--line); padding: 3px 8px; white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- the survey */
+/* Where a planned task's work is, and the pass that worked it out. */
+
+.plan-anchor {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 5px;
+  margin: 2px 0 4px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; cursor: pointer;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.plan-anchor:hover { color: var(--text); border-color: var(--accent); }
+
+/* The survey's own account, above the plan built from it. Marked so it reads
+   as working rather than as an answer — it is the reasoning, not the result. */
+.prose.from-survey { border-left: 2px solid var(--line); padding-left: 12px; }
+
+/* ------------------------------------------------- a task's own inputs */
+/* What the task was cut out of, above the files it produced. */
+
+.task-input { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.input-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font: inherit; font-size: 13px;
+  text-align: left; text-decoration: none; cursor: pointer;
+}
+.input-row:hover { border-color: var(--accent); }
+.input-icon { flex: none; }
+/* The name can be a long upload or a long URL; it gives way before the
+   position does, because the position is the part that says which task. */
+.input-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.input-where { flex: none; color: var(--muted); font-size: 11px; }
+
+.files-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 0 2px; color: var(--muted); font-size: 11px;
+}
+.files-divider::before, .files-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--line);
+}
+
+/* ------------------------------------------------------------------ skills */
+/* Which capabilities each project has on. Admin-only. */
+
+.skill-row {
+  padding: 12px 0; border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.skill-row:last-child { border-bottom: 0; }
+.skill-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.skill-name { font-weight: 600; }
+.skill-version-pick {
+  font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted);
+  padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); max-width: 260px;
+}
+/* Says the row is not showing the newest version, so a tick here is a
+   deliberate step backwards rather than an accident. */
+.skill-older {
+  font-size: 10px; color: var(--warn); padding: 1px 6px; border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.skill-carries { display: flex; flex-wrap: wrap; gap: 5px; }
+.skill-chip {
+  font-size: 11px; padding: 1px 8px; border-radius: 5px;
+  background: var(--panel-2); color: var(--muted);
+}
+/* What a skill carries reads at a glance: a module, a widget, a dependency. */
+.skill-chip.widget { color: var(--accent); }
+.skill-chip.needs { color: var(--warn); }
+.skill-projects { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 2px; }
+.skill-tick {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; cursor: pointer;
+}
+.skill-tick input { width: 16px; height: 16px; accent-color: var(--accent); }
+/* A project already on another version of this skill: ticking here moves it,
+   so the box says which version it would be moving from. */
+.skill-tick.elsewhere { color: var(--muted); }
+.skill-elsewhere {
+  font-family: ui-monospace, monospace; font-size: 10px;
+  color: var(--warn); padding: 0 4px; border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+/* ------------------------------------------- the project's instructions */
+/* More than one document now: the project's own brief, and a SKILL.md per
+   capability it has enabled. */
+
+/* `.viewer` is a two-row grid, and this pane has four children — the extra
+   ones landed in unsized rows and stretched the pills to full height. Flex
+   instead, because how many children there are varies: the note only shows
+   for a skill. */
+.viewer.guide { display: flex; flex-direction: column; }
+.viewer.guide .viewer-body { flex: 1; min-height: 0; }
+.guide-picker, .guide-note { flex: none; }
+
+.guide-picker {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 8px 14px 0; border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+.guide-pick {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.guide-pick.on { color: var(--text); border-color: var(--accent); }
+/* Disabled while there are unsaved edits — switching would drop them. */
+.guide-pick:disabled { opacity: 0.45; cursor: not-allowed; }
+.guide-pick-version { font-family: ui-monospace, monospace; font-size: 10px; opacity: 0.7; }
+
+/* Saving a skill is not a save: it publishes, and other projects move. */
+.guide-note { margin: 8px 14px 0; }
+.guide-published {
+  margin: 0 0 10px; padding: 7px 10px; border-radius: 8px; font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+}
