@@ -30,6 +30,26 @@ from claude_agent_sdk import (
 )
 
 READ_ONLY_TOOLS = {"Read", "Glob", "Grep", "NotebookRead", "TodoWrite", "WebSearch", "WebFetch"}
+
+#: Every built-in the CLI offers, for a run that is meant to have none.
+#:
+#: `allowed_tools=[]` does **not** mean "no tools". The SDK writes
+#: `--allowedTools` only `if effective_allowed_tools:`, so an empty list is
+#: falsy, the flag is never passed, and the CLI runs with its full default
+#: toolset. Three single-turn calls here described themselves as tool-less and
+#: had every tool available; the planner attempted one in 3 runs out of 5, and
+#: because a tool call consumes the turn, `max_turns=1` then failed the whole
+#: request with "Reached maximum number of turns (1)".
+#:
+#: `disallowed_tools` is the flag that actually removes them. Listed by name
+#: because that is the interface the CLI offers — which means this goes stale
+#: when the CLI gains a tool, and the symptom is the one described above rather
+#: than anything that says "a tool is missing from a list".
+NO_TOOLS = [
+    "Task", "Bash", "BashOutput", "KillBash", "Glob", "Grep", "Read", "Edit",
+    "MultiEdit", "Write", "NotebookRead", "NotebookEdit", "WebFetch",
+    "WebSearch", "TodoWrite", "Skill", "SlashCommand",
+]
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 #: First word of a shell command that the task is expected to run on its own.

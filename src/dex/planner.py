@@ -11,6 +11,7 @@ from typing import Any
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
 
 from .config import Config
+from .permissions import NO_TOOLS
 from .models import slugify
 from .prompts import PLANNER_SYSTEM, planner_prompt
 
@@ -99,6 +100,9 @@ async def plan_from_message(
         system_prompt=PLANNER_SYSTEM,
         model=model or config.planner_model,
         allowed_tools=[],
+        # An empty `allowed_tools` leaves every tool available; this is
+        # what makes the run actually tool-less. See `NO_TOOLS`.
+        disallowed_tools=NO_TOOLS,
         max_turns=1,
         permission_mode="dontAsk",
         setting_sources=[],

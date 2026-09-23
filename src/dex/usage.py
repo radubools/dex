@@ -169,9 +169,14 @@ class UsageWatcher:
         """
         from claude_agent_sdk import ClaudeAgentOptions, RateLimitEvent, ResultMessage, query
 
+        from .permissions import NO_TOOLS
+
         options = ClaudeAgentOptions(
             model=PROBE_MODEL,
             allowed_tools=[],
+            # An empty `allowed_tools` leaves every tool available, and a probe
+            # that reached for one would burn its single turn. See `NO_TOOLS`.
+            disallowed_tools=NO_TOOLS,
             max_turns=1,
             permission_mode="dontAsk",
             setting_sources=[],

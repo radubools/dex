@@ -16,6 +16,7 @@ from typing import Any
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
 
 from .config import Config
+from .permissions import NO_TOOLS
 
 log = logging.getLogger("dex.designer")
 
@@ -122,6 +123,9 @@ async def draft(
         system_prompt=SYSTEM,
         model=model or config.planner_model,
         allowed_tools=[],
+        # An empty `allowed_tools` leaves every tool available; this is
+        # what makes the run actually tool-less. See `NO_TOOLS`.
+        disallowed_tools=NO_TOOLS,
         max_turns=1,
         permission_mode="dontAsk",
         setting_sources=[],
