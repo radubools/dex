@@ -36,10 +36,11 @@ from . import pricing
 from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
-from .store import SettingsStore, TaskStore
+from .store import SettingsStore, TaskStore, ThreadStore
 from .diffs import preview_change
 from .models import Event, Task, TaskState
 from . import local_sources, skills, surveyor, widgets
+from .threads import ThreadMessage
 from .permissions import PermissionPolicy
 from .prompts import (
     DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM,
@@ -712,9 +713,6 @@ class TaskRunner:
         event is what puts it on screen without one.
         """
         try:
-            from .models import ThreadMessage
-            from .store import ThreadStore
-
             message = ThreadMessage(
                 role="dex", kind="text", text=summary.strip()[:4000],
                 # `taskId` is what lets the reader open the run behind the
@@ -733,9 +731,18 @@ class TaskRunner:
                     project=self.task.project,
                 )
             )
-        except Exception:
+        except Exception as exc:
             # The run itself succeeded; failing to echo it must not undo that.
+            # But it must not be silent either: this swallowed an ImportError
+            # for every design turn ever run — `ThreadMessage` was imported
+            # from the wrong module — and the only trace was a line in a log
+            # nobody reads, while the thread quietly lost every reply.
             log.exception("could not post the design reply for %s", self.task.id)
+            self.emit(
+                "error",
+                message=f"The turn finished but its reply could not be posted: {exc}",
+                fatal=False,
+            )
 
     async def _store_tokens(self, counts: dict[str, int]) -> None:
         try:

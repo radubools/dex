@@ -162,6 +162,16 @@ export const reviewTopic = (slug: string, rating: 'again' | 'good' | 'easy', pro
 export const getCosts = (period: string, granularity: string, group: string) =>
   request<CostsResponse>(`/api/costs?period=${period}&granularity=${granularity}&group=${group}`)
 
+/**
+ * One task by id, for opening a run the listing did not carry.
+ *
+ * `listTasks` returns the newest 200, so anything older is absent from the
+ * task map — and a finished design turn is reached by id, from the reply it
+ * wrote, long after 200 newer tasks have pushed it out.
+ */
+export const getTask = (id: string) =>
+  request<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}`).then((r) => r.task)
+
 export const listTasks = () => request<{ tasks: Task[] }>('/api/tasks').then((r) => r.tasks)
 
 export const getTaskMessages = (id: string) =>

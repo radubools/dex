@@ -1,7 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import {
   can, confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
-  getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads, openStream,
+  getTask, getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads,
+  openStream,
   sendMessage,
   setAutoApprove,
   type Me,
@@ -224,6 +225,30 @@ export default function App() {
         historyLoaded.current.delete(activeTaskId)
       })
   }, [activeTaskId])
+
+  // The task itself, when the listing did not carry it.
+  //
+  // The panel renders only what is in the task map, and the map is filled from
+  // `/api/tasks`, which returns the newest 200 non-archived rows. A thread
+  // message links back to a run by id and lives forever; the window is 200
+  // rows wide and there are already 711. When the id falls outside it, opening
+  // the run did nothing at all — no panel, no error, a button that swallowed
+  // the click.
+  const taskLoaded = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!activeTaskId || state.tasks[activeTaskId]) return
+    if (taskLoaded.current.has(activeTaskId)) return
+    taskLoaded.current.add(activeTaskId)
+    const wanted = activeTaskId
+    getTask(wanted)
+      .then((task) => dispatch({ type: 'tasks', tasks: [task] }))
+      .catch(() => {
+        // Deleted, or not this operator's to see. Close rather than leave a
+        // button that swallows the click.
+        taskLoaded.current.delete(wanted)
+        setActiveTaskId((current) => (current === wanted ? null : current))
+      })
+  }, [activeTaskId, state.tasks])
 
   // Load a thread's stored history the first time it is opened.
   useEffect(() => {

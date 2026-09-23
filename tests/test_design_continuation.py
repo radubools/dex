@@ -136,3 +136,79 @@ async def test_a_follow_up_on_an_ordinary_task_stays_a_package_task(manager):
 
     assert started.scope == "package"
     assert "add a test" in started.problem
+
+
+class _CollectingBus:
+    """Stands in for the event bus, which this is not about.
+
+    A real one writes every published event to the database from a background
+    writer, and these tests care about the row `append` wrote, not about event
+    persistence. Keeping the real bus out also keeps its writer from outliving
+    the test that started it.
+    """
+
+    def __init__(self) -> None:
+        self.published: list[object] = []
+
+    def publish(self, event: object) -> object:
+        self.published.append(event)
+        return event
+
+
+def _design_runner(config, db, thread_id: str, slug: str):
+    from dex.runner import TaskRunner
+    from dex.store import SettingsStore, TaskStore
+
+    task = Task(
+        project=config.default_project, slug=slug, title="Design turn",
+        problem=json.dumps({"message": "x", "guide": "", "history": ""}),
+        scope="design", thread_id=thread_id,
+    )
+    bus = _CollectingBus()
+    runner = TaskRunner(
+        task, config, bus, TaskStore(db), SettingsStore(db),  # type: ignore[arg-type]
+    )
+    return runner, bus
+
+
+async def test_a_design_turn_posts_its_reply_into_the_thread(config, db):
+    """The reply is the only thing linking a finished turn back to its run.
+
+    `_post_design_reply` imported `ThreadMessage` from `dex.models`, where it
+    has never lived, inside a `try` that caught everything. Every design turn
+    ever run raised `ImportError` there and logged one line; the thread kept
+    the operator's question and lost every answer, and the run's activity
+    became unreachable the moment it stopped being live. Nothing exercised
+    this path, so nothing said so.
+    """
+    from dex.store import ThreadStore
+
+    threads = ThreadStore(db)
+    thread = await threads.create("Design", kind="project_design")
+    runner, bus = _design_runner(config, db, thread.id, "design-turn")
+
+    await runner._post_design_reply(thread.id, "Renamed the deliverable.")
+
+    posted = (await threads.get(thread.id)).messages
+    assert [m.text for m in posted] == ["Renamed the deliverable."]
+    assert posted[0].role == "dex" and posted[0].kind == "text"
+    # The id is the way back into the run's activity.
+    assert posted[0].data["taskId"] == runner.task.id
+    assert posted[0].data["failed"] is False
+    # And the thread is told without waiting for a reload.
+    assert [getattr(e, "type", None) for e in bus.published] == ["thread_message"]
+
+
+async def test_a_failed_design_turn_still_leaves_a_way_back(config, db):
+    """A turn that failed is the one most worth being able to open."""
+    from dex.store import ThreadStore
+
+    threads = ThreadStore(db)
+    thread = await threads.create("Design", kind="project_design")
+    runner, _ = _design_runner(config, db, thread.id, "design-fail")
+
+    await runner._post_design_reply(thread.id, "That turn failed.\n\nboom", failed=True)
+
+    posted = (await threads.get(thread.id)).messages
+    assert posted[0].data["failed"] is True
+    assert posted[0].data["taskId"] == runner.task.id
