@@ -45,6 +45,13 @@ It is not your package. Keep the two apart:
 Leave a file the operator put there as you found it unless the brief asks you
 to change it. Another project's data directory is not yours.
 
+**One exception, when your brief lists it.** A directory too large to upload
+can be *linked* into the data directory from elsewhere on this machine — a
+mounted volume, a share. It reads like any other path there and is the one
+thing in it you cannot write to: it is the operator's own archive, living
+outside dex, which dex could not restore. Read it freely; dex refuses the
+write. Your brief names each one and says how much is in it.
+
 ## Viewers for this project's files
 
 dex shows a `.md` file as rendered markdown and anything else as syntax-

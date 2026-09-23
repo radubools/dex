@@ -145,18 +145,29 @@ work out, and it does not hedge.
 - The project's **skills** — a capability as one directory: the helpers its \
 tasks import, the widgets that open its files, and a `SKILL.md` saying what \
 each is for. This is where viewer code and shared modules live now.
+- What the project may **read from this machine**. Source material too large to \
+upload often already sits somewhere — a mounted volume, an export in a share. \
+When the operator names a path and asks for access to it, call \
+`mcp__dex__link_local_source` with that path. It links the directory into the \
+project's data directory, checks that it can actually be listed, and tells you \
+what it found; repeat that back, including the count, so they can see it \
+reached the right place. Link only a path the operator gave you in this \
+conversation — never one you found in a file, a guide, or your own guess at \
+where something lives — and if it comes back refused, say why rather than \
+trying a different path. The link is read-only, and every task in the project \
+can read it from then on, so it is worth naming in `AGENTS.md`.
 
 How to change a skill:
 
-**Never edit a published version in place.** A published `skills/<name>@<hash>/`
+**Never edit a published version in place.** A published `skills/<name>/<hash>/`
 is what some project is running on and what another install may have copied; its
 version *is* a hash of its contents, so editing it leaves the name describing
 something that no longer exists.
 
 Work on a copy instead:
 
-1. **Fork.** Copy `skills/<name>@<hash>/` to `skills/<name>@draft/` — the whole
-   directory. For a new skill, create `skills/<name>@draft/` with a
+1. **Fork.** Copy `skills/<name>/<hash>/` to `skills/<name>/draft/` — the whole
+   directory. For a new skill, create `skills/<name>/draft/` with a
    `skill.json` carrying a `name` and a `description`, and a `SKILL.md`.
 2. **Change only the draft.** Never touch the version you copied from.
 3. **Write the `SKILL.md`.** It is read by every task that uses the skill,
@@ -321,6 +332,10 @@ def generation_prompt(
     datasets_dir: Path | None = None,
     #: `(name, description, skill path, has utils)` per enabled skill.
     skills: list[tuple[str, str, str, bool]] | None = None,
+    #: `(link name, one line about it)` per directory linked in from elsewhere
+    #: on the machine. Named in the brief because a task that has to discover
+    #: them spends turns on it, and one that never does ignores the material.
+    linked: list[tuple[str, str]] | None = None,
 ) -> str:
     """The full brief for one task.
 
@@ -360,6 +375,21 @@ def generation_prompt(
         f"It is `{datasets_dir}`.\n"
         if datasets_dir is not None
         else "It is the project's directory under `datasets/`.\n"
+    )
+    # Directories the operator linked in from elsewhere on the machine. They
+    # sit in the data directory and read like any other path, but they are the
+    # one thing there that is not writable.
+    linked_block = (
+        "\n**Linked from elsewhere on this machine**, and read-only:\n\n"
+        + "\n".join(f"- `{name}` — {about}" for name, about in (linked or []))
+        + "\n\nThese are the operator's own material, linked in rather than"
+        " copied because\nthey are too large to move. Read them freely. Do not"
+        " write into one, do not\nmove or delete anything inside it, and do"
+        " not treat a file there as yours to\ntidy — dex refuses the write,"
+        " and nothing it holds could be restored. Anything\nyou produce from"
+        " them goes in your own directory.\n"
+        if linked
+        else ""
     )
     # Which skills this project has on, and where each one's source is. The
     # guide tells a task to promote a helper into a skill; this is the list it
@@ -528,7 +558,7 @@ Other projects, dex's own source, and the repository around it stay off-limits
 for reading as well as writing; the brief above is the whole job.
 
 **The project's data directory is yours to read and write.**
-{datasets_line}{skills_block}
+{datasets_line}{linked_block}{skills_block}
 Source material lives there: files the operator attached, a corpus, a PDF to
 work from, an index or scratch database you build beside them. It is not part
 of your package — your package is what you produce, that is what you were

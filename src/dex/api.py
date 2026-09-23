@@ -39,7 +39,7 @@ from .identity import (
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation
-from . import designer, skills, surveyor, uploads
+from . import designer, local_sources, skills, surveyor, uploads
 from .feed import ReviewStore, discover
 from .migrate import adopt_existing_project, ensure_design_thread
 from .projects import ProjectStore
@@ -1010,7 +1010,27 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             for f in sorted(root.glob("*"))
             if f.is_file() and not f.name.startswith(".")
         ]
-        return {"project": chosen, "files": files}
+        # Linked directories are listed apart from the files. They are not
+        # uploads and there is nothing to preview — what matters about one is
+        # where it points and whether it can still be read.
+        return {
+            "project": chosen,
+            "files": files,
+            "linked": [link.to_json() for link in local_sources.links(root)],
+        }
+
+    @app.delete("/api/datasets/links/{name}", dependencies=admin_only)
+    async def remove_link(name: str, project: str | None = Query(default=None)) -> dict[str, Any]:
+        """Drop a linked directory from a project.
+
+        Admin-only, like enabling a skill: it changes what every task in the
+        project can read. Only the link goes — the directory it pointed at is
+        the operator's own and is not dex's to delete.
+        """
+        chosen = await resolve_project(project)
+        if not local_sources.unlink(config.project_datasets(chosen), name):
+            raise HTTPException(404, "no such linked source")
+        return {"project": chosen, "removed": name}
 
     @app.get("/api/datasets/raw", dependencies=guard)
     async def raw_source(

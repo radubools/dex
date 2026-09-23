@@ -121,7 +121,7 @@ flowchart TB
         pricing["pricing"]
         widgets["widgets"]
         sources["sources · web_sources"]
-        uploads["uploads"]
+        uploads["uploads · local_sources"]
         feed["feed"]
         animation["animation · gifinfo"]
         diffs["diffs"]
@@ -165,6 +165,7 @@ flowchart TB
 | `web_sources` | Fetching a URL, and the guard that refuses most of them |
 | `surveyor` | The survey's tool surface, and when a message gets one |
 | `uploads` | Material the operator supplies, in `datasets/<project>/` |
+| `local_sources` | Linking a directory from elsewhere on the machine, read-only |
 | `skills` | A project's helpers and widgets, versioned and shareable |
 | `designer` | Conversation history for design turns |
 | `store` / `db` | Reads and writes; schema applied at startup |
@@ -330,11 +331,10 @@ suite**; it is exercised only by real use.
 
 ## Improvement opportunities
 
-- **The module map is hand-maintained.** Nothing checks the diagram or the
-  table against `src/dex/`, so a new module can exist for weeks without
-  appearing here — `skills`, `sources`, `surveyor`, `uploads` and `web_sources`
-  all did. A test asserting every `src/dex/*.py` has a row would cost ten lines
-  and end the drift.
+- **The module table is checked; the diagram is not.**
+  `test_every_module_appears_in_the_overview` fails when a `src/dex/*.py` has
+  no row — it is what caught `local_sources` — but nothing reads the mermaid
+  above it, so a module can be in the table and missing from the picture.
 - **The "request, end to end" sequence is now one of several.** A message may
   be planned directly, surveyed first, or escalated into pre-planning, and the
   diagram shows only the first. Worth splitting or annotating.

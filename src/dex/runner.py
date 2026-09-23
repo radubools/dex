@@ -39,7 +39,7 @@ from .config import Config
 from .store import SettingsStore, TaskStore
 from .diffs import preview_change
 from .models import Event, Task, TaskState
-from . import skills, surveyor, widgets
+from . import local_sources, skills, surveyor, widgets
 from .permissions import PermissionPolicy
 from .prompts import (
     DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM,
@@ -315,8 +315,55 @@ class TaskRunner:
             on = await self.settings.utility_proposals()
             return {"content": [{"type": "text", "text": "enabled" if on else "disabled"}]}
 
+        @tool(
+            "link_local_source",
+            "Give this project read access to a directory elsewhere on this "
+            "machine, by linking it into the project's data directory. Use it "
+            "only when the operator has named a path and asked for access to "
+            "it. Pass the absolute path. Returns the link's name and what it "
+            "found there, or why the path was refused. The link is read-only "
+            "and every task in this project can read it from then on.",
+            {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the directory, as the operator gave it.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional name for the link. Defaults to the directory's own.",
+                    },
+                },
+                "required": ["path"],
+            },
+        )
+        async def link_local_source(args: dict[str, Any]) -> dict[str, Any]:
+            datasets = self.config.project_datasets(self.task.project)
+            try:
+                made = local_sources.link(
+                    datasets, str(args.get("path", "")), self.config.workspace,
+                    str(args.get("name", "")),
+                )
+            except local_sources.Blocked as exc:
+                # Returned rather than raised: the design turn has to tell the
+                # operator why their path was refused, and an exception would
+                # end the turn with nothing said.
+                return {"content": [{"type": "text", "text": f"Refused. {exc}"}]}
+            self.emit("text", text=f"Linked a local source — {made.describe()}")
+            return {"content": [{"type": "text", "text": (
+                f"Linked. {made.describe()}\n"
+                f"Tasks in this project read it at `{made.path}`. "
+                "It is read-only."
+            )}]}
+
         return create_sdk_mcp_server(
-            name="dex", version="0.1.0", tools=[ask_user, utility_proposals_enabled]
+            name="dex", version="0.1.0",
+            tools=[ask_user, utility_proposals_enabled]
+            # Only a design turn may widen what a project can read. A
+            # generation task uses what is already linked; granting access is
+            # the operator's decision, and the designer is where they make it.
+            + ([link_local_source] if self.task.is_design else []),
         )
 
     async def _escalate(
@@ -425,6 +472,13 @@ class TaskRunner:
                 # projects and therefore live at the top level rather than
                 # inside the project it is editing.
                 + ((widgets.widgets_dir(self.config.workspace),) if self.task.is_design else ())
+            ),
+            # Linked directories are readable — that is why they were linked
+            # — and never writable. The link lives inside the data directory,
+            # which *is* writable, so the policy needs the targets to tell the
+            # two apart.
+            read_only=local_sources.targets(
+                self.config.project_datasets(self.task.project)
             ),
             escalate=self._escalate,
         )
@@ -544,6 +598,7 @@ class TaskRunner:
                 workspace=self.config.workspace,
                 datasets_dir=self.config.project_datasets(self.task.project),
                 skills=self._enabled_skills(),
+                linked=self._linked_sources(),
             )
 
         # Taken before the agent runs, so what it wrote can be told apart from
@@ -798,6 +853,27 @@ class TaskRunner:
 
                 shutil.rmtree(cleanup, ignore_errors=True)
                 self._skill_snapshot_dir = None
+
+    def _linked_sources(self) -> list[tuple[str, str]]:
+        """Directories linked into this project from elsewhere on the machine.
+
+        Read now rather than at task start for the same reason the rest is: a
+        link made while a batch is queued should reach the tasks that have not
+        started yet.
+        """
+        found = []
+        for link in local_sources.links(
+            self.config.project_datasets(self.task.project)
+        ):
+            if not link.readable:
+                # Listed as broken rather than dropped. A task told nothing is
+                # there reports a missing file; one told the link is broken
+                # says something the operator can act on.
+                found.append((link.name, f"**unreadable** — `{link.target}` is not listable"))
+                continue
+            count = f"{link.entries:,}{'+' if link.partial else ''}"
+            found.append((link.name, f"{count} entries, on `{link.target}`"))
+        return found
 
     def _refresh_utils_index(self) -> None:
         """Rewrite the project's `utils/API.md` before the agent reads it.

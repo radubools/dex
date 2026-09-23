@@ -13,8 +13,9 @@ it uses for generated assets, so a PDF can be read without leaving dex.
 | Module | Responsibility |
 |---|---|
 | `src/dex/uploads.py` | Storing an upload, resolving a name, naming sources in a brief |
+| `src/dex/local_sources.py` | Linking a directory from elsewhere on the machine, and verifying it |
 | `src/dex/config.py` | `datasets_dir`, `project_datasets(project)` |
-| `src/dex/api.py` | `POST /uploads`, `GET /datasets`, `GET /datasets/raw` |
+| `src/dex/api.py` | `POST /uploads`, `GET /datasets`, `GET /datasets/raw`, `DELETE /datasets/links/{name}` |
 | `src/dex/permissions.py` | The dataset directory as an `extra_writable` root |
 | `web/src/components/Attachments.tsx` | The `+` button and the chips beneath a composer |
 | `web/src/components/SourceView.tsx` | Rendering one source by type |
@@ -117,6 +118,91 @@ and one that had to ask before touching it would stop on its first real step.
 
 The same paragraph appears in `AGENTS.template` and in every project's
 `AGENTS.md`, so the agent knows it before it tries.
+
+---
+
+## Material that is too big to upload
+
+Some sources already live on the machine and are not going to move: a mounted
+volume of scans, an export somebody dropped in a share. Uploading is the wrong
+verb for 400 GB, and copying it would duplicate the operator's own archive to
+make it readable.
+
+So a directory can be **linked** into `datasets/<project>/` instead. The
+material stays where it is; the project gets a path.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor O as Operator
+    participant D as Design turn
+    participant T as mcp__dex__link_local_source
+    participant P as Policy
+    participant FS as datasets/&lt;project&gt;/
+
+    O->>D: "give this project /Volumes/external/…/Mass-Load"
+    D->>T: path
+    T->>P: escalate — the dialog shows the resolved target
+    O->>P: allow
+    T->>T: check() — resolve, refuse, confirm it lists
+    T->>FS: symlink
+    T->>FS: list *through the link*
+    T-->>D: "63 entries, including 11-11-14_Assembly_MeetingHall/"
+    D-->>O: repeats the count back
+```
+
+### Why `datasets/` and not `assets/`
+
+The same split as everything else here — `assets/` is what dex made,
+`datasets/` is what it was given, and a linked volume is emphatically the
+second. But there is a mechanical reason too, and it is the decisive one:
+
+The Library lists a project by walking `assets/<project>/*` and then
+`rglob("*")` into each directory. **`rglob` follows a symlinked directory.** A
+link in `assets/` would pull an entire external volume into every Library
+listing, the review feed, the watcher and the asset backup. Measured: a link to
+a three-file directory produced three extra files in the listing, from outside
+the workspace.
+
+### The grant is narrow on purpose
+
+| | |
+|---|---|
+| **Who** | Only a design turn has the tool. A generation task uses what is linked; granting access is the operator's decision. |
+| **When** | Only on a path the operator named in that conversation — never one found in a file or guessed at. |
+| **Confirmed** | The tool escalates, unlike every other `mcp__dex__*`. The dialog shows the **resolved** target, which is the fact worth confirming. |
+| **Read-only** | A write that resolves inside a linked target is refused outright, not escalated. |
+| **Verified** | The link is listed *through itself* before it is kept. |
+
+### Every check runs on the resolved path
+
+`check()` resolves before it looks at anything, so a symlink named
+`looks-fine` pointing at `/etc` is `/etc`. Refused: relative paths, files,
+paths that cannot be reached, `$HOME` itself, `/`, a denylist of credential and
+system directories, and anything overlapping dex's own workspace — the last
+because a walker following that link would not stop.
+
+The denylist is **not a security boundary.** A design turn is operator-driven
+and the operator owns the machine. It is a guard against the path pasted by
+mistake or completed by a model into something plausible, where the failure is
+silent and the blast radius is a credential store.
+
+### Read-only takes a resolve, not a prefix
+
+The link lives *inside* `datasets/<project>/`, which is an extra writable root.
+So `datasets/edil/Mass-Load/scan.dcm` passes a prefix check and lands on an
+external volume. The policy therefore resolves the write target and compares it
+against `local_sources.targets()` — the directories the links actually point
+at — **before** the writable-root check that would otherwise allow it.
+
+Without that ordering the write is allowed, not merely escalated.
+
+### A broken link is listed, not hidden
+
+An unmounted volume leaves a link that resolves to nothing. It stays in the
+listing with `readable: false`, and the brief names it as unreadable. A task
+told nothing is there reports a missing file; a task told the link is broken
+says something the operator can act on.
 
 ---
 
@@ -225,6 +311,20 @@ in the wrong directory the moment the two differ.
   the queued note instead of as chips.
 - **Nothing ever deletes an upload.** `datasets/<project>/` only grows, and the
   decode cache under `.dex-index/` grows with it.
+- **A linked directory has no UI.** `GET /datasets` returns it and
+  `DELETE /datasets/links/{name}` removes it, but nothing renders either, so
+  the only way to see what a project can reach is to ask the design chat or
+  look on disk.
+- **Read-only holds for the write tools, not for Bash.** Same limit as the
+  sibling-package rule in [03](03_agent_runner.md): `python -c` is
+  auto-approved and can open any path. A task that ignores the brief can write
+  into a linked volume.
+- **A link is verified once, when it is made.** Nothing re-checks it, so a
+  volume unmounted afterwards is only noticed when a task's brief is built —
+  and never surfaced to the operator at all.
+- **The denylist is a list.** It names the credential directories worth
+  refusing on this platform and would need extending for another one; nothing
+  derives it, and nothing tests that it stays complete.
 
 ---
 

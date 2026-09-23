@@ -49,6 +49,13 @@ ALLOWED_COMMANDS = {
 #: Never auto-approved, however the command is spelled.
 DANGEROUS = {"rm", "sudo", "chmod", "chown", "curl", "wget", "ssh", "scp", "git", "npm", "pip", "brew", "kill", "pkill"}
 
+#: `mcp__dex__*` tools are auto-approved — they are dex's own, and a task
+#: asking a question should not need permission to ask. This one is different:
+#: it creates a standing grant that every future task in the project inherits,
+#: over a directory dex does not own. The dialog shows the resolved target,
+#: which is the fact worth confirming.
+ESCALATING_TOOLS = {"mcp__dex__link_local_source"}
+
 #: Entries at the top of a project directory that are not another task's work.
 #: Everything else beside a task's own directory is a sibling package.
 NOT_A_PACKAGE = {"utils", "AGENTS.md", "widgets.json", "skills.json"}
@@ -64,6 +71,7 @@ class PermissionPolicy:
         task_dir: Path,
         project_dir: Path | None = None,
         extra_writable: tuple[Path, ...] = (),
+        read_only: tuple[Path, ...] = (),
         escalate: Callable[[str, str, dict[str, Any], str | None], Awaitable[str]],
     ) -> None:
         self.workspace = workspace.resolve()
@@ -77,6 +85,11 @@ class PermissionPolicy:
         #: ordinary task; a design turn adds `widgets/`, because widget code is
         #: shared across projects and so cannot live inside any one of them.
         self.extra_writable = tuple(p.resolve() for p in extra_writable)
+        #: Directories linked into the project's data directory from elsewhere
+        #: on the machine. Readable — that is why they were linked — and never
+        #: writable: they are the operator's own material, which dex does not
+        #: own and could not restore.
+        self.read_only = tuple(p.resolve() for p in read_only)
         #: Called when a decision needs a human; resolves to "allow" or "deny".
         self.escalate = escalate
 
@@ -89,6 +102,37 @@ class PermissionPolicy:
             return False
         return candidate == root or root in candidate.parents
 
+    def _resolved(self, raw: str | None) -> Path | None:
+        """A path as the agent meant it: relative ones against its cwd.
+
+        `_within` resolves against whichever root it is testing, which is right
+        for the task directory and wrong for everything else.
+        """
+        if not raw:
+            return None
+        try:
+            return (
+                Path(raw).resolve() if Path(raw).is_absolute()
+                else (self.task_dir / raw).resolve()
+            )
+        except OSError:
+            return None
+
+    def _linked_source(self, raw: str | None) -> Path | None:
+        """The linked directory this path is inside, if it is inside one.
+
+        Resolved, so `datasets/p/scans/x.dcm` — a path that looks like it is
+        safely inside the project — is recognised as the external volume it
+        actually reaches.
+        """
+        candidate = self._resolved(raw)
+        if candidate is None:
+            return None
+        for root in self.read_only:
+            if candidate == root or root in candidate.parents:
+                return root
+        return None
+
     def _other_package(self, raw: str | None) -> str | None:
         """The name of another task's package this path is inside, if it is.
 
@@ -99,15 +143,8 @@ class PermissionPolicy:
         """
         if not raw or self.project_dir is None:
             return None
-        try:
-            # Resolved against the task directory, because that is the agent's
-            # cwd — `_within` resolves against whatever root it is testing,
-            # which would read `../neighbour` as a path under the project.
-            candidate = (
-                Path(raw).resolve() if Path(raw).is_absolute()
-                else (self.task_dir / raw).resolve()
-            )
-        except OSError:
+        candidate = self._resolved(raw)
+        if candidate is None:
             return None
         if candidate == self.task_dir or self.task_dir in candidate.parents:
             return None
@@ -166,6 +203,16 @@ class PermissionPolicy:
         if tool_name not in WRITE_TOOLS:
             return None
         path = _target_path(input_data)
+        linked = self._linked_source(path)
+        if linked is not None:
+            # Checked first: the link sits inside the data directory, which is
+            # an extra writable root, so the allow below would catch it.
+            return (
+                f"`{linked}` is linked into this project to be read, not "
+                "changed. It is the operator's own material and lives outside "
+                "dex, which cannot restore it. Write what you produce into your "
+                "own directory."
+            )
         if self._within(path, self.task_dir) or any(
             self._within(path, root) for root in self.extra_writable
         ):
@@ -183,6 +230,8 @@ class PermissionPolicy:
         """None means auto-approve; a string explains why a human is needed."""
         if tool_name in READ_ONLY_TOOLS:
             return None
+        if tool_name in ESCALATING_TOOLS:
+            return "links a directory outside dex into this project"
         if tool_name.startswith("mcp__dex__"):
             return None
         if tool_name in WRITE_TOOLS:
