@@ -773,3 +773,43 @@ def test_disabling_takes_the_index_back_with_the_modules(workspace):
     skills.materialise(root, project, ["figure"])
     skills.materialise(root, project, [])
     assert not (project / "utils" / "API.md").exists()
+
+
+def test_every_package_a_skill_declares_is_installed():
+    """A skill says what it imports; nothing installs it.
+
+    `requires` in `skill.json` is derived from the source by AST, so it is
+    always true about the code — and completely disconnected from the venv the
+    code will run in. numpy and scipy sat in this one, imported by every yoga
+    task, declared in no `pyproject.toml` and no `requirements.txt`: correct
+    only until somebody ran `uv sync`.
+
+    This does not install anything. It fails when the two drift, naming the
+    package, which is the part that was silent.
+    """
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    needed: dict[str, list[str]] = {}
+    for manifest in (root / "skills").glob("*/*/skill.json"):
+        try:
+            data = json.loads(manifest.read_text())
+        except ValueError:  # a half-written draft is not this test's business
+            continue
+        for package in data.get("requires") or []:
+            needed.setdefault(package, []).append(
+                f"{data.get('name')}/{data.get('version')}"
+            )
+
+    missing = {
+        package: sorted(set(by))
+        for package, by in needed.items()
+        if importlib.util.find_spec(package) is None
+    }
+    assert not missing, (
+        "skills import packages this environment does not have: "
+        + "; ".join(f"{p} (needed by {', '.join(by)})" for p, by in sorted(missing.items()))
+        + ". Add it to a `pyproject.toml` extra and install it."
+    )

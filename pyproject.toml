@@ -36,6 +36,37 @@ manim = ["manim>=0.18"]
 # Narration for the animations. Local and offline: the alternative was a system
 # voice, which reads technical prose like a station announcement.
 voice = ["piper-tts>=1.7"]
+# What a *project's* code imports, rather than dex's. These were in the venv
+# and declared nowhere — `uv sync` would have pruned them, and every yoga task
+# would then have failed on `import utils.rig`. A skill records what it needs
+# in its own `skill.json`, but nothing reconciles that with the environment, so
+# the list is kept here by hand and the audit is one line:
+#
+#   every name in `skills/*/*/skill.json` `requires` resolves in the venv
+#
+# pandas is here because it was asked for, not because a skill imports one yet.
+tasks = [
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "pandas>=2.2",
+    # Spreadsheets pandas cannot open on its own: openpyxl for `.xlsx`, xlrd
+    # for the pre-2007 `.xls` that neither the browser preview nor SheetJS
+    # reads either — see design/13.
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+    # The fast reader pandas uses via `engine="calamine"`, and the only one
+    # here that reads legacy `.xls` and `.xlsb` as well as `.xlsx`.
+    "python-calamine>=0.2",
+    # `music-packages` writes MIDI.
+    "pretty_midi>=0.2.10",
+]
+# Typed decisions from a local model, for the `laya-decisions` skill. An extra
+# for the same reason manim is: it pulls mlx, which ships arm64 macOS wheels
+# and nothing else. Installed on this machine it answers in one forward pass;
+# on a box without Apple silicon `laya-mlx` still installs and then cannot
+# import `mlx`, so it has no business in the base dependency list that every
+# deployment resolves.
+laya = ["laya-mlx>=0.2.0"]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27"]
 
 [project.scripts]
