@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { readAsset } from '../api'
 import type { AssetEntry, AssetKind } from '../types'
+
+// Lazy, like the viewer itself: it carries the widget host and every viewer.
+const WidgetSlideshow = lazy(() => import('./Viewer').then((m) => ({ default: m.WidgetSlideshow })))
 
 /** Assets are grouped by what they are for, not by filename order. */
 const GROUPS: { label: string; kinds: AssetKind[]; match?: RegExp }[] = [
@@ -82,8 +85,14 @@ export function AssetExplorer({
     else groups.push({ label: group.label, members })
   }
 
+  const label = (name: string) => (name.startsWith(`${slug}/`) ? name.slice(slug.length + 1) : name)
+
   return (
     <div className="explorer">
+      {/* The files a widget opens, viewable in place, above the full list. */}
+      <Suspense fallback={null}>
+        <WidgetSlideshow paths={entries.map((e) => e.name)} label={label} />
+      </Suspense>
       {groups.map((group) => (
         <div className="explorer-group" key={group.label}>
           <div className="explorer-label">{group.label}</div>

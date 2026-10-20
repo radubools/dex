@@ -27,6 +27,10 @@ KINDS = {
     ".wav": "audio", ".mp3": "audio", ".ogg": "audio", ".flac": "audio",
     ".html": "page", ".css": "code", ".js": "code", ".ts": "code",
     ".csv": "data", ".tsv": "data",
+    # 3D models (the games project). Without these a task that rewrote a model
+    # sent no asset event, so open viewers never refreshed, and a follow-up
+    # that only replaced a .glb was judged to have written nothing.
+    ".glb": "model", ".gltf": "model",
 }
 
 

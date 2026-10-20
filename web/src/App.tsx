@@ -8,6 +8,7 @@ import {
   type Me,
 } from './api'
 import { initialState, reduce } from './store'
+import { notifyAssetChanged } from './assetChanges'
 import type { Health, PlannedTask, Project, ThreadSummary } from './types'
 import { Chat } from './components/Chat'
 import { Composer } from './components/Composer'
@@ -99,6 +100,8 @@ export default function App() {
     const close = openStream(
       (event) => {
         dispatch({ type: 'event', event })
+        // Open viewers refresh from this, throttled per file (assetChanges.ts).
+        if (event.type === 'asset' && event.change !== 'deleted') notifyAssetChanged(event.path)
         // A note typed into a finished task starts a follow-up; follow it, or
         // the reply would appear on a task the reader is not looking at.
         if (event.type === 'task_message_delivered') {

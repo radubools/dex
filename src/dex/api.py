@@ -149,6 +149,11 @@ class ThreadCreateRequest(BaseModel):
     project: str | None = None
 
 
+class WidgetResolveRequest(BaseModel):
+    #: Asset paths, each relative to the assets root (project first).
+    paths: list[str] = Field(default_factory=list, max_length=2000)
+
+
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = ""
@@ -562,6 +567,20 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         project = path.strip("/").split("/")[0] if path.strip("/") else ""
         widget = widgets.resolve(config.assets_dir, config.workspace, project, path)
         return {"widget": widget.to_json() if widget else None}
+
+    @app.post("/api/widgets/resolve", dependencies=guard)
+    async def resolve_widgets(
+        body: WidgetResolveRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
+        """Which of `paths` a widget opens, and with which: {path: widget}.
+
+        The batch form of the GET, for a package or task view that shows every
+        widget-backed file at once. Each path gets the same access check.
+        """
+        for path in body.paths:
+            _check_asset_path(access, path)
+        found = widgets.resolve_many(config.assets_dir, config.workspace, body.paths)
+        return {"widgets": {path: widget.to_json() for path, widget in found.items()}}
 
     @app.get("/api/projects", dependencies=guard)
     async def list_projects(access: Access = Depends(access_dep)) -> dict[str, Any]:

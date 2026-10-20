@@ -116,19 +116,35 @@ export function WidgetHost({
   widget,
   path,
   text,
+  version = 0,
   onFallback,
+  onReady,
 }: {
   widget: WidgetInfo
   path: string
   /** The opened file's content, already fetched by the host. */
   text: string
+  /**
+   * Bumped when the file changed on disk (already throttled by the caller);
+   * a new value rebuilds the frame so the widget reads the new version.
+   */
+  version?: number
   /** Called when the widget cannot run, so the viewer can show something. */
   onFallback: (reason: string) => void
+  /** Called once the widget has mounted and drawn — for a loading placeholder. */
+  onReady?: () => void
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [srcDoc, setSrcDoc] = useState<string | null>(null)
   const [height, setHeight] = useState(320)
   const [failed, setFailed] = useState<string | null>(null)
+  // Held in a ref, not a dependency: callers pass a fresh arrow every render,
+  // and while a task streamed events every render rebuilt the frame — the
+  // widget reloaded several times a second without its file changing at all.
+  const fallback = useRef(onFallback)
+  fallback.current = onFallback
+  const ready = useRef(onReady)
+  ready.current = onReady
 
   // Build the document: fetch the bundle as text, inline it, hand over the file.
   useEffect(() => {
@@ -165,12 +181,12 @@ export function WidgetHost({
       .catch((err: Error) => {
         if (!live) return
         setFailed(err.message)
-        onFallback(err.message)
+        fallback.current(err.message)
       })
     return () => {
       live = false
     }
-  }, [widget.url, path, text, onFallback])
+  }, [widget.url, path, text, version])
 
   // The bridge. Only messages from our own frame are honoured.
   useEffect(() => {
@@ -181,8 +197,12 @@ export function WidgetHost({
 
       if (msg.type === 'height') {
         setHeight(Math.min(Math.max(msg.height + 8, 120), 2400))
+      } else if (msg.type === 'ready') {
+        ready.current?.()
       } else if (msg.type === 'error') {
         setFailed(msg.message)
+        // A failure is as finished as it gets: lift any placeholder over it.
+        ready.current?.()
       } else if (msg.type === 'fetch') {
         // The widget names a path; the host resolves it *relative to the file
         // it was given* and refuses to leave that directory. The frame has no

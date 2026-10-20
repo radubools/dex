@@ -241,3 +241,26 @@ def resolve(assets_dir: Path, workspace: Path, project: str, path: str) -> Widge
                 return None
             return widget
     return None
+
+
+def resolve_many(assets_dir: Path, workspace: Path, paths: list[str]) -> dict[str, Widget]:
+    """`resolve` for many paths at once: {path: widget}, only those a widget opens.
+
+    For views that show every widget-backed file in a package or a task. Same
+    answer per path as `resolve`, but the widget list and each project's rules
+    are read once rather than once per file.
+    """
+    built = {w.name: w for w in available(workspace) if w.built}
+    rules: dict[str, list[Rule]] = {}
+    found: dict[str, Widget] = {}
+    for path in paths:
+        project = path.strip("/").split("/")[0] if path.strip("/") else ""
+        if project not in rules:
+            rules[project] = rules_for(assets_dir, project)
+        for rule in rules[project]:
+            if rule.matches(path):
+                widget = built.get(rule.widget)
+                if widget is not None:
+                    found[path] = widget
+                break
+    return found

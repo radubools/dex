@@ -572,3 +572,7 @@ export const resolveWidget = (path: string) =>
   request<{ widget: WidgetInfo | null }>(
     `/api/widgets/resolve?path=${encodeURIComponent(path)}`,
   )
+
+/** Which of `paths` a widget opens: {path: widget}, only those that have one. */
+export const resolveWidgets = (paths: string[]) =>
+  post<{ widgets: Record<string, WidgetInfo> }>('/api/widgets/resolve', { paths })

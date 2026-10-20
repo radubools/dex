@@ -1,13 +1,14 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
 import { assetUrl, readAsset } from '../api'
 import type { AssetResponse, SourceAnchor } from '../types'
-import { resolveWidget, type WidgetInfo } from '../api'
+import { resolveWidget, resolveWidgets, type WidgetInfo } from '../api'
 import { AnimationPlayer } from './AnimationPlayer'
 import { VideoPlayer } from './VideoPlayer'
 import { Diff } from './Diff'
 import { WidgetHost } from './WidgetHost'
+import { useAssetVersion } from '../assetChanges'
 import { SourceView } from './SourceView'
 
 // mermaid + marked are ~600kB; only load them when markdown is opened.
@@ -115,6 +116,9 @@ function PackageView({
   const [files, setFiles] = useState<string[] | null>(null)
   const [explanation, setExplanation] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // How many files the slideshow shows; when it shows any, the single
+  // "feature" preview below would only repeat one of them.
+  const [slides, setSlides] = useState(0)
 
   useEffect(() => {
     let live = true
@@ -153,6 +157,8 @@ function PackageView({
     <div className="package-view">
       <h1 className="package-title">{title}</h1>
 
+      <WidgetSlideshow paths={files} label={shortName} onCount={setSlides} />
+
       {ASSET_GROUPS.map((group) => {
         const members = files.filter((n) => !claimed.has(n) && group.test(n))
         members.forEach((n) => claimed.add(n))
@@ -179,32 +185,37 @@ function PackageView({
         <Suspense fallback={<p className="muted">Rendering diagrams…</p>}>
           <Markdown source={explanation} />
         </Suspense>
-      ) : feature ? (
+      ) : feature && slides === 0 ? (
         // No prose to read, so show the thing itself — a pose package is a
         // single JSON file, and its point is the 3D figure, not the text.
         <AssetView path={feature} />
-      ) : (
+      ) : slides === 0 ? (
         <p className="muted small">Nothing to preview in this package.</p>
-      )}
+      ) : null}
     </div>
   )
 }
 
-function AssetView({ path }: { path: string }) {
+export function AssetView({ path, onReady }: { path: string; onReady?: () => void }) {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   const [state, setState] = useState<
     { s: 'loading' } | { s: 'error'; message: string } | { s: 'ok'; asset: AssetResponse }
   >({ s: 'loading' })
 
+  // Bumps when a task rewrites this file, at most once every ten seconds, so a
+  // file being saved over and over does not reload its viewer as fast as it is
+  // written (see assetChanges.ts).
+  const version = useAssetVersion(path)
   useEffect(() => {
     if (IMAGE.has(ext)) return
     let live = true
-    setState({ s: 'loading' })
+    // Only the first load shows "Loading…"; a refresh swaps the content in.
+    if (version === 0) setState({ s: 'loading' })
     readAsset(path)
       .then((asset) => live && setState({ s: 'ok', asset }))
       .catch((err: Error) => live && setState({ s: 'error', message: err.message }))
     return () => { live = false }
-  }, [path, ext])
+  }, [path, ext, version])
 
   const content =
     state.s === 'ok' && 'content' in state.asset ? (state.asset.content as string) : ''
@@ -213,19 +224,30 @@ function AssetView({ path }: { path: string }) {
   // reload, and the answer is one small request.
   const [widget, setWidget] = useState<WidgetInfo | null>(null)
   const [widgetFailed, setWidgetFailed] = useState(false)
+  const [resolved, setResolved] = useState(false)
   useEffect(() => {
     let live = true
     setWidget(null)
     setWidgetFailed(false)
+    setResolved(false)
     resolveWidget(path)
       .then((r) => live && setWidget(r.widget))
       // A resolution failure is not an error the reader needs: it just means
       // the built-in viewer handles this file, which is the common case.
       .catch(() => live && setWidget(null))
+      .finally(() => live && setResolved(true))
     return () => {
       live = false
     }
   }, [path])
+
+  // What a loading placeholder waits for. A widget says so itself (onReady on
+  // the host); a built-in viewer is ready once its content is here.
+  const builtIn = resolved && (!widget || widgetFailed)
+  const contentHere = IMAGE.has(ext) || AUDIO.has(ext) || state.s !== 'loading'
+  useEffect(() => {
+    if (builtIn && contentHere) onReady?.()
+  }, [builtIn, contentHere, onReady])
 
   // Media first, and above the loading gate: the fetch is deliberately skipped
   // for these (the browser loads them from a URL), so `state` never leaves
@@ -241,11 +263,13 @@ function AssetView({ path }: { path: string }) {
         widget={widget}
         path={path}
         text=""
+        version={version}
         onFallback={() => setWidgetFailed(true)}
+        onReady={onReady}
       />
     )
   }
-  if (IMAGE.has(ext)) return <ImageView path={path} />
+  if (IMAGE.has(ext)) return <ImageView path={path} version={version} />
   if (AUDIO.has(ext)) return <AudioView path={path} />
 
   if (state.s === 'loading') return <p className="muted">Loading…</p>
@@ -264,7 +288,9 @@ function AssetView({ path }: { path: string }) {
         widget={widget}
         path={path}
         text={state.asset.kind === 'file' ? state.asset.content : ''}
+        version={version}
         onFallback={() => setWidgetFailed(true)}
+        onReady={onReady}
       />
     )
   }
@@ -376,7 +402,7 @@ function BinaryView({ path, ext }: { path: string; ext: string }) {
   )
 }
 
-function ImageView({ path }: { path: string }) {
+function ImageView({ path, version = 0 }: { path: string; version?: number }) {
   // GIFs get the player (speed, checkpoints, replay); stills are just shown.
   if (path.toLowerCase().endsWith('.gif')) {
     return <AnimationPlayer path={path} />
@@ -387,7 +413,117 @@ function ImageView({ path }: { path: string }) {
   }
   return (
     <div className="gif-view">
-      <img src={assetUrl(path)} alt={path} />
+      {/* The version busts the browser's cache when a task re-renders the image. */}
+      <img src={`${assetUrl(path)}&v=${version}`} alt={path} />
+    </div>
+  )
+}
+
+/**
+ * Every file in `paths` that a widget opens, one at a time in its widget, with
+ * previous / next to step through them. Files with no widget (code, plain
+ * images, markdown) are left to the list below, which already opens them in
+ * the built-in viewers. Renders nothing when no file has a widget.
+ */
+export function WidgetSlideshow({
+  paths,
+  label = (path: string) => path.split('/').pop() ?? path,
+  onCount,
+}: {
+  paths: string[]
+  /** How a file is named in the bar. */
+  label?: (path: string) => string
+  onCount?: (count: number) => void
+}) {
+  const [slides, setSlides] = useState<{ path: string; widget: WidgetInfo }[]>([])
+  const [current, setCurrent] = useState<string | null>(null)
+  const key = paths.join('\n')
+  const counted = useRef(onCount)
+  counted.current = onCount
+  // The slide whose viewer has said it is ready; until then the placeholder shows.
+  const [readyPath, setReadyPath] = useState<string | null>(null)
+  const currentRef = useRef(current)
+  currentRef.current = current
+  const markReady = useCallback(() => setReadyPath(currentRef.current), [])
+  // A widget that never reports must not leave the placeholder up for good.
+  useEffect(() => {
+    if (!current) return
+    const t = setTimeout(() => setReadyPath(current), 20_000)
+    return () => clearTimeout(t)
+  }, [current])
+
+  useEffect(() => {
+    let live = true
+    if (paths.length === 0) {
+      setSlides([])
+      counted.current?.(0)
+      return
+    }
+    resolveWidgets(paths)
+      .then(({ widgets }) => {
+        if (!live) return
+        const found = paths.filter((p) => widgets[p]).map((p) => ({ path: p, widget: widgets[p] }))
+        setSlides(found)
+        counted.current?.(found.length)
+        // Keep the file being looked at when new ones arrive mid-task.
+        setCurrent((was) => (was && found.some((f) => f.path === was) ? was : found[0]?.path ?? null))
+      })
+      .catch(() => live && setSlides([]))
+    return () => { live = false }
+    // `key` stands for `paths`: a new array with the same files is no change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+
+  if (slides.length === 0 || current === null) return null
+  const index = Math.max(0, slides.findIndex((s) => s.path === current))
+  const slide = slides[index]
+  const shown = readyPath === slide.path
+  const go = (step: number) => setCurrent(slides[(index + step + slides.length) % slides.length].path)
+  const many = slides.length > 1
+
+  return (
+    <div
+      className="slideshow"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (!many) return
+        if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1) }
+        if (e.key === 'ArrowRight') { e.preventDefault(); go(1) }
+      }}
+    >
+      <div className="slideshow-bar">
+        <button className="slideshow-step" onClick={() => go(-1)} disabled={!many} aria-label="Previous file">‹</button>
+        <div className="slideshow-title">
+          <span className="slideshow-name">{label(slide.path)}</span>
+          <span className="muted small">
+            {slide.widget.title} · {index + 1} / {slides.length}
+          </span>
+        </div>
+        <button className="slideshow-step" onClick={() => go(1)} disabled={!many} aria-label="Next file">›</button>
+      </div>
+      <div className={`slideshow-stage ${shown ? '' : 'loading'}`}>
+        {!shown && <SlidePlaceholder name={label(slide.path)} widget={slide.widget.title} />}
+        {/* Keyed by path so each file gets a fresh viewer and widget frame. It
+            loads underneath the placeholder and fades in when it is ready. */}
+        <div className="slideshow-slide">
+          <AssetView key={slide.path} path={slide.path} onReady={markReady} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Shown while the next slide loads: a gentle shimmer, not a blank flash. */
+function SlidePlaceholder({ name, widget }: { name: string; widget: string }) {
+  return (
+    <div className="slide-placeholder" role="status" aria-live="polite">
+      <div className="slide-placeholder-cube" aria-hidden="true">
+        <span /><span /><span />
+      </div>
+      <div className="slide-placeholder-text">
+        <span>Loading {name}</span>
+        <span className="muted small">{widget}</span>
+      </div>
     </div>
   )
 }
