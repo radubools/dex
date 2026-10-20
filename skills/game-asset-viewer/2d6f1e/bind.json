@@ -1,0 +1,9 @@
+{
+  "$comment": "Every .glb a game-asset package carries opens in the GLB viewer. Audio (.ogg/.wav) is left to dex's built-in player.",
+  "rules": [
+    {
+      "widget": "glb-viewer",
+      "extensions": [".glb"]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "game-music",
+  "description": "Procedural, seeded game music: synthesized instruments and a small composer (key, progression, motif melodies, bass, drums, sections) producing sample-exact seamless loops with calm/tension/combat intensity stems, plus stingers, packaged as kind \"music\" assets. Requires game-sfx.",
+  "version": "1a5ece",
+  "updated": 1792483361.009442,
+  "requires": [
+    "numpy",
+    "pytest"
+  ]
+}

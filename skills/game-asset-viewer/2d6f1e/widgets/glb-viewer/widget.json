@@ -1,0 +1,5 @@
+{
+  "name": "glb-viewer",
+  "title": "Game asset (GLB)",
+  "description": "Opens a game asset .glb on a 1-unit tile grid with an isometric, orbitable camera (ortho or perspective), shadows, animation clips, construction stages, team colours, day/night, and a stats panel."
+}

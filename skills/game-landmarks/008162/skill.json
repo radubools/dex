@@ -1,0 +1,11 @@
+{
+  "name": "game-landmarks",
+  "description": "Modular snap-together building blocks (walls, roofs incl. curved East-Asian eaves, lattices, decks, gates, scaffolding, cranes) and the nine Tokyo landmarks of many-builders assembled from them as staged, animated GLB packages with previews.",
+  "version": "008162",
+  "updated": 1792483360.914667,
+  "requires": [
+    "PIL",
+    "numpy",
+    "pytest"
+  ]
+}

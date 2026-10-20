@@ -47,6 +47,9 @@ from .prompts import (
     design_prompt, generation_prompt, survey_prompt,
 )
 
+#: Largest single message the agent SDK will read from the CLI (default 1 MB).
+AGENT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
+
 
 log = logging.getLogger("dex.runner")
 
@@ -509,6 +512,11 @@ class TaskRunner:
                 ),
             },
             permission_mode="default",
+            # The SDK stops reading the CLI's output at 1 MB per message, and
+            # one Read of a ~500 KB PNG (base64 inside a JSON message) crossed
+            # it and ended a landmark task. Agents review rendered previews all
+            # the time, so allow messages far larger than any image they open.
+            max_buffer_size=AGENT_MAX_BUFFER_BYTES,
             # Stream token deltas so the UI can render text as it arrives
             # instead of a block at a time.
             include_partial_messages=True,

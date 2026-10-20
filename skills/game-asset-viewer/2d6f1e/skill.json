@@ -1,0 +1,7 @@
+{
+  "name": "game-asset-viewer",
+  "description": "Opens game-asset .glb files in an orbitable 3D viewer: isometric ortho/perspective camera on a 1-unit tile grid, shadows, animation clips, construction stages, team colours, day/night, and model stats.",
+  "version": "2d6f1e",
+  "updated": 1792483361.010627,
+  "requires": []
+}
