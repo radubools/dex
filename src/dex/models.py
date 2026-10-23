@@ -98,6 +98,13 @@ EventType = Literal[
 ]
 
 
+#: Scopes whose run is a turn of a conversation rather than generation work: a
+#: design turn and a survey are both agent runs someone is sitting in a thread
+#: waiting for. They are tasks so they get the activity surface, but they are
+#: budgeted as chats — see `Task.interactive`.
+INTERACTIVE_SCOPES = ("design", "survey", "chat")
+
+
 @dataclass(slots=True)
 class Event:
     type: EventType
@@ -174,6 +181,12 @@ class Task:
     #: has already told the UI otherwise. The row said archived and the screen
     #: said paused, which is what made archiving look like it did nothing.
     archived: bool = field(default=False, repr=False)
+    #: Messages typed into a running chat task (a game's in-game chat). The
+    #: runner reads them while the agent works and hands each one straight to
+    #: the live session: it interrupts the current turn and sends the message
+    #: as the next one, so the player can steer without waiting. None for a
+    #: task that is not running, or not a chat.
+    inbox: asyncio.Queue[str] | None = field(default=None, repr=False)
     #: Human-readable note about what the agent is doing right now.
     activity: str | None = None
     #: What this task is allowed to touch. `package` is one package directory,
@@ -194,6 +207,17 @@ class Task:
     @property
     def project_wide(self) -> bool:
         return self.scope == "project"
+
+    @property
+    def is_chat(self) -> bool:
+        """A conversation started from inside a game (dex's game-chat API).
+
+        Like a design turn it is a chat that runs as a task, so it gets the
+        whole activity surface; unlike one it works on a game: it may build
+        packages in its own directory and write into the game it came from.
+        A turn that only answers is a success, not an empty package.
+        """
+        return self.scope == "chat"
 
     def design_payload(self) -> dict[str, str]:
         """The conversation a design turn carries, unpacked.
@@ -253,6 +277,19 @@ class Task:
             "urls": [str(u) for u in packed.get("urls") or []],
             "guide": str(packed.get("guide", "")),
         }
+
+    @property
+    def interactive(self) -> bool:
+        """Whether someone is waiting on this run in a chat thread.
+
+        A design turn and a survey are chat turns that happen to run as tasks.
+        They used to be budgeted as tasks too, which meant a reply the operator
+        was waiting for queued behind however much generation work was in front
+        of it — and could be paused to make room for a planner call. The two
+        ceilings are separate now: this is what tells the queue which one a row
+        belongs under.
+        """
+        return self.scope in INTERACTIVE_SCOPES
 
     @property
     def is_design(self) -> bool:

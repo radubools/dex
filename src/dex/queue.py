@@ -8,6 +8,7 @@ can be resumed instead of vanishing.
 from __future__ import annotations
 
 import asyncio
+import uuid
 import contextlib
 import logging
 import os
@@ -63,6 +64,11 @@ class TaskManager:
         self.live: dict[str, Task] = {}
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}"
         self._workers: dict[int, asyncio.Task[None]] = {}
+        #: The chat pool: the same worker loop, claiming only the runs someone
+        #: is waiting on in a thread. Separate from `_workers` because the two
+        #: have separate ceilings — a design turn that had to wait for a shelf
+        #: of generation work to clear was the whole reason for splitting them.
+        self._chat_workers: dict[int, asyncio.Task[None]] = {}
         self._supervisor: asyncio.Task[None] | None = None
         self._sweeper: asyncio.Task[None] | None = None
         #: Signalled when there may be work or room for it. A condition rather
@@ -83,7 +89,10 @@ class TaskManager:
         #: Monotonic time before which no work is handed out. Set by `start`.
         self._grace_until: float = 0.0
         self._paused_cache: tuple[float, bool] | None = None
-        self._limit_cache: tuple[float, int] | None = None
+        #: One cached read per limit, keyed by settings key: both pools consult
+        #: theirs on every pass, and a single slot meant each read evicted the
+        #: other's and neither was ever a hit.
+        self._limit_cache: dict[str, tuple[float, int]] = {}
         #: Set by the app so follow-ups started from the worker loop are
         #: announced in their thread, the same as a resume or a re-run.
         self.announce: Callable[[Task, str], Awaitable[None]] | None = None
@@ -96,7 +105,9 @@ class TaskManager:
         self.chat_limiter = DynamicLimiter(
             lambda: self.settings.concurrency(SettingsStore.CHAT_CONCURRENCY),
             # Rebalance the moment chat pressure changes, rather than at the
-            # supervisor's next tick.
+            # supervisor's next tick. It is the chat pool that moves now: a
+            # planner call finishing frees a slot for a queued design turn, and
+            # generation work is not consulted either way.
             on_change=self.rebalance,
         )
 
@@ -134,10 +145,12 @@ class TaskManager:
         # recovered without waiting for someone to restart this one.
         self._sweeper = asyncio.create_task(self._sweep(), name="dex-orphan-sweep")
         log.info(
-            "started %d workers as %s (limit %d, adjustable from the UI); "
+            "started %d task workers and %d chat workers as %s "
+            "(limits %d and %d, adjustable from the UI); "
             "holding queued work for %gs",
-            len(self._workers), self.worker_id,
+            len(self._workers), len(self._chat_workers), self.worker_id,
             await self.settings.concurrency(SettingsStore.TASK_CONCURRENCY),
+            await self.settings.concurrency(SettingsStore.CHAT_CONCURRENCY),
             STARTUP_GRACE_S,
         )
 
@@ -167,16 +180,17 @@ class TaskManager:
                 task.runtime.cancel()
         # Drained by re-reading rather than from a snapshot, so nothing spawned
         # between the cancel and the await is left behind.
-        while self._workers:
-            workers = [*self._workers.values()]
-            for worker in workers:
-                worker.cancel()
-            for worker in workers:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await worker
-            for index, worker in [*self._workers.items()]:
-                if worker.done():
-                    self._workers.pop(index, None)
+        for pool in (self._workers, self._chat_workers):
+            while pool:
+                workers = [*pool.values()]
+                for worker in workers:
+                    worker.cancel()
+                for worker in workers:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await worker
+                for index, worker in [*pool.items()]:
+                    if worker.done():
+                        pool.pop(index, None)
 
     # ----------------------------------------------------------- submissions
 
@@ -242,6 +256,21 @@ class TaskManager:
             await self.deliver_messages(task_id)
         return message
 
+    def say(self, task_id: str, body: str) -> dict[str, Any] | None:
+        """Hand a message to a running chat task now: no queueing.
+
+        The runner interrupts the turn under way and sends it as the next one
+        (`TaskRunner._converse`). None when the task is not a chat that is
+        running here; the caller then queues it as a follow-up note instead.
+        """
+        task = self.live.get(task_id)
+        if task is None or task.inbox is None:
+            return None
+        message = {"id": f"{task_id}-live-{uuid.uuid4().hex[:8]}", "body": body, "delivered": True, "live": True, "at": time.time()}
+        task.inbox.put_nowait(body)
+        self.bus.publish(Event(type="task_message", task_id=task_id, data={"message": message}, project=task.project))
+        return message
+
     async def deliver_messages(self, task_id: str) -> Task | None:
         """Start a follow-up attempt carrying everything queued for a task."""
         task = await self.tasks.get(task_id)
@@ -257,7 +286,10 @@ class TaskManager:
             "The previous attempt has finished. The operator has since asked for:\n\n"
             f"{notes}"
         )
-        if not task.is_design:
+        if task.is_chat:
+            # A game chat is a conversation: the player answered.
+            note = "## The player replied\n\n" + "\n\n".join(bodies)
+        elif not task.is_design:
             note += (
                 "\n\nWork in the existing task directory, keep what is still "
                 "correct, and re-run the test suite before you finish."
@@ -521,7 +553,7 @@ class TaskManager:
         to invalidate, and forgetting is silent.
         """
         await self.settings.set(key, value)
-        self._limit_cache = None
+        self._limit_cache.pop(key, None)
         # Apply it now rather than on the supervisor's next tick. The docstring
         # above has always claimed "immediately", but the pool only grew when
         # `_supervise` next woke from its unconditional two-second sleep — so
@@ -529,7 +561,10 @@ class TaskManager:
         # and under load the queued work sat there longer still. `_scale` is
         # idempotent and returns early while stopping, so calling it here is
         # safe alongside the supervisor that will call it again.
-        if key == SettingsStore.TASK_CONCURRENCY and self._supervisor is not None:
+        if (
+            key in (SettingsStore.TASK_CONCURRENCY, SettingsStore.CHAT_CONCURRENCY)
+            and self._supervisor is not None
+        ):
             await self._scale()
             self._wake_workers()
 
@@ -609,12 +644,17 @@ class TaskManager:
         )
         return True
 
-    async def resume_paused(self, slots: int) -> int:
-        """Put paused tasks back in the queue, oldest first."""
+    async def resume_paused(self, slots: int, interactive: bool | None = None) -> int:
+        """Put paused tasks back in the queue, oldest first.
+
+        `interactive` restricts it to one pool's work: free chat capacity must
+        not put a generation task back, or the task limit is exceeded by however
+        many chats are idle.
+        """
         if slots <= 0:
             return 0
         restarted = 0
-        for task in await self.tasks.paused(limit=slots):
+        for task in await self.tasks.paused(limit=slots, interactive=interactive):
             await self.tasks.set_state(
                 task.id,
                 TaskState.QUEUED,
@@ -657,37 +697,41 @@ class TaskManager:
 
     # --------------------------------------------------------------- workers
 
-    async def _worker(self, index: int) -> None:
+    async def _worker(self, index: int, interactive: bool = False) -> None:
+        pool = self._pool(interactive)
+        label = "chat worker" if interactive else "worker"
         while True:
             # Retire when the limit has been lowered past this index. Checked
             # here rather than mid-task, so lowering the ceiling never cuts a
             # running task short -- a worker holding one finishes it first and
             # retires on its next time round. `_scale` spawns a replacement if
             # the limit goes back up.
-            if index >= min(await self._task_limit(), MAX_WORKERS):
-                if self._workers.get(index) is asyncio.current_task():
-                    self._workers.pop(index, None)
-                log.info("worker %d retired: the limit no longer reaches it", index)
+            if index >= min(await self._pool_limit(interactive), MAX_WORKERS):
+                if pool.get(index) is asyncio.current_task():
+                    pool.pop(index, None)
+                log.info("%s %d retired: the limit no longer reaches it", label, index)
                 return
 
-            # Capacity is how many tasks this process is running, not which
+            # Capacity is how many runs of this kind the process has, not which
             # worker is asking: the busy workers are whichever ones won the
             # race, so gating on the index would let an idle low-index worker
-            # claim past the limit.
+            # claim past the limit. Counted per pool, because the two ceilings
+            # are independent — generation work is no reason for a chat turn to
+            # wait, and a chat turn is no reason to park a task.
             at_capacity = False
             async with self._gate:
-                if len(self.live) >= await self.task_capacity():
+                if await self._pool_full(interactive):
                     at_capacity = True
                     task = None
                 else:
-                    task = await self.tasks.claim(self.worker_id)
+                    task = await self.tasks.claim(self.worker_id, interactive=interactive)
                     if task is not None:
                         # Re-check: claiming is a database round trip, and a
-                        # chat can take the last slot during it. The chat gate
-                        # is a separate lock, so this window cannot be closed by
-                        # holding one — but the claim can be given back, which
-                        # is free because nothing has started yet.
-                        if len(self.live) >= await self.task_capacity():
+                        # planner call can take the last chat slot during it. The
+                        # chat gate is a separate lock, so this window cannot be
+                        # closed by holding one — but the claim can be given
+                        # back, which is free because nothing has started yet.
+                        if await self._pool_full(interactive):
                             await self.tasks.set_state(task.id, TaskState.QUEUED)
                             at_capacity = True
                             task = None
@@ -721,11 +765,21 @@ class TaskManager:
                     raise  # the worker itself is shutting down
                 log.info("task %s cancelled", task.slug)
             except Exception:
-                log.exception("worker %d crashed on %s", index, task.slug)
+                log.exception("%s %d crashed on %s", label, index, task.slug)
             finally:
                 heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
+                try:
                     await heartbeat
+                except asyncio.CancelledError:
+                    # Two cancellations arrive at this await and they mean
+                    # opposite things: the heartbeat's own, which is expected
+                    # and finished with, and this worker's, which `stop()` is
+                    # waiting on. Suppressing both swallowed the second — the
+                    # worker went back to waiting for work with its cancellation
+                    # already spent, and shutdown hung on it forever.
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
                 task.runtime = None
                 self.live.pop(task.id, None)
                 # A note typed while this was running becomes the next attempt.
@@ -743,7 +797,7 @@ class TaskManager:
         return runner
 
     async def _scale(self) -> None:
-        """Bring the worker count in line with the configured limit.
+        """Bring each pool's worker count in line with its configured limit.
 
         Growing spawns; shrinking is left to the workers themselves, which
         retire once their index is above the limit, so a running task is never
@@ -751,15 +805,18 @@ class TaskManager:
         """
         if self._stopping:
             return
-        for index, worker in [*self._workers.items()]:
-            if worker.done():
-                self._workers.pop(index, None)
-        limit = min(await self._task_limit(), MAX_WORKERS)
-        for index in range(limit):
-            if index not in self._workers:
-                self._workers[index] = asyncio.create_task(
-                    self._worker(index), name=f"dex-worker-{index}"
-                )
+        for interactive in (False, True):
+            pool = self._pool(interactive)
+            for index, worker in [*pool.items()]:
+                if worker.done():
+                    pool.pop(index, None)
+            limit = min(await self._pool_limit(interactive), MAX_WORKERS)
+            prefix = "dex-chat-worker" if interactive else "dex-worker"
+            for index in range(limit):
+                if index not in pool:
+                    pool[index] = asyncio.create_task(
+                        self._worker(index, interactive), name=f"{prefix}-{index}"
+                    )
 
     async def _supervise(self) -> None:
         while True:
@@ -775,13 +832,29 @@ class TaskManager:
             except Exception:
                 log.exception("could not rebalance")
 
-    async def task_capacity(self) -> int:
-        """How many tasks may run right now.
+    def _pool(self, interactive: bool) -> dict[int, asyncio.Task[None]]:
+        return self._chat_workers if interactive else self._workers
 
-        The priority ladder: a chat or planning call outranks generation work,
-        so every chat in flight takes a slot away from tasks. Tasks give the
-        slot back — by being paused if necessary — and take it again when the
-        chat is done.
+    async def _pool_full(self, interactive: bool) -> bool:
+        """Whether this pool is already running everything it may."""
+        running = sum(1 for t in self.live.values() if t.interactive is interactive)
+        return running >= await self._pool_capacity(interactive)
+
+    async def _pool_capacity(self, interactive: bool) -> int:
+        return await (self.chat_capacity() if interactive else self.task_capacity())
+
+    async def task_capacity(self) -> int:
+        """How many generation tasks may run right now.
+
+        Just the task limit. It used to be the task limit less the chats in
+        flight, on the reasoning that a chat is short and someone is waiting on
+        it: a chat took a task's slot and the task was paused to give it up. But
+        the two are different kinds of work with a ceiling each, and borrowing
+        across them made both numbers mean something other than what they said —
+        raising "chats at once" quietly lowered how many tasks could run, and a
+        burst of chat parked generation work that had nothing to do with it.
+        Chat work is bounded by `chat_capacity` now, and neither limit moves the
+        other.
         """
         if self.starting_up:
             # The same mechanism as a pause, for the first half minute after a
@@ -793,7 +866,41 @@ class TaskManager:
             # is running and the workers stop claiming, both of which already
             # happen whenever capacity drops. Resuming reverses it the same way.
             return 0
-        return max(0, await self._task_limit() - self.chat_limiter.active)
+        return await self._task_limit()
+
+    async def chat_capacity(self) -> int:
+        """How many chat turns may run as tasks right now.
+
+        The chat ceiling covers both kinds of chat work: the inline planner
+        calls that go through `chat_limiter`, and the design and survey turns
+        that run as tasks. So the planner calls in flight come off it — that
+        much is a real shared budget, one operator-facing number for "chats at
+        once" — while generation work is not consulted either way.
+
+        The accounting runs one way only: a planner call takes a slot from this
+        pool, but a running turn does not hold one back from `chat_limiter`. It
+        cannot, because a finished survey plans from inside its own run: the
+        survey task is still live when `_plan_turn` acquires the limiter, so a
+        limiter that counted it would have the survey waiting on a call that is
+        waiting on the survey. The cost of the asymmetry is that chat work can
+        briefly reach twice the ceiling; the cost of closing it is a deadlock.
+        """
+        if self.starting_up or await self._is_paused():
+            # Held for the same reasons as generation work: the pause an
+            # operator sets and the one dex sets when a Claude limit is nearly
+            # spent are both about not spending, and a chat turn spends.
+            return 0
+        return max(0, await self._chat_limit() - self.chat_limiter.active)
+
+    @property
+    def chat_active(self) -> int:
+        """Chat work in flight: planner calls, plus the turns that run as tasks.
+
+        One number, because one ceiling governs both.
+        """
+        return self.chat_limiter.active + sum(
+            1 for t in self.live.values() if t.interactive
+        )
 
     @property
     def starting_up(self) -> bool:
@@ -836,34 +943,58 @@ class TaskManager:
 
 
     async def rebalance(self) -> None:
-        """Pause or resume tasks so the running set matches current capacity."""
-        capacity = await self.task_capacity()
-        running = [t for t in self.live.values() if t.runtime is not None]
+        """Pause or resume runs so each pool matches its own current capacity.
 
-        if len(running) > capacity:
-            # Newest first: the least work is lost, and it is the most likely to
-            # still be cheap to redo.
-            surplus = sorted(running, key=lambda t: t.started_at or 0, reverse=True)
-            for task in surplus[: len(running) - capacity]:
-                await self.pause(task.id)
-            return
+        Both pools, separately: a surplus of chat turns is no reason to park a
+        generation task, and the paused work each pool puts back is its own.
+        """
+        # A chat turn gives way to a hold, never to chat pressure. Pausing the
+        # fleet — or dex pausing it over a usage limit — parks a design turn like
+        # anything else, because it spends. But a planner call arriving is not a
+        # reason to park the turn someone is watching: the ceiling is already
+        # enforced where work is claimed, so the surplus drains on its own, and
+        # parking it would cancel a survey mid-run in the window where its own
+        # planning call holds the slot.
+        held = self.starting_up or await self._is_paused()
+        for interactive in (False, True):
+            capacity = await self._pool_capacity(interactive)
+            running = [
+                t for t in self.live.values()
+                if t.runtime is not None and t.interactive is interactive
+            ]
 
-        free = capacity - len(running)
-        if free > 0:
-            await self.resume_paused(free)
-            # Capacity has opened up. Waking the workers here is what makes a
-            # finished chat hand the slot back at once rather than at the next
-            # poll.
-            self._wake_workers()
+            if len(running) > capacity and (held or not interactive):
+                # Newest first: the least work is lost, and it is the most likely
+                # to still be cheap to redo.
+                surplus = sorted(running, key=lambda t: t.started_at or 0, reverse=True)
+                for task in surplus[: len(running) - capacity]:
+                    await self.pause(task.id)
+                continue
+
+            free = capacity - len(running)
+            if free > 0:
+                await self.resume_paused(free, interactive=interactive)
+                # Capacity has opened up. Waking the workers here is what makes a
+                # finished planner call hand the chat slot back at once rather
+                # than at the next poll.
+                self._wake_workers()
 
     async def _sleep_until_woken(self, timeout: float) -> None:
-        """Idle until woken or until the timeout, whichever comes first."""
+        """Idle until woken or until the timeout, whichever comes first.
+
+        `asyncio.wait` rather than `wait_for`, which reports a cancellation that
+        lands as its timeout expires as a `TimeoutError` — indistinguishable from
+        the timeout this suppresses, so the worker's own cancellation went the
+        same way as the heartbeat's above and shutdown waited on a worker that
+        had gone back to sleep. `asyncio.wait` does not rewrite cancellation.
+        """
         event = asyncio.Event()
         self._wake_events.add(event)
+        waiter = asyncio.ensure_future(event.wait())
         try:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(event.wait(), timeout=timeout)
+            await asyncio.wait({waiter}, timeout=timeout)
         finally:
+            waiter.cancel()
             self._wake_events.discard(event)
 
     def _wake_workers(self) -> None:
@@ -876,15 +1007,25 @@ class TaskManager:
             event.set()
 
     async def _task_limit(self) -> int:
+        return await self._limit(SettingsStore.TASK_CONCURRENCY)
+
+    async def _chat_limit(self) -> int:
+        return await self._limit(SettingsStore.CHAT_CONCURRENCY)
+
+    async def _pool_limit(self, interactive: bool) -> int:
+        return await (self._chat_limit() if interactive else self._task_limit())
+
+    async def _limit(self, key: str) -> int:
         now = time.monotonic()
-        if self._limit_cache is not None and now - self._limit_cache[0] < LIMIT_CACHE_S:
-            return self._limit_cache[1]
+        cached = self._limit_cache.get(key)
+        if cached is not None and now - cached[0] < LIMIT_CACHE_S:
+            return cached[1]
         try:
-            limit = await self.settings.concurrency(SettingsStore.TASK_CONCURRENCY)
+            limit = await self.settings.concurrency(key)
         except Exception:
-            log.exception("could not read the task concurrency limit")
+            log.exception("could not read the %s limit", key)
             limit = DEFAULT_CONCURRENCY
-        self._limit_cache = (now, limit)
+        self._limit_cache[key] = (now, limit)
         return limit
 
     async def _sweep(self) -> None:

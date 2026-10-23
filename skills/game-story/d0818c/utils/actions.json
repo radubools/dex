@@ -1,0 +1,774 @@
+{
+  "schema": 1,
+  "actions": {
+    "guide.clip": {
+      "algorithm": "general",
+      "summary": "Play a clip on the robot mentor.",
+      "args": {
+        "clip": "idle|talk|point|cheer|think|walk",
+        "loop": "bool, default false"
+      }
+    },
+    "guide.moveTo": {
+      "algorithm": "general",
+      "summary": "Walk the mentor to a spot beside the station.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "guide.pointAt": {
+      "algorithm": "general",
+      "summary": "Mentor turns and points at an entity.",
+      "args": {
+        "entity": "spawned id"
+      }
+    },
+    "ui.formula": {
+      "algorithm": "general",
+      "summary": "Show a short formula on the station plaque.",
+      "args": {
+        "text": "plain-text formula, e.g. 'y = w·x + b'"
+      }
+    },
+    "ui.slider": {
+      "algorithm": "general",
+      "summary": "Give the player a slider bound to a parameter.",
+      "args": {
+        "param": "parameter name, e.g. 'k', 'lr', 'C'",
+        "min": "number",
+        "max": "number",
+        "step": "number",
+        "value": "number"
+      }
+    },
+    "ui.tool": {
+      "algorithm": "general",
+      "summary": "Enable a player tool.",
+      "args": {
+        "tool": "place-point|place-query|drag-line|drag-centroid|pick-split|erase"
+      }
+    },
+    "ui.hide": {
+      "algorithm": "general",
+      "summary": "Remove a slider, tool or the formula plaque.",
+      "args": {
+        "id": "slider param, tool name or 'formula'"
+      }
+    },
+    "sandbox.open": {
+      "algorithm": "general",
+      "summary": "Hand the station over to free play.",
+      "args": {
+        "algorithm": "algorithm id",
+        "tools": "list of ui.tool names",
+        "sliders": "list of params"
+      }
+    },
+    "data.scatter": {
+      "algorithm": "data",
+      "summary": "Spawn a dataset as class markers on the grid.",
+      "args": {
+        "dataset": "blobs|moons|circles|line|xor|spiral|grid|iris2d|custom",
+        "n": "points, default 40",
+        "classes": "1-4, default 2",
+        "noise": "0-1",
+        "seed": "int",
+        "points": "custom only: [[x,z,class], ...]"
+      }
+    },
+    "data.label": {
+      "algorithm": "data",
+      "summary": "Reveal or hide class colours/shapes on points.",
+      "args": {
+        "show": "bool",
+        "ids": "optional list, default all"
+      }
+    },
+    "data.add": {
+      "algorithm": "data",
+      "summary": "Add one point.",
+      "args": {
+        "at": "[x,z]",
+        "cls": "class index or null",
+        "id": "optional id"
+      }
+    },
+    "data.highlight": {
+      "algorithm": "data",
+      "summary": "Pulse a subset of points.",
+      "args": {
+        "ids": "list",
+        "cls": "class index",
+        "where": "misclassified|support|outliers"
+      }
+    },
+    "data.feature": {
+      "algorithm": "data",
+      "summary": "Name an axis after a feature.",
+      "args": {
+        "axis": "x|z|y",
+        "name": "feature name, e.g. 'size'"
+      }
+    },
+    "data.normalize": {
+      "algorithm": "data",
+      "summary": "Animate rescaling features to zero mean, unit spread.",
+      "args": {}
+    },
+    "data.noise": {
+      "algorithm": "data",
+      "summary": "Jitter the points.",
+      "args": {
+        "amount": "0-1"
+      }
+    },
+    "data.height": {
+      "algorithm": "data",
+      "summary": "Lift each point to its target value (regression view).",
+      "args": {}
+    },
+    "data.clear": {
+      "algorithm": "data",
+      "summary": "Remove all points.",
+      "args": {}
+    },
+    "axes.show": {
+      "algorithm": "data",
+      "summary": "Show axes, grid and ticks.",
+      "args": {
+        "x": "label",
+        "z": "label",
+        "y": "optional label",
+        "range": "[min,max], default [-5,5]"
+      }
+    },
+    "axes.hide": {
+      "algorithm": "data",
+      "summary": "Hide the axes.",
+      "args": {}
+    },
+    "loss.show": {
+      "algorithm": "foundations",
+      "summary": "Show the loss meter for the current model.",
+      "args": {
+        "kind": "mse|mae|logloss|hinge|zeroone|gini"
+      }
+    },
+    "loss.surface": {
+      "algorithm": "gradient-descent",
+      "summary": "Show the loss landscape as a surface over two parameters.",
+      "args": {
+        "params": "[name1,name2]",
+        "shape": "bowl|valley|bumpy"
+      }
+    },
+    "gd.ball": {
+      "algorithm": "gradient-descent",
+      "summary": "Drop the parameter marker on the loss surface.",
+      "args": {
+        "at": "[p1,p2]"
+      }
+    },
+    "gd.gradient": {
+      "algorithm": "gradient-descent",
+      "summary": "Draw the gradient arrow at the marker.",
+      "args": {}
+    },
+    "gd.step": {
+      "algorithm": "gradient-descent",
+      "summary": "Take gradient steps; the marker rolls downhill.",
+      "args": {
+        "lr": "learning rate",
+        "steps": "int, default 1"
+      }
+    },
+    "gd.setRate": {
+      "algorithm": "gradient-descent",
+      "summary": "Change the learning rate.",
+      "args": {
+        "lr": "number"
+      }
+    },
+    "gd.momentum": {
+      "algorithm": "gradient-descent",
+      "summary": "Turn momentum on.",
+      "args": {
+        "beta": "0-1"
+      }
+    },
+    "gd.stochastic": {
+      "algorithm": "gradient-descent",
+      "summary": "Use mini-batches: noisy steps.",
+      "args": {
+        "batch": "int"
+      }
+    },
+    "regression.line": {
+      "algorithm": "linear-regression",
+      "summary": "Place a line with a given slope and intercept.",
+      "args": {
+        "slope": "number",
+        "intercept": "number"
+      }
+    },
+    "regression.showResiduals": {
+      "algorithm": "linear-regression",
+      "summary": "Draw residual segments from points to the line.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "regression.squareResiduals": {
+      "algorithm": "linear-regression",
+      "summary": "Grow each residual into a square (squared error).",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "regression.fitStep": {
+      "algorithm": "linear-regression",
+      "summary": "Gradient step(s) on the line.",
+      "args": {
+        "lr": "number",
+        "steps": "int"
+      }
+    },
+    "regression.solve": {
+      "algorithm": "linear-regression",
+      "summary": "Jump to the least-squares line.",
+      "args": {}
+    },
+    "regression.poly": {
+      "algorithm": "linear-regression",
+      "summary": "Fit a polynomial curve.",
+      "args": {
+        "degree": "int"
+      }
+    },
+    "regression.plane": {
+      "algorithm": "linear-regression",
+      "summary": "Fit a plane over two features.",
+      "args": {}
+    },
+    "logistic.sigmoid": {
+      "algorithm": "logistic-regression",
+      "summary": "Show the sigmoid squashing scores to 0–1.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "logistic.probability": {
+      "algorithm": "logistic-regression",
+      "summary": "Colour points by predicted probability.",
+      "args": {}
+    },
+    "logistic.fitStep": {
+      "algorithm": "logistic-regression",
+      "summary": "Gradient step(s) on log-loss.",
+      "args": {
+        "lr": "number",
+        "steps": "int"
+      }
+    },
+    "logistic.threshold": {
+      "algorithm": "logistic-regression",
+      "summary": "Move the decision threshold.",
+      "args": {
+        "value": "0-1"
+      }
+    },
+    "logistic.boundary": {
+      "algorithm": "logistic-regression",
+      "summary": "Show the decision boundary.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "knn.query": {
+      "algorithm": "knn",
+      "summary": "Place the query star.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "knn.distances": {
+      "algorithm": "knn",
+      "summary": "Draw distance lines and rings from the query.",
+      "args": {
+        "metric": "euclidean|manhattan"
+      }
+    },
+    "knn.neighbors": {
+      "algorithm": "knn",
+      "summary": "Highlight the k nearest points.",
+      "args": {
+        "k": "int"
+      }
+    },
+    "knn.vote": {
+      "algorithm": "knn",
+      "summary": "Neighbours vote; the query takes the winning class.",
+      "args": {}
+    },
+    "knn.setK": {
+      "algorithm": "knn",
+      "summary": "Change k.",
+      "args": {
+        "k": "int"
+      }
+    },
+    "knn.regions": {
+      "algorithm": "knn",
+      "summary": "Paint decision regions over the grid.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "kmeans.init": {
+      "algorithm": "kmeans",
+      "summary": "Drop k centroids.",
+      "args": {
+        "k": "int",
+        "method": "random|kmeans++|manual"
+      }
+    },
+    "kmeans.assign": {
+      "algorithm": "kmeans",
+      "summary": "Each point joins its nearest centroid.",
+      "args": {}
+    },
+    "kmeans.update": {
+      "algorithm": "kmeans",
+      "summary": "Each centroid moves to the mean of its points.",
+      "args": {}
+    },
+    "kmeans.iterate": {
+      "algorithm": "kmeans",
+      "summary": "Repeat assign and update.",
+      "args": {
+        "steps": "int or 'converge'"
+      }
+    },
+    "kmeans.inertia": {
+      "algorithm": "kmeans",
+      "summary": "Show total within-cluster distance.",
+      "args": {}
+    },
+    "kmeans.elbow": {
+      "algorithm": "kmeans",
+      "summary": "Plot inertia against k.",
+      "args": {
+        "kmax": "int"
+      }
+    },
+    "cluster.distances": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Show distances between clusters.",
+      "args": {
+        "linkage": "single|complete|average|ward"
+      }
+    },
+    "cluster.merge": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Merge the two closest clusters; the dendrogram grows a link.",
+      "args": {
+        "steps": "int, default 1",
+        "linkage": "optional"
+      }
+    },
+    "cluster.dendrogram": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Show the dendrogram beside the data.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "cluster.cut": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Cut the dendrogram at a height.",
+      "args": {
+        "height": "number"
+      }
+    },
+    "tree.root": {
+      "algorithm": "decision-tree",
+      "summary": "Start a tree: every point in one node.",
+      "args": {}
+    },
+    "tree.impurity": {
+      "algorithm": "decision-tree",
+      "summary": "Show a node's impurity bar.",
+      "args": {
+        "node": "node id",
+        "measure": "gini|entropy"
+      }
+    },
+    "tree.split": {
+      "algorithm": "decision-tree",
+      "summary": "Split a node with a plane on one feature.",
+      "args": {
+        "node": "node id",
+        "feature": "x|z",
+        "threshold": "number"
+      }
+    },
+    "tree.bestSplit": {
+      "algorithm": "decision-tree",
+      "summary": "Sweep thresholds and keep the purest split.",
+      "args": {
+        "node": "node id"
+      }
+    },
+    "tree.grow": {
+      "algorithm": "decision-tree",
+      "summary": "Grow greedily to a depth.",
+      "args": {
+        "depth": "int"
+      }
+    },
+    "tree.leaf": {
+      "algorithm": "decision-tree",
+      "summary": "Close a node as a leaf with its majority class.",
+      "args": {
+        "node": "node id"
+      }
+    },
+    "tree.prune": {
+      "algorithm": "decision-tree",
+      "summary": "Prune back to a depth.",
+      "args": {
+        "depth": "int"
+      }
+    },
+    "tree.predict": {
+      "algorithm": "decision-tree",
+      "summary": "Drop a query down the tree.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "forest.bag": {
+      "algorithm": "random-forest",
+      "summary": "Draw a bootstrap sample (with replacement).",
+      "args": {
+        "tree": "tree index",
+        "seed": "int"
+      }
+    },
+    "forest.featureSubset": {
+      "algorithm": "random-forest",
+      "summary": "Restrict a tree to a random subset of features.",
+      "args": {
+        "m": "int"
+      }
+    },
+    "forest.grow": {
+      "algorithm": "random-forest",
+      "summary": "Grow several trees side by side.",
+      "args": {
+        "trees": "int",
+        "depth": "int"
+      }
+    },
+    "forest.vote": {
+      "algorithm": "random-forest",
+      "summary": "The trees vote on a query.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "forest.regions": {
+      "algorithm": "random-forest",
+      "summary": "Show the averaged decision regions.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "boost.init": {
+      "algorithm": "gradient-boosting",
+      "summary": "Start from a constant prediction.",
+      "args": {}
+    },
+    "boost.residuals": {
+      "algorithm": "gradient-boosting",
+      "summary": "Show the residuals of the current ensemble.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "boost.addStump": {
+      "algorithm": "gradient-boosting",
+      "summary": "Fit a stump to the residuals and add it.",
+      "args": {
+        "lr": "shrinkage",
+        "steps": "int"
+      }
+    },
+    "boost.weights": {
+      "algorithm": "gradient-boosting",
+      "summary": "Grow misclassified points (AdaBoost view).",
+      "args": {}
+    },
+    "boost.shrink": {
+      "algorithm": "gradient-boosting",
+      "summary": "Change the learning rate.",
+      "args": {
+        "lr": "number"
+      }
+    },
+    "svm.line": {
+      "algorithm": "svm",
+      "summary": "Place a separating line.",
+      "args": {
+        "angle": "degrees",
+        "offset": "number"
+      }
+    },
+    "svm.margin": {
+      "algorithm": "svm",
+      "summary": "Show the margin bands.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "svm.supportVectors": {
+      "algorithm": "svm",
+      "summary": "Halo the support vectors.",
+      "args": {}
+    },
+    "svm.maximize": {
+      "algorithm": "svm",
+      "summary": "Widen the margin to its maximum.",
+      "args": {}
+    },
+    "svm.softMargin": {
+      "algorithm": "svm",
+      "summary": "Allow violations with penalty C.",
+      "args": {
+        "C": "number"
+      }
+    },
+    "svm.kernelLift": {
+      "algorithm": "svm",
+      "summary": "Lift points into 3D with a kernel feature.",
+      "args": {
+        "kernel": "poly|rbf",
+        "gamma": "number"
+      }
+    },
+    "svm.kernelProject": {
+      "algorithm": "svm",
+      "summary": "Cut the lifted data with a plane; drop the curve back to 2D.",
+      "args": {}
+    },
+    "bayes.prior": {
+      "algorithm": "naive-bayes",
+      "summary": "Show class priors as bars.",
+      "args": {}
+    },
+    "bayes.gaussian": {
+      "algorithm": "naive-bayes",
+      "summary": "Draw a class's bell curve over a feature.",
+      "args": {
+        "cls": "class index",
+        "feature": "x|z"
+      }
+    },
+    "bayes.likelihood": {
+      "algorithm": "naive-bayes",
+      "summary": "Read the likelihoods at a query.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "bayes.posterior": {
+      "algorithm": "naive-bayes",
+      "summary": "Multiply prior and likelihoods; normalise.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "bayes.independence": {
+      "algorithm": "naive-bayes",
+      "summary": "Show features treated separately (the naive assumption).",
+      "args": {}
+    },
+    "bayes.regions": {
+      "algorithm": "naive-bayes",
+      "summary": "Paint the posterior's decision regions.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "pca.center": {
+      "algorithm": "pca",
+      "summary": "Move the cloud's centre to the origin.",
+      "args": {}
+    },
+    "pca.covariance": {
+      "algorithm": "pca",
+      "summary": "Show the spread ellipse.",
+      "args": {}
+    },
+    "pca.axis": {
+      "algorithm": "pca",
+      "summary": "Draw a principal axis.",
+      "args": {
+        "component": "1|2|3"
+      }
+    },
+    "pca.rotate": {
+      "algorithm": "pca",
+      "summary": "Spin a candidate axis; show the projected variance.",
+      "args": {
+        "angle": "degrees"
+      }
+    },
+    "pca.project": {
+      "algorithm": "pca",
+      "summary": "Project points onto the top components.",
+      "args": {
+        "components": "int"
+      }
+    },
+    "pca.variance": {
+      "algorithm": "pca",
+      "summary": "Show explained-variance bars.",
+      "args": {}
+    },
+    "pca.reconstruct": {
+      "algorithm": "pca",
+      "summary": "Lift projections back; show what is lost.",
+      "args": {}
+    },
+    "nn.perceptron": {
+      "algorithm": "neural-network",
+      "summary": "Build a single neuron with inputs and a bias.",
+      "args": {
+        "inputs": "int"
+      }
+    },
+    "nn.layer": {
+      "algorithm": "neural-network",
+      "summary": "Add a layer.",
+      "args": {
+        "neurons": "int",
+        "activation": "step|sigmoid|relu|tanh"
+      }
+    },
+    "nn.weights": {
+      "algorithm": "neural-network",
+      "summary": "Show weights as connection thickness and colour.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "nn.forward": {
+      "algorithm": "neural-network",
+      "summary": "Send an input through; neurons glow with activation.",
+      "args": {
+        "input": "[x,z] or point id"
+      }
+    },
+    "nn.activation": {
+      "algorithm": "neural-network",
+      "summary": "Swap the activation function.",
+      "args": {
+        "fn": "step|sigmoid|relu|tanh"
+      }
+    },
+    "nn.loss": {
+      "algorithm": "neural-network",
+      "summary": "Compare the output with the target.",
+      "args": {}
+    },
+    "nn.backward": {
+      "algorithm": "neural-network",
+      "summary": "Pulse gradients backward along the connections.",
+      "args": {}
+    },
+    "nn.update": {
+      "algorithm": "neural-network",
+      "summary": "Nudge the weights by their gradients.",
+      "args": {
+        "lr": "number"
+      }
+    },
+    "nn.boundary": {
+      "algorithm": "neural-network",
+      "summary": "Show the network's decision region.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "train.step": {
+      "algorithm": "evaluation",
+      "summary": "Run training steps for the current model.",
+      "args": {
+        "steps": "int, default 1"
+      }
+    },
+    "train.run": {
+      "algorithm": "evaluation",
+      "summary": "Train for some epochs, animated.",
+      "args": {
+        "epochs": "int"
+      }
+    },
+    "train.pause": {
+      "algorithm": "evaluation",
+      "summary": "Pause training.",
+      "args": {}
+    },
+    "train.curve": {
+      "algorithm": "evaluation",
+      "summary": "Show learning curves.",
+      "args": {
+        "series": "['train','val']"
+      }
+    },
+    "eval.split": {
+      "algorithm": "evaluation",
+      "summary": "Split the data into train/validation/test.",
+      "args": {
+        "train": "fraction",
+        "val": "fraction",
+        "test": "fraction"
+      }
+    },
+    "eval.score": {
+      "algorithm": "evaluation",
+      "summary": "Show a metric.",
+      "args": {
+        "metric": "accuracy|mse|precision|recall|f1",
+        "on": "train|val|test"
+      }
+    },
+    "eval.confusion": {
+      "algorithm": "evaluation",
+      "summary": "Show the confusion matrix.",
+      "args": {}
+    },
+    "eval.crossValidate": {
+      "algorithm": "evaluation",
+      "summary": "Rotate folds; show per-fold scores.",
+      "args": {
+        "folds": "int"
+      }
+    },
+    "eval.complexity": {
+      "algorithm": "evaluation",
+      "summary": "Set model complexity (degree, depth, k).",
+      "args": {
+        "value": "number"
+      }
+    },
+    "eval.regularize": {
+      "algorithm": "evaluation",
+      "summary": "Add a penalty on large weights.",
+      "args": {
+        "strength": "number"
+      }
+    }
+  }
+}

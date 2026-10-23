@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from .bus import EventBus
 from . import widgets
+from .sql import build_sql_router
 from .authn import (
     Access,
     build_access_dependency,
@@ -62,7 +63,8 @@ PING_INTERVAL_S = 20.0
 #: Offered in the model picker. The list is short on purpose: these are the
 #: models worth running an agent on.
 MODEL_CHOICES = [
-    {"id": "claude-opus-5", "label": "Opus 5", "note": "most capable"},
+    {"id": "claude-opus-5-5", "label": "Opus 5.5", "note": "most capable"},
+    {"id": "claude-opus-5", "label": "Opus 5", "note": "previous Opus"},
     {"id": "claude-sonnet-5", "label": "Sonnet 5", "note": "faster, cheaper"},
     {"id": "claude-haiku-4-5", "label": "Haiku 4.5", "note": "cheapest"},
 ]
@@ -382,6 +384,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     app.include_router(build_router(config, db, access_dep))
 
+    # Read-only SQL for project widgets. A widget's frame has an opaque origin
+    # and no session, so it cannot use any other route here; this one answers
+    # with `Access-Control-Allow-Origin: *`, runs every query as the
+    # `dex_readonly` role, and refuses anything that is not a single read.
+    # Loopback only unless `allow_remote=True`, which would publish the
+    # database to the network.
+    app.include_router(build_sql_router(config.database_url))
+
     async def visible(access: Access) -> list[str]:
         """The project slugs this caller may see, in listing order."""
         return access.visible_projects([p.slug for p in await projects.list()])
@@ -445,10 +455,12 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "authenticated": credential_source() is not None,
             "authSource": credential_source(),
             "running": len(tasks.live),
-            # The priority ladder, visible: capacity is the task limit less the
-            # chats currently holding a slot.
+            # Two ceilings, reported separately: generation work and chat work
+            # no longer borrow slots from each other, so one number for both
+            # would be a number neither pool obeys.
             "taskCapacity": await tasks.task_capacity(),
-            "chatsActive": tasks.chat_limiter.active,
+            "chatCapacity": await tasks.chat_capacity(),
+            "chatsActive": tasks.chat_active,
             "paused": len(await tasks.tasks.paused(limit=50)),
             # Capacity is zero for the first half minute after a restart. Said
             # out loud, because otherwise it looks like a pause nobody set.
@@ -725,12 +737,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "project": config.project,
             "defaultModel": config.model,
             "running": len(tasks.live),
-            # The priority ladder, visible: capacity is the task limit less the
-            # chats currently holding a slot.
+            # See `status`: a ceiling each, and neither moves the other.
             "taskCapacity": await tasks.task_capacity(),
-            "chatsActive": tasks.chat_limiter.active,
+            "chatCapacity": await tasks.chat_capacity(),
+            "chatsActive": tasks.chat_active,
             "paused": len(await tasks.tasks.paused(limit=50)),
-            "planning": tasks.chat_limiter.active,
+            # Everything the chat ceiling holds: planner calls in flight and the
+            # design or survey turns running as tasks.
+            "planning": tasks.chat_active,
             "limit": await _limit_status(settings),
         }
 
@@ -1960,6 +1974,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # be a `StaticFiles` mount over a top-level `widgets/` directory holding a
     # materialised copy of each, which meant a bundle could be built in one
     # place and served from the other. One silently was.
+
+    # Game chat (before the UI's catch-all mount): games talk to their project's Chats thread (game_chat.py),
+    # with a per-project token and CORS of their own.
+    from .game_chat import GameChatCors, build_game_chat_router  # noqa: PLC0415
+
+    app.include_router(build_game_chat_router(config, db, tasks, threads, publish_message))
+    app.add_middleware(GameChatCors)
 
     web_dist = config.workspace / "web" / "dist"
     if (web_dist / "index.html").exists():

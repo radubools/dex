@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import contextlib
 import logging
 
 from claude_agent_sdk import (
@@ -36,7 +37,7 @@ from . import pricing
 from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
-from .store import SettingsStore, TaskStore, ThreadStore
+from .store import SettingsStore, TaskMessageStore, TaskStore, ThreadStore
 from .diffs import preview_change
 from .models import Event, Task, TaskState
 from . import local_sources, skills, surveyor, widgets
@@ -146,6 +147,15 @@ def has_credentials() -> bool:
 def is_auth_error(message: str) -> bool:
     lowered = message.lower()
     return "not logged in" in lowered or "authentication_failed" in lowered or "please run /login" in lowered
+
+
+def chat_interjection(text: str) -> str:
+    """A message the player typed while a chat task was working, as its next turn."""
+    return (
+        "The player just sent this message from the game while you were working "
+        "(your previous step was interrupted to hand it to you). Take it into "
+        "account, then carry on with whatever still makes sense:\n\n" + text.strip()
+    )
 
 
 class TaskRunner:
@@ -476,6 +486,9 @@ class TaskRunner:
                 # projects and therefore live at the top level rather than
                 # inside the project it is editing.
                 + ((widgets.widgets_dir(self.config.workspace),) if self.task.is_design else ())
+                # A chat from inside a game works on that game: its assets
+                # folder and its code (dex's game-chat settings name the root).
+                + self._chat_game_roots()
             ),
             # Linked directories are readable — that is why they were linked
             # — and never writable. The link lives inside the data directory,
@@ -621,8 +634,11 @@ class TaskRunner:
             async with asyncio.timeout(self.config.task_timeout_s):
                 async with ClaudeSDKClient(options=options) as client:
                     await client.query(prompt)
-                    async for message in client.receive_response():
-                        self._observe(message)
+                    if self.task.is_chat:
+                        await self._converse(client)
+                    else:
+                        async for message in client.receive_response():
+                            self._observe(message)
         except asyncio.CancelledError:
             self.task.finished_at = time.time()
             self.task.activity = None
@@ -647,7 +663,8 @@ class TaskRunner:
             # A clean exit is not the same thing as a result. Checked here and
             # not left to the operator's eye, because an empty package looks
             # exactly like a full one in a list of green rows.
-            elif self.task.builds_package and not self._wrote_anything(before):
+            elif self.task.builds_package and not self.task.is_chat and not self._wrote_anything(before):
+                # A chat turn that only answers wrote nothing, and is still done.
                 self._fail(EMPTY_PACKAGE)
             else:
                 self.set_state(TaskState.SUCCEEDED)
@@ -711,6 +728,72 @@ class TaskRunner:
             # The survey itself succeeded and its activity is on record; a
             # failure to plan from it must not mark the run as failed.
             log.exception("could not plan from survey %s", self.task.id)
+
+    def _chat_game_roots(self) -> tuple[Path, ...]:
+        """The game folder a chat task may write into, from .dex/game-chat.json."""
+        if not self.task.is_chat:
+            return ()
+        from .game_chat import game_root  # noqa: PLC0415 -- the API module, imported lazily
+
+        root = game_root(self.config, self.task.project)
+        return (root,) if root else ()
+
+    async def _converse(self, client: ClaudeSDKClient) -> None:
+        """Run a chat task: its turns, plus whatever the player types meanwhile.
+
+        Each message from the player (`task.inbox`, filled by the game-chat
+        API) interrupts the turn under way and goes to the same session as the
+        next turn, so the agent takes it into account at once rather than
+        after finishing what it was doing. The run ends when a turn finishes
+        with nothing left in the inbox; anything typed after that point is
+        held as a follow-up note and starts the next attempt.
+        """
+        inbox: asyncio.Queue[str] = asyncio.Queue()
+        self.task.inbox = inbox
+        due = 1  # turns still to finish: the opening prompt
+        interrupted: asyncio.Event | None = None
+
+        async def feed() -> None:
+            nonlocal due, interrupted
+            while True:
+                text = await inbox.get()
+                # Stop the turn under way and wait for it to wind down, so its
+                # result is not taken for the new turn's.
+                interrupted = asyncio.Event()
+                with contextlib.suppress(Exception):
+                    await client.interrupt()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(interrupted.wait(), timeout=20)
+                interrupted = None
+                due += 1
+                self.emit("text", text="The player sent a message: taking it into account.")
+                await client.query(chat_interjection(text))
+
+        feeder = asyncio.create_task(feed(), name=f"dex-chat-inbox-{self.task.slug}")
+        try:
+            async for message in client.receive_messages():
+                if isinstance(message, ResultMessage) and interrupted is not None and not interrupted.is_set():
+                    # The turn the player's message cut short ends as an error;
+                    # that is the interrupt, not a failure, so it is not reported.
+                    interrupted.set()
+                    due = max(0, due - 1)
+                    continue
+                self._observe(message)
+                if not isinstance(message, ResultMessage):
+                    continue
+                due = max(0, due - 1)
+                if due == 0 and inbox.empty() and interrupted is None:
+                    break
+        finally:
+            feeder.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await feeder
+            self.task.inbox = None
+            # Typed after the last turn ended: kept for the follow-up attempt.
+            while not inbox.empty():
+                text = inbox.get_nowait()
+                with contextlib.suppress(Exception):
+                    await TaskMessageStore(self.store.db).add(self.task.id, text)
 
     async def _post_design_reply(
         self, thread_id: str, summary: str, failed: bool = False
@@ -1131,10 +1214,11 @@ class TaskRunner:
                 # choose from. Handing it straight on is what makes the two
                 # runs read as one step in the thread.
                 asyncio.create_task(self._hand_survey_on(message.result))
-            elif self.task.is_design and self.task.thread_id and message.result:
+            elif (self.task.is_design or self.task.is_chat) and self.task.thread_id and message.result:
                 # The design thread is a conversation, so it needs the reply in
                 # line. The task panel still holds the whole run; this is the
                 # part somebody reading the thread should not have to dig for.
+                # A game chat's Chats thread reads the same way in dex.
                 asyncio.create_task(
                     self._post_design_reply(self.task.thread_id, message.result)
                 )
