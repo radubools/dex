@@ -1,0 +1,5 @@
+# Extraction, tokenising, storage. pdftotext comes from Homebrew poppler (/opt/homebrew/bin).
+pypdf>=6
+tokenizers>=0.15
+huggingface_hub>=0.20
+asyncpg>=0.29

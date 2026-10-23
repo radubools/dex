@@ -1,0 +1,9 @@
+{
+  "name": "postgres-experiments-state",
+  "description": "Read and write shared project state in the dex Postgres — a named row with a free-form JSON body and an append-only history beside it, so a criterion that gets run repeatedly accumulates a track record instead of a single latest number.",
+  "version": "2597d7",
+  "updated": 1790190549.552067,
+  "requires": [
+    "asyncpg"
+  ]
+}

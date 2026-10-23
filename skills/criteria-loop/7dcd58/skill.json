@@ -1,0 +1,9 @@
+{
+  "name": "criteria-loop",
+  "description": "Stage 3 of the construction criteria pipeline \u2014 rounds of generate (local LLM via Ollama) \u2192 evaluate (Clef-Flash over a stratified probe set, then walks along the BGE nearest-neighbour graph from every hit) \u2192 judge (how frequent, how deep, how coherent, how many documents) that keep or drop yes/no criteria, all state in the `criteria` Postgres schema; plus `pipeline backfill`, which runs stages 1\u20133 in sequence outside dex. Needs edil-corpus, bge-embeddings and clef-decisions.",
+  "version": "7dcd58",
+  "updated": 1791510885.266172,
+  "requires": [
+    "numpy"
+  ]
+}

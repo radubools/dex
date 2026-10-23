@@ -1,0 +1,2 @@
+# Ollama serves bge-m3 (`ollama pull bge-m3`); Postgres needs the pgvector extension.
+asyncpg>=0.29

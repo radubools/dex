@@ -1,0 +1,10 @@
+{
+  "name": "jev-decisions",
+  "description": "Ask the hosted Jev API typed questions about a piece of text \u2014 yes/no, multiple choice, or a continuous rubric score \u2014 and get calibrated probabilities back, with the text split into 512-token chunks and the requests retried, batched eight questions at a time and run in parallel.",
+  "version": "0f9159",
+  "updated": 1790353593.219202,
+  "requires": [
+    "huggingface_hub",
+    "tokenizers"
+  ]
+}

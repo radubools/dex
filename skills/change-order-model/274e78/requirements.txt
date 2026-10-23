@@ -1,0 +1,6 @@
+# Workbooks via calamine (see AGENTS.md); the fit via scikit-learn.
+pandas>=2
+python-calamine>=0.2
+scikit-learn>=1.5
+numpy>=1.26
+asyncpg>=0.29

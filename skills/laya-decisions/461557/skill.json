@@ -1,0 +1,11 @@
+{
+  "name": "laya-decisions",
+  "description": "Ask a local model typed questions about a piece of text \u2014 yes/no, multiple choice, or a continuous rubric score \u2014 and get calibrated probabilities back, with the 512-token budget worked out and the text split to fit.",
+  "version": "e8d9d4",
+  "updated": 1790217537.743807,
+  "requires": [
+    "huggingface_hub",
+    "laya_mlx",
+    "mlx"
+  ]
+}

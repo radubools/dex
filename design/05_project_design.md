@@ -204,6 +204,12 @@ entire activity surface — streamed text, collapsed thinking, tool calls, diffs
 questions — because that surface belongs to tasks. What makes a turn a design
 turn is only its brief and a wider write mandate.
 
+Running as a task does **not** mean it is budgeted as one. `Task.interactive`
+puts a design turn in the chat pool, under `chat_concurrency`, because someone is
+sitting in the thread waiting for the reply: it must not queue behind a shelf of
+generation work, and generation work must not be parked to let it start. See
+[02](02_task_lifecycle.md#two-pools).
+
 > `designer.py` still contains the old one-shot `draft()` and `parse()`. Only
 > `history_text()` is used now.
 

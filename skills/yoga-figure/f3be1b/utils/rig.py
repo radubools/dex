@@ -496,6 +496,35 @@ def folded_knee_on_floor(root, heading, near, far,
     return knee, add(knee, scale(shin, far))
 
 
+def flat_sole(length, back=0.045, deep=0.045):
+    """A foot of `length` with its whole sole down: its pitch, and its ankle height.
+
+    Both ends of the sole are on the ground — the toetip, which is a landmark
+    and so sits at exactly zero, and the heel, which is not. `skeleton.heel`
+    puts the heel `back` behind the ankle along the foot and `deep` out through
+    the sole, so asking for both ends at y=0 leaves one unknown, the pitch the
+    foot lies at, and the ankle's height above the floor falls out of it. Pass
+    the same offsets you will measure the finished heel with and the two agree.
+
+    The ankle is a joint centre up inside the foot and never reaches the floor:
+    a 0.19 m foot on the default offsets puts it 3.6 cm up. Typing a
+    plausible-looking height instead is how a standing pose ends up with its
+    heel hanging several centimetres in the air, and it also sets how high the
+    hips ride, since a straight leg is measured from the ankle.
+
+        pitch, ankle_height = rig.flat_sole(0.19)
+        ankle = [0.0, ankle_height, 0.0]
+        toetip = rig.add(ankle, rig.scale(rig.lean(90.0 + pitch, forward), 0.19))
+
+    Returns (degrees the foot tips below horizontal, ankle height in meters).
+    Raises on a foot with no length, which has no sole to lie on.
+    """
+    if length <= 0:
+        raise ValueError(f"{length} is not a foot length to put a sole under")
+    pitch = math.atan(back / (length + back))
+    return math.degrees(pitch), length * math.sin(pitch)
+
+
 def tucked_foot(ankle, anterior, superior, dorsiflexion=15.0,
                 ankle_to_ball=0.130, ankle_above_sole=0.070, toes=0.060):
     """The ball and the tucked toetip of a foot standing on its toes.

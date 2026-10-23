@@ -1,0 +1,13 @@
+{
+  "name": "edil-corpus",
+  "description": "Stage 1 of the construction criteria pipeline \u2014 pick eDIL projects, extract their initial-report / estimate PDFs page by page (pypdf vs pdftotext, font-offset repair), cut them into token-budgeted chunks flagged for prose quality, and store documents, pages and chunks in the `corpus` Postgres schema that every later stage reads.",
+  "version": "5f9cfa",
+  "updated": 1791469467.232613,
+  "requires": [
+    "PIL",
+    "asyncpg",
+    "huggingface_hub",
+    "pypdf",
+    "tokenizers"
+  ]
+}

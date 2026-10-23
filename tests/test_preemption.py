@@ -1,9 +1,14 @@
-"""The priority ladder: chat outranks generation, and tasks give way.
+"""Two ceilings, and what still gives way.
 
-A chat or planning call is short and someone is waiting on it; a generation task
-is long and nobody is. So a chat in flight takes a slot from tasks, and the task
-it displaces is paused rather than lost — it resumes on its own once the chat is
-done, continuing the same agent session.
+Chat work and generation work are budgeted separately: a planner call or a design
+turn runs against `chat_concurrency`, a task against `task_concurrency`, and
+neither borrows from the other. Chat used to take a slot off the task limit and
+park a running task to get it, which meant raising one number quietly lowered the
+other.
+
+What still gives way is a run inside its own pool: lower a ceiling under what is
+running and the newest run of that kind is paused rather than lost — it resumes
+on its own, continuing the same agent session.
 """
 
 from __future__ import annotations
@@ -67,18 +72,55 @@ async def manager(config, db, monkeypatch):
         await bus.stop()
 
 
-async def test_capacity_drops_while_a_chat_is_running(manager):
+async def test_a_chat_does_not_eat_into_task_capacity(manager):
     await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 3)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 2)
     assert await manager.task_capacity() == 3
 
     async with manager.chat_limiter:
-        assert await manager.task_capacity() == 2
+        # The chat ceiling is what a planner call spends from.
+        assert await manager.task_capacity() == 3
+        assert await manager.chat_capacity() == 1
         async with manager.chat_limiter:
-            assert await manager.task_capacity() == 1
+            assert await manager.task_capacity() == 3
+            assert await manager.chat_capacity() == 0
     assert await manager.task_capacity() == 3
+    assert await manager.chat_capacity() == 2
 
 
-async def test_a_chat_pauses_the_newest_task_and_it_resumes_after(manager):
+async def test_the_two_ceilings_are_set_independently(manager):
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 1)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 4)
+    assert await manager.task_capacity() == 1
+    assert await manager.chat_capacity() == 4
+
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 1)
+    assert await manager.task_capacity() == 1
+
+
+async def test_a_chat_leaves_running_tasks_alone(manager):
+    arm("a", "b")
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 2)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 1)
+    await manager.start()
+    first = await manager.submit("problem a", title="a", slug="a")
+    await asyncio.wait_for(BlockingRunner.started["a"].wait(), 45)
+    second = await manager.submit("problem b", title="b", slug="b")
+    await asyncio.wait_for(BlockingRunner.started["b"].wait(), 45)
+
+    async with manager.chat_limiter:
+        # Long enough for the supervisor to have rebalanced had it wanted to.
+        await asyncio.sleep(0.6)
+        assert await manager.tasks.paused() == []
+        for task in (first, second):
+            assert (await manager.tasks.get(task.id)).state is TaskState.RUNNING
+
+    for slug in ("a", "b"):
+        BlockingRunner.release[slug].set()
+
+
+async def test_lowering_the_task_ceiling_pauses_the_newest_and_it_resumes(manager):
+    """A run still gives way — to its own pool's ceiling, not to a chat."""
     arm("a", "b")
     await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 2)
     await manager.start()
@@ -87,16 +129,17 @@ async def test_a_chat_pauses_the_newest_task_and_it_resumes_after(manager):
     second = await manager.submit("problem b", title="b", slug="b")
     await asyncio.wait_for(BlockingRunner.started["b"].wait(), 45)
 
-    async with manager.chat_limiter:          # capacity 2 -> 1
-        await asyncio.sleep(0.4)
-        paused = [t.id for t in await manager.tasks.paused()]
-        # The newest run is the one displaced: least work lost.
-        assert paused == [second.id]
-        assert (await manager.tasks.get(first.id)).state is TaskState.RUNNING
-        # It keeps the session, so resuming continues rather than restarts.
-        assert (await manager.tasks.get(second.id)).resumed_from == "session-b"
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 1)
+    await manager.rebalance()
+    await asyncio.sleep(0.4)
+    paused = [t.id for t in await manager.tasks.paused()]
+    # The newest run is the one displaced: least work lost.
+    assert paused == [second.id]
+    assert (await manager.tasks.get(first.id)).state is TaskState.RUNNING
+    # It keeps the session, so resuming continues rather than restarts.
+    assert (await manager.tasks.get(second.id)).resumed_from == "session-b"
 
-    # Chat done: the paused task is queued again by itself.
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 2)
     for _ in range(60):
         if (await manager.tasks.get(second.id)).state is not TaskState.PAUSED:
             break
@@ -144,26 +187,100 @@ async def test_stop_still_cancels_rather_than_pausing(manager):
     BlockingRunner.release["a"].set()
 
 
-async def test_tasks_wait_rather_than_starting_while_chats_hold_capacity(manager):
+async def test_a_task_starts_while_a_chat_holds_the_chat_ceiling(manager):
     arm("a")
     await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 1)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 1)
     await manager.start()
 
-    async with manager.chat_limiter:          # capacity 1 -> 0
+    async with manager.chat_limiter:          # chat capacity 1 -> 0
         task = await manager.submit("problem a", title="a", slug="a")
-        await asyncio.sleep(0.8)
         # Asserted on the stored state rather than the runner's own signal: the
         # question is whether it was allowed to start, not what it then did.
-        assert (await manager.tasks.get(task.id)).state is TaskState.QUEUED
-
-    for _ in range(200):
-        if (await manager.tasks.get(task.id)).state is not TaskState.QUEUED:
-            break
-        await asyncio.sleep(0.1)
-    assert (await manager.tasks.get(task.id)).state is not TaskState.QUEUED
+        for _ in range(200):
+            if (await manager.tasks.get(task.id)).state is not TaskState.QUEUED:
+                break
+            await asyncio.sleep(0.1)
+        assert (await manager.tasks.get(task.id)).state is not TaskState.QUEUED
 
     for event in BlockingRunner.release.values():
         event.set()
+
+
+async def test_a_design_turn_runs_while_the_task_pool_is_full(manager):
+    """The reason for the split: a reply must not queue behind generation work."""
+    arm("a", "turn")
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 1)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 1)
+    await manager.start()
+
+    await manager.submit("problem a", title="a", slug="a")
+    await asyncio.wait_for(BlockingRunner.started["a"].wait(), 45)
+
+    turn = await manager.submit("a design turn", title="turn", slug="turn", scope="design")
+    await asyncio.wait_for(BlockingRunner.started["turn"].wait(), 45)
+    assert (await manager.tasks.get(turn.id)).state is TaskState.RUNNING
+
+    for event in BlockingRunner.release.values():
+        event.set()
+
+
+async def test_chat_work_is_bounded_by_its_own_ceiling(manager):
+    """Separate does not mean unbounded: the chat pool has a ceiling too."""
+    arm("first", "second")
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 4)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 1)
+    await manager.start()
+
+    await manager.submit("turn one", title="first", slug="first", scope="design")
+    await asyncio.wait_for(BlockingRunner.started["first"].wait(), 45)
+    second = await manager.submit("turn two", title="second", slug="second", scope="survey")
+    await asyncio.sleep(0.8)
+    # Four task workers are idle, and none of them may take it: it is chat work.
+    assert (await manager.tasks.get(second.id)).state is TaskState.QUEUED
+
+    BlockingRunner.release["first"].set()
+    for _ in range(200):
+        if (await manager.tasks.get(second.id)).state is not TaskState.QUEUED:
+            break
+        await asyncio.sleep(0.1)
+    assert (await manager.tasks.get(second.id)).state is not TaskState.QUEUED
+
+    for event in BlockingRunner.release.values():
+        event.set()
+
+
+async def test_a_planner_call_does_not_park_a_running_chat_turn(manager):
+    """A survey plans from inside its own run, so parking it would deadlock."""
+    arm("turn")
+    await manager.set_concurrency(SettingsStore.TASK_CONCURRENCY, 2)
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 1)
+    await manager.start()
+
+    turn = await manager.submit("a survey", title="turn", slug="turn", scope="survey")
+    await asyncio.wait_for(BlockingRunner.started["turn"].wait(), 45)
+
+    async with manager.chat_limiter:          # chat capacity 1 -> 0
+        await asyncio.sleep(0.6)
+        assert (await manager.tasks.get(turn.id)).state is TaskState.RUNNING
+
+    BlockingRunner.release["turn"].set()
+
+
+async def test_a_pause_still_parks_a_running_chat_turn(manager):
+    """Holding work is about spend, and a chat turn spends."""
+    arm("turn")
+    await manager.set_concurrency(SettingsStore.CHAT_CONCURRENCY, 2)
+    await manager.start()
+
+    turn = await manager.submit("a design turn", title="turn", slug="turn", scope="design")
+    await asyncio.wait_for(BlockingRunner.started["turn"].wait(), 45)
+
+    await manager.set_paused(True)
+    await asyncio.sleep(0.4)
+    assert (await manager.tasks.get(turn.id)).state is TaskState.PAUSED
+
+    BlockingRunner.release["turn"].set()
 
 
 async def test_paused_tasks_resume_oldest_first(manager, db):

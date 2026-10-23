@@ -1,0 +1,7 @@
+{
+  "name": "bge-embeddings",
+  "description": "Stage 2 of the construction criteria pipeline \u2014 embed corpus chunks locally with BGE-M3 through Ollama, store the vectors in pgvector (`corpus.embeddings`, HNSW-indexed), and materialise each chunk's k nearest neighbours (`corpus.neighbors`) as the graph the criteria loop walks; also semantic search over the corpus. Needs `edil-corpus`.",
+  "version": "428452",
+  "updated": 1791469330.353173,
+  "requires": []
+}

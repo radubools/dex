@@ -1,0 +1,11 @@
+{
+  "name": "clef-decisions",
+  "description": "Ask Clef-Flash \u2014 Cloudflare's 9B SystemOne decision model, run locally on MLX from a pinned, reviewed snapshot of mlx-community/clef-flash-8bit \u2014 typed questions about text (yes/no, choice, score) and get calibrated probabilities back in Jev's shapes; batches every question for a text into one forward pass and runs several model instances on the GPU at once. The local, free replacement for laya-decisions and jev-decisions.",
+  "version": "836a24",
+  "updated": 1791469330.358088,
+  "requires": [
+    "PIL",
+    "huggingface_hub",
+    "mlx"
+  ]
+}

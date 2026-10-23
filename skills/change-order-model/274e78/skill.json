@@ -1,0 +1,11 @@
+{
+  "name": "change-order-model",
+  "description": "Label each eDIL project by whether its construction budget took change orders \u2014 read from the AIA G702 contractor's-draw summary in every monthly progress-report workbook (initial contract, change orders to date, count, billed to date) \u2014 and fit the kept text and picture criteria to that label with a cross-validated L1 (lasso) model, reporting honest outer-CV AUC and bootstrap selection frequencies. Needs edil-corpus and criteria-loop.",
+  "version": "274e78",
+  "updated": 1791660716.306145,
+  "requires": [
+    "numpy",
+    "pandas",
+    "sklearn"
+  ]
+}

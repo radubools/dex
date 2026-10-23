@@ -1,0 +1,2 @@
+# Apple silicon only: mlx ships arm64 macOS wheels and nothing else.
+laya-mlx>=0.2.0

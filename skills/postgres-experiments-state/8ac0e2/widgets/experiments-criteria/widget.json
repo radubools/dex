@@ -1,0 +1,5 @@
+{
+  "name": "experiments-criteria",
+  "title": "Criteria dashboard",
+  "description": "One task's Laya and Jev criteria read live from experiments.state: pick a snake_case name ordered by recorded hits, see the run's metrics as cards, and scroll the chunks whose verdict clears a threshold."
+}

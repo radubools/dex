@@ -1,0 +1,10 @@
+{
+  "$comment": "A `*.criteria.json` is a pointer at a task in experiments.history, not a document: the widget reads it for a task name and then queries /api/sql. `criteria.json` and `final-criteria.json` already exist in dozens of packages as ordinary question sets, and neither ends with `.criteria.json`, so the suffix rule does not claim them — the excludes are there so a rename cannot make it start.",
+  "rules": [
+    {
+      "widget": "criteria-dashboard",
+      "extensions": [".criteria.json"],
+      "excludes": ["criteria.json", "final-criteria.json", "criteria_final.json"]
+    }
+  ]
+}

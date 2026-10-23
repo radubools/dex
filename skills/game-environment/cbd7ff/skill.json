@@ -1,0 +1,10 @@
+{
+  "name": "game-environment",
+  "description": "Scenery for Many Builders on the game-mesh core: seamless seasonal terrain tiles and chunks, Canadian-wilderness trees and plants, props, and a 360-degree backdrop (sky dome, treelines, hills, mountains, clouds) for a free-orbiting camera.",
+  "version": "cbd7ff",
+  "updated": 1792650883.608524,
+  "requires": [
+    "PIL",
+    "numpy"
+  ]
+}

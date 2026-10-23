@@ -1,0 +1,298 @@
+{
+  "meta": {
+    "document": "/Users/raduparadovschi/dex/datasets/construction/eDIL_PACS_Projects_Mass-Load/11-35-55_Commercial-Other_Movie-Studio/3730_ProductionCenterRENOV_LosAngeles-CA/Init_Report/Hollywood Production Cntr Cost Analysis.pdf",
+    "extractor": "pdftotext -layout",
+    "segment_budget": 380
+  },
+  "chunks": {
+    "194ce411c921": {
+      "index": 0,
+      "indices": [
+        0
+      ],
+      "text": "Professional Associates\n                                                        CONSTRUCTION SERVICES, Inc.\n                                                        Construction and Engineering Solutions for Financial Industries\n\nCONSTRUCTION ANALYSIS\n                                                                  for\n\nHOLLYWOOD PRODUCTION CENTER\n                                                 6350 Santa Monica Boulevard\n                                                       Los Angeles, CA\nHollywood Production Center\n\nBORROWER\n\nA & G, LLC\n                                                       AMIDI GROUP\n                                                    370 Convention Way,\n                                                   Redwood City, CA 94063\n\nPREPARED FOR\n\nNancy Tillman\n                                                       First Vice President\n                                                         East West Bank\n\nPREPARED BY\n\nBertie Chawla\n                                                    Professional Associates\n                                                   Construction Services, Inc.\n                                                        (714) 571-0287\n\nPACS Project No.: 3730\n\nReport Date: September 25, 2012\n\nEAST WEST BANK INTERNAL USE ONLY\n\n1626 E. 4th Street, Santa Ana, CA 92701\n                              T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nHollywood Production Center                                    9/25/12\n\nCONTENTS\n\n1.0     EXECUTIVE SUMMARY\n\n1.1     Summary\n                1.2     Recommendations\n                1.3     Site Plan / Elevations\n\n2.0     COST ANALYSIS\n\n3.0     PROJECT DESCRIPTION\n\n4.0     PROJECT DOCUMENTATION REVIEW",
+      "tokens": 341
+    },
+    "641d2ead3c5c": {
+      "index": 1,
+      "indices": [
+        1
+      ],
+      "text": "4.01    Plans and Specifications\n                4.02    Site Plan and Survey\n                4.03    Geotechnical Report\n                4.04    Environmental Site Assessment\n                4.05    Construction Contract\n                4.06    Construction Schedule\n                4.07    Permitting Status\n                4.08    Utility Services\n                4.09    Consulting Agreements\n\n5.0     INSURABLE VALUE\n\n6.0     EXPERIENCE REVIEW OF CONTRACTOR\n\n7.0     APPENDICES\n\ni          PACS, Inc.\n                                                        (714) 571-0287\n\nHollywood Production Center                                                                         9/25/12\n\n1.0     EXECUTIVE SUMMARY\n\n1.1     Summary\n\nWe have reviewed the construction documents available to us for the proposed\n        renovation of an existing 26,893 SF office building located at 6350 Santa Monica\n        Boulevard, for use as a production center facility. The purpose of this analysis is to\n        reasonably verify the adequacy of the Bank’s/Borrower's direct cost budget,\n        determine the completeness of the submitted documents and address any\n        significant issues that may affect the construction cost or schedule.\n\nThe table below presents the summary of our estimate of the direct cost as\n        compared with the available project budget provided by the Bank/Borrower.\n\nDescription           Borrower             PACS           Difference       Percent\n                          B                   C                  D             E=D-C           F=E/C",
+      "tokens": 341
+    },
+    "2395de6629a3": {
+      "index": 2,
+      "indices": [
+        2
+      ],
+      "text": "Net Hard Cost                   $2,066,616.00        $2,344,574.00   $277,958.00         13.45%\n         Overhead & Fee                    $149,500.00          $370,779.00   $221,279.00        148.01%\n         GC's Contingency                   $78,500.27           $81,461.00      $2,960.73         3.77%\n\nArch & Engr                        $55,750.00           $79,840.70    $24,090.70         43.21%\n         Permits & fees                     $20,153.00           $40,339.50    $20,186.50        100.17%\n\nSubtotal Hard Costs                $2,370,519           $2,916,994      $546,475         23.05%\n\nHard Cost Contingency              $47,410.00          $139,840.70    $92,430.70        194.96%\n         FF&E                          Incl. above       Incl. above\n         Architecture/Engr/Testing     Incl. above       Incl. above\n\nGovernment Permits and Fees   Incl. above       Incl. above\n\nTotal Direct Cost                  $2,417,929           $3,056,835      $638,906         26.42%",
+      "tokens": 311
+    },
+    "497cd9dfe46e": {
+      "index": 3,
+      "indices": [
+        3
+      ],
+      "text": "It is our conclusion that the Borrower’s direct cost budget is much lower than\n        market averages. Please note the following:\n                     GC’s budget for general conditions, overhead and fee is only 7.23% of\n                      the hard cost. Typically for such a project, you will see a mark-up of 15%\n                      to 18%. There are no budget line items for overhead and fee in the cost\n                      breakdown. Per the GC, this cost is in-built within the line items.\n\n1                                           PACS, Inc.\n                                                                                             (714) 571-0287\n\nHollywood Production Center                                                               9/25/12\n\n   The overall hard cost contingency is $125,910 or 5.49%, which is quite\n                    low for such a rehab project, with older structure.\n                   The budget for A/E ($55,750) is quite low, of which $50K has reportedly\n                    already been spent. The GC explained that they prepare most of their\n                    own plans/design.\n                   Per the Borrower, most of the work is being performed with in-house\n                    labor. Only a very few subcontractors are being hired (HVAC, fire\n                    sprinklers, roofing). This arrangement results in a much lower cost than\n                    market averages.\n\nA soils report and the environmental reports were not available to us. The project\n        requires additional foundation work. Abatement work is all complete, per Ali Afshar.\n        The plans have been approved by the city and all permits (except fire sprinkler)\n        have been issued. Copies of current permits were not available to us.",
+      "tokens": 376
+    },
+    "a8d7f5b962d3": {
+      "index": 4,
+      "indices": [
+        4
+      ],
+      "text": "Twenty five sheets of plans were provided to us and are considered a ‘builder set’,\n        i.e., they are quite basic, as essentially the project is an ‘owner-builder’ as-well-as,\n        ‘design-build’. Mechanical, electrical, plumbing and civil plans were missing from\n        the drawing set provided to us.\n\nThe construction contract(s) provided is also a very basic document, lacking most\n        clauses found in a typical AIA contract format. Two versions of the contract were\n        provided. The contract is ‘cost plus’.\n\nWe were informed that work is well underway with framing near completion and\n        interior drywall hung on one side of the walls, insulation is being installed, and\n        rough mechanical, electrical and plumbing work is well underway. Roofing work is\n        complete and elevator work is starting very soon. The GC expects the work to\n        complete sooner than the published scheduled completion date of 2/28/13.\n\n1.2     RECOMMENDATIONS\n\nBudgetary Issues\n\n     Borrower’s direct cost budget is much lower than market averages. This was\n              acknowledged by the contractor. A significant portion of the work is self\n              performed, which probably results in about 15% reduction in cost.\n              The hard cost contingency ($125,910 – combined) is low for such a rehab\n              type project.\n\nAn owner’s budget for liability insurance is not included.\n\n2                                      PACS, Inc.\n                                                                                   (714) 571-0287\n\nHollywood Production Center                                                          9/25/12\n\nRequired documentation",
+      "tokens": 358
+    },
+    "73c76b8a0037": {
+      "index": 5,
+      "indices": [
+        5
+      ],
+      "text": "     Soils report – for Bank’s file\n             Environmental Reports, including asbestos and lead paint abatement\n              certifications – for Bank’s file\n             Current permits\n\nGeneral Recommendations\n\n     Bank should ensure lien priority, as construction is ongoing.\n             Please review all ‘blue’ highlighted items in this report.\n\n3                                PACS, Inc.\n                                                                              (714) 571-0287\n\nHollywood Production Center                                          9/25/12\n\n1.3     SITE PLAN / ELEVATIONS\n\nView from front - rendering\n\nRear View -rendering\n\n4                       PACS, Inc.\n                                                              (714) 571-0287\n\nHollywood Production Center                                                             9/25/12\n\n2.0     COST ANALYSIS\n\nBased on the documents submitted, we have audited and reviewed the Direct\n        Cost estimate for the construction of the subject project. In addition, we have\n        prepared a conceptual cost estimate of the project based on the available plans\n        and information.\n\nOur estimate of the direct construction cost of the project (Hard cost, FF&E, A/E,\n        Permits & Fees and Contingency) is $3,056,835 and is $638,906 or 26.42% higher\n        than the comparable budget provided by the Borrower/Bank. This budget is\n        attached as Appendix 3. The main reasons for this difference are as follows:",
+      "tokens": 344
+    },
+    "235b78bf0bfc": {
+      "index": 6,
+      "indices": [
+        6
+      ],
+      "text": "   Contractor is self performing much of the work. This probably results in\n                reduction in cost by 10% to 15%.\n               Project is effectively an owner builder situation, even though the contracting\n                entity and the Borrowing entity are different. The GC exclusively works for\n                the Borrower.\n               The budget for contingency is low.\n               Budget for A/E is low.\n\nPACS’s cost estimate summary is attached as Appendix 2.\n\nHard Cost of Construction\n\nA one page estimate dated 9/10/12 indicates a hard cost of $2,370,519, which\n        includes a contingency of $78,500. In addition, furnishings worth $100,000 and gym\n        equipment worth $25,000 are also included. No GC fee and GC’s overhead are\n        noted. However, some of the typical general conditions are noted separately in the\n        budget.\n\nWe were informed that the GC will self perform much of the work, except the\n        HVAC, fire sprinklers, paving, roofing, etc.\n\nOur estimate of the ‘net’ (trade work) hard cost is 13.45% or $277,958 higher than\n        the GC’s budget of $2,066,616.\n\nOur estimate for the GC’s overhead and fee is 148% or $221,279 higher than the\n        GC’s corresponding budget of $149,500. The GC’s budget is too low compared to\n        market averages.\n\nNo third party GC will be able to complete the work for the contract amount of\n        $2,370,519.",
+      "tokens": 369
+    },
+    "f3f71cf0c55a": {
+      "index": 7,
+      "indices": [
+        7
+      ],
+      "text": "Contractor’s estimate is attached as Appendix 4.\n\n5                                     PACS, Inc.\n                                                                                 (714) 571-0287\n\nHollywood Production Center                                                           9/25/12\n\nOverall, for the contract cost, our estimate is 23% or $546,475 higher than the\n        budget of $2,370,519.\n\nThe GC noted that he is comfortable with the budget and does not expect to\n        exceed it.\n\nOwner’s Cost\n        The GC noted that all hard costs are included within their budget.\n\nFF&E\n\nThe GC’s contract includes a sum of $143,750 for the gym equipment and furniture\n        and fixtures for the building. No detailed listing, purchase orders or contracts for\n        FF&E were available to support the budget.\n\nGovernment Fees & Permits\n\nA sum of $20,153 is included in the GC’s budget for the mechanical and electrical\n        permits only. No line item for actual building permits, miscellaneous permits and\n        utility fees is noted. We have allowed a budget of $40,340.\n\nArchitecture & Engineering\n\nThe project is essentially design-build. The drawings are prepared by the contractor\n        and are minimal in scope. A budget of $50,000 is included. We would expect\n        market rate cost to be three times higher. We have reduced our estimate of the A/E\n        fees by $60K to account for the ‘design-build’ approach and the level of details of\n        the plans.\n\nContingency",
+      "tokens": 347
+    },
+    "a2214119037c": {
+      "index": 8,
+      "indices": [
+        8
+      ],
+      "text": "A separate project contingency of $47,410 (2%) is included in the Loan budget.\n        Given that the project is a major rehab of older building, this contingency even\n        along with the $78,500 in contract contingency may be low.\n\n6                                    PACS, Inc.\n                                                                               (714) 571-0287\n\nHollywood Production Center                                                             9/25/12\n\n3.0     PROJECT DESCRIPTION\n\nThe proposed project involves the renovation of an existing two story facility with an\n        area of 26,893 SF, into a Hollywood Production Center, located on a one flat lot. A\n        site plan is attached as Appendix 6. The subject site consists of three legal land\n        parcels and is 0.80 acres or 35,106 square feet in size. The site is rectangular in\n        shape and is generally level and at street grade. The property is bordered by\n        streets on three sides. Access to the site is provided via two driveways located\n        on Lillian Way. The site will be fenced.\n\nThe building will be occupied by Hollywood Production Center, LLC (HPC), which is\n        an Amidi related entity. Hollywood Production Center, LLC is a related party to the\n        owner of the building. Hollywood Production Center, LLC is a business that\n        provides immediate occupancy of creative office space and full service amenities\n        for TV/film production, post-production, new media, and publishing companies.",
+      "tokens": 319
+    },
+    "5cfb9005f135": {
+      "index": 9,
+      "indices": [
+        9
+      ],
+      "text": "The existing building was built in stages from 1935 thru 1970’s and is a class C\n        improvement.      A complete renovation is proposed, which is underway.\n        Approximately 44 feet by 46 feet new foundation with grade beams will be cast.\n        Structural steel brace frames will be added above this foundation to seismically\n        strengthen the existing structure. The building is a mix of reinforced poured in place\n        concrete, wood frame, stucco exterior and concrete block. The building has\n        conventional shallow spared footings and has fire sprinklers. Parking for the\n        subject is provided in 58 surface parking spaces located at the rear of the site.\n        The parking ratio is approximately 2.16 spaces per 1,000 rentable SF.\n\nThe first floor of the building has an area of 14,036 SF. It includes numerous rooms\n        accessed via a corridor. The second floor has an area of 13,929 SF. This floor also\n        will have numerous rooms. Access is provided via two sets of stairs. An elevator\n        will be added to the building. The building has two sets of existing stairs. About\n        1,960 SF of new area will be provided on the second floor. A set of restrooms will\n        be provided on each floor. The second floor also has an employee exercise room\n        with lockers and showers.\n\nAdditional project data is attached as Appendix 8.\n\n7                                      PACS, Inc.\n                                                                                 (714) 571-0287\n\nHollywood Production Center                                                           9/25/12\n\n4.0    PROJECT DOCUMENTATION REVIEW\n\n4.01    Plans and Specifications",
+      "tokens": 365
+    },
+    "d9ea07c3b5b1": {
+      "index": 10,
+      "indices": [
+        10
+      ],
+      "text": "We performed a cursory review of plans prepared under the direction of ATA Real\n        Estate & Construction (GC), of Los Angeles, CA. The primary purpose of our\n        review is to understand the overall scope of the project and evaluate the project\n        budgets. A code compliance review is not within our scope of services.\n\nThe plans received by us are marked ‘Approved’, with a date of 9/4/10. The plans\n        themselves have varies dates on them, mostly dated 2010. The plans are stamped\n        by the GC’s employee (Nasser Ahmad). A total of 25 sheets of architectural and\n        structural plans were available. Plans for, electrical, plumbing, mechanical, fire\n        sprinklers and site work were not available.\n\nAs noted earlier, the plans are prepared to a standard of a ‘builder set’, which are\n        minimal in nature, to secure a building permit.\n        A list of plans available to us is attached as Appendix 7.\n\n4.02    Land Title Survey Plan and Preliminary Title Report\n\nAn ALTA survey was not available to us.\n\nThe assessor parcel numbers for the site are as follows:\n              5533-016-002\n              5533-016-005\n              5533-016-006\n\nThe site is zoned MR-1 (Restricted Industrial)\n\nThe preliminary title report for the property dated July 27, 2012 indicates that the\n        property has addresses of; 6350 Santa Monica Boulevard and 1067 Lillian Way,\n        Los Angeles. The property has four parcels and three APN’s. A covenant for\n        ingress and egress in favor of Pacific Title & Art Investment Company is noted.\n        No easements are noted.",
+      "tokens": 373
+    },
+    "a16e7726edae": {
+      "index": 11,
+      "indices": [
+        11
+      ],
+      "text": "A supplemental title policy indicates that any lien as a result of work recently\n        completed is not covered.\n\n8                                   PACS, Inc.\n                                                                               (714) 571-0287\n\nHollywood Production Center                                                                 9/25/12\n\n4.03    Geotechnical Report\n\nA soils report was not available to us. New footings are being installed and we\n        would expect that the city would have required a soils report.\n\n4.04    Environmental Report\n\nEnvironmental Reports were not available to us. Due to the age of construction of\n        the improvements (pre 1978), asbestos and lead paint was likely present in the\n        building and needed abatement before the interior was demolished. Per the GC,\n        abatement work is complete.\n\nEnvironmental reports along with clearance letter for asbestos and lead paint\n        should be obtained for the Bank’s file.\n\n4.05    Construction Contract\n\nConstruction Management Agreement\n        A three page non-standard agreement between ATA Real Estate & Construction\n        (ATA) and A&G LLC (owner), dated June 28, 2011 was reviewed. Key information\n        is noted below:",
+      "tokens": 255
+    },
+    "75d3cb936f8c": {
+      "index": 12,
+      "indices": [
+        12
+      ],
+      "text": "   This is a construction management agreement.\n               Some design services have been completed.\n               ATA has assisted the Owner as a pre-construction services consultant\n                and provided preliminary layouts, and final design for obtaining building\n                permits, provided cost estimating, value engineering, scheduling, and\n                design-assist advice for Owner and its consultants. ATA has self-\n                performed architectural and structural design of the project, and\n                administered other design consultants which were paid by the owner.\n               Project management and administration services will be provided under this\n                agreement.\n               ATA will manage the full design, permit coordination and construction of the\n                project. ATA will sign all sub-contracts and manage all day-to-day activities\n                of the project, including preparation of billings and collection of lien releases.\n               Price for design services is $50,000 and is complete.\n               Price for Project Administration and Construction Management will be 15%\n                of the hard and soft cost, excluding cost related to construction loans.\n               Owner will provide liability insurance.\n\n9                                       PACS, Inc.\n                                                                                     (714) 571-0287\n\nHollywood Production Center                                                             9/25/12\n\n   Exhibits A (Project Performance Schedule) and B (Project Budget) are\n                part of this Agreement\n\nThe submitted construction management agreement is a ‘cost plus’ contract. The\n         agreement format itself is lacking most of the clauses typically found in in an AIA\n         CM agreement format.",
+      "tokens": 362
+    },
+    "cb8dd22e2d4a": {
+      "index": 13,
+      "indices": [
+        13
+      ],
+      "text": "Construction Agreement\n         A 44 page agreement between A&G LLC (Owner) and ATA Real Estate &\n         Construction (Contractor), dated 1/15/2012 was reviewed. Key information is as\n         follows:\n\n   The contractor will provide design services, coordination with the city to get\n                permits, utility coordination and construction of the improvements.\n               Design phase cost is ‘cost of the design plus $50,000’.\n               Construction cost is $2,320,519.\n               An invoice with detailed back-up will be submitted to the owner each month.\n               10% retention will be held and will be paid 60 days after completion of the\n                project.\n               The following exhibits are referenced to the agreement;\n                       A      Plans & Specifications\n                       B      Project Schedule\n                       C      Project Budget\n\nMost of the sheets of the contract are actually the attached plans and schedule. The\n       above noted agreement is ‘very minimalistic’.\n\nIt is not clear as to why there are two contracts.\n\n4.06     Construction Schedule\n\nA three page bar chart construction schedule (undated) was reviewed. Key\n         milestone dates are as follows:",
+      "tokens": 277
+    },
+    "e9f24198f114": {
+      "index": 14,
+      "indices": [
+        14
+      ],
+      "text": "Overall (296 days)                  1/12/12               2/28/13\n                Permits                             1/12/12               2/10/12\n                Roofing                             1/20/12               3/7/12\n                Foundation                          1/20/12               2/17/12\n                Steel Structure                     2/13/12               3/19/12\n                Interior framing                    2/20/12               5/31/12\n                Rough Plumbing                      2/20/12               9/20/12\n                Rough electrical                    9/28/12               11/22/12\n\n10                                    PACS, Inc.\n                                                                                 (714) 571-0287\n\nHollywood Production Center                                                                          9/25/12\n\nKitchen                              12/24/12                   2/28/13\n                Plumbing fixtures                    12/21/2                    2/27/13\n                Fire sprinklers                      8/28/12                    12/31/12\n                HVAC                                 9/13/12                    1/16/13\n                Façade                               10/8/12                    11/29/12\n                Elevator                             8/17/12                    1/10/13\n                Furnishings                          2/1/13                     2/28/13\n                Site work                            11/27/12                   12/31/12\n\nPer the GC, work is well underway and on target to complete by February 2013 or\n        earlier.\n\n4.07    Permitting Status\n\nThe plans for the project have been approved. The following documents were\n        provided:",
+      "tokens": 368
+    },
+    "815ac36513e0": {
+      "index": 15,
+      "indices": [
+        15
+      ],
+      "text": "Document No.           Date of Issue           Work                      Fee\n                10014-10000-02101      9/14/2010               Addition & remodel        $7,314.29\n                                       Ready to issue          of     the    existing\n                                                               building, add 4 new\n                                                               parking, add 2nd floor\n                                                               framing\n                10016-10000-01124          1/19/2010           Early start of interior   $339.74\n                                       Application submittal   demolition,       non-\n                                                               structural.        No\n                                                               exterior work\n\nThe above noted are not current permits, as permits expire if no work is started\n        within 180 days. Copies of all current permits should be obtained.\n\n4.08    Utility Services\n\nThe existing building has all utilities already hooked-up.\n\n4.09    Consulting Agreements\n\nNo A/E consulting agreements were available to us. The plans were prepared by\n        the contractor.\n\n11                                             PACS, Inc.\n                                                                                           (714) 571-0287\n\nHollywood Production Center                                                         9/25/12\n\n5.0     INSURABLE VALUE ESTIMATE\n\nThe insurable value of the project is as follows.\n\nBuilding              $4,200,000\n        FF&E                  $150,000\n\n6.0     EXPERIENCE RECORDS\n\nConstruction experience of the construction team (Architect, Contractor and\n        Owner’s Rep) is a key factor in bringing the project within budget and on time. A\n        less experienced team will result in higher costs and longer duration.",
+      "tokens": 370
+    },
+    "cd926956fef4": {
+      "index": 16,
+      "indices": [
+        16
+      ],
+      "text": "We have worked on other Amidi projects and have worked with Nasser Ahmadi\n        and his team. They are well qualified to build the project.\n\nA BICA credit report for ATA Real Estate Construction (Lic. No. 858436) of\n        Redwood City was reviewed by us. The principals of this company are; Nasser\n        Ahmadi, Rahim & Saeed Amidhozour, and Ali Afshar. The license was issued in\n        2005. No liens or citations are reported.\n\n12                                PACS, Inc.\n                                                                             (714) 571-0287\n\nHollywood Production Center                                                                            9/25/12\n\nPlease call with any questions you may have.\n\nPrepared By\n\nBertie\n                                                    Digitally signed by Bertie\n                                                    Chawla\n                                                    DN: cn=Bertie Chawla,\n                                                    email=bertie@costreview.c\n\n---------------------------------- Chawla\n                                                    om, ou=PACS, c=US\n                                                    Date: 2012.09.25 12:17:13\n                                                    -07'00'\n\nBertie Chawla\n        September 25, 2012\n\nLimitations and Qualifications",
+      "tokens": 285
+    },
+    "185f575c803d": {
+      "index": 17,
+      "indices": [
+        17
+      ],
+      "text": "This report is prepared for the sole use and benefit of East West Bank (Client) and is\n        based, in part, upon documents, writings, and information provided by the Client and\n        the Borrower and their agents. Neither this report, nor any of the information contained\n        herein, shall be used or relied upon for any purpose or entity other than the Client. This\n        report is based on a cursory review of the plans and construction documents available,\n        and should not be construed as an exhaustive audit of the construction cost and\n        documents. Construction costs are subject to various influences such as market\n        conditions, management and experience of the construction and design team, weather\n        and city related issues. PACS is entitled to rely upon the work of architects, engineers\n        and other experts and shall have no liability for its review of or any defects in any plans,\n        specifications, reports or other documents prepared by such architects, engineers and\n        other experts. This report is prepared under the agreement with Client and is subject to\n        its limitations and liabilities only.\n\n13                                  PACS, Inc.\n                                                                                             (714) 571-0287\n\nHollywood Production Center                                          9/25/12\n\nLIST OF APPENDICES\n\nAppendix 1            Direct Cost Budget Analysis\n\nAppendix 2            PACS Conceptual cost estimate\n\nAppendix 3            Borrower’s / Bank’s Budget\n\nAppendix 4            Contractor’s Estimate\n\nAppendix 5            Blank\n\nAppendix 6            Site Plan\n\nAppendix 7            List of Plans\n\nAppendix 8            Project Data\n\n14                  PACS, Inc.\n                                                              (714) 571-0287\n\nHollywood Production Center                                                               9/25/12",
+      "tokens": 379
+    },
+    "c88b56107b2d": {
+      "index": 18,
+      "indices": [
+        18
+      ],
+      "text": "APPENDIX 1\n\nDirect Cost Budget Analysis\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nAPPENDIX 1\nProfessional Associates\nConstruction Services, Inc.\n                             9/25/2012 10:20\n                               DIRECT COST BUDGET ANALYSIS\n\nHOLLYWOOD PRODUCTION CENTER\n                                          Los Angeles, CA\n\nS.No              Description                  Borrower             PACS         Difference    Percent\n    A                    B                           C                  D            E=D-C        F=E/C\n                                          0\n           Net Hard Cost                       $2,066,616.00      $2,344,574.00    $277,958.00     13.45%\n           Overhead & Fee                        $149,500.00        $370,779.00    $221,279.00    148.01%\n           GC's Contingency                       $78,500.27         $81,461.00      $2,960.73      3.77%\n\nArch & Engr                            $55,750.00          $79,840.70    $24,090.70     43.21%\n           Permits & fees                         $20,153.00          $40,339.50    $20,186.50    100.17%\n\nTotal Sitework & Buildings Costs            $2,370,519.27      $2,916,994.20    $546,474.93     23.05%",
+      "tokens": 363
+    },
+    "486ec811140c": {
+      "index": 19,
+      "indices": [
+        19
+      ],
+      "text": "Subtotal Hard Costs                     $2,370,519         $2,916,994      $546,475     23.05%\n\nHard Cost Contingency                   $47,410.00       $139,840.70     $92,430.70     194.96%\n           FF&E                                Incl. above    Incl. above           #VALUE!      #VALUE!\n           Architecture/Engr/Testing           Incl. above    Incl. above           #VALUE!      #VALUE!\n\nGovernment Permits and Fees Incl. above              Incl. above         #VALUE!      #VALUE!\n\nTotal Direct Cost                       $2,417,929         $3,056,835      $638,906     26.42%\n\nNotes\nEstimate subject to a variation of plus/minus 5%\n\nHollywood Production Center                                                               9/25/12\n\nAPPENDIX 2\n\nPACS Conceptual Estimate\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nAPPENDIX 2\nProfessional Associates\nConstruction Services, Inc.\n        9/25/2012 10:20\n                                      COST ESTIMATE SUMMARY SHEET\n\nHOLLYWOOD PRODUCTION CENTER\n                                                     Los Angeles, CA\n\nDescription              Quantity         Units     Unit Price     Estimate      Contract",
+      "tokens": 329
+    },
+    "435dfe0bc6ba": {
+      "index": 20,
+      "indices": [
+        20
+      ],
+      "text": "Offsite street work 3 EA $10,000.00 $30,000 Sitework 21,070 SF $7.00 $147,490 $99,360 Building Demo & Abatement 26,893 SF $3.00 $80,679 $51,750 Seismic Upgrades 26,893 SF $5.00 $134,465 $113,390 Roofing 14,000 SF $6.00 $84,000 $102,226 Interior Work 26,893 SF $55.00 $1,479,115 $1,407,158 2nd floor addition 2,153 SF $25.00 $53,825 $18,112 Façade work 3 EA $30,000.00 $90,000 $56,120 Elevator 1 LS $100,000.00 $100,000 $74,750 Equipment 1 LS $145,000.00 $145,000 $143,750 Total Sitework & Buildings Costs 26,893 SF $87 $2,344,574 $2,066,616 Design Phase General Conditions 12 Months $20,000.00 $240,000 $149,500 Contractor's Overhead $2,584,574 Percent 2.00% $51,691 Contractor's Profit $2,636,265 Percent 3.00% $79,088 Insurance $2,715,353 Percent 0.00% $0 Contingency - Contractor's $2 715 353 $2,715,353 Percent 3 00% 3.00% $81 461 $81,461 $78 500 $78,500 Subtotal Hard Costs 26,893 SF $104.00 $2,796,814 $2,294,616",
+      "tokens": 358
+    },
+    "9b869f457687": {
+      "index": 21,
+      "indices": [
+        21
+      ],
+      "text": "$0\n        Owner's Contingency                $2,796,814       Percent        5.00%       $139,841        $47,410\n        Architecture/Engr/Testing          $2,796,814       Percent        5.00%       $139,841        $55,750\n        Less design builder A/E                                                        -$60,000\n        Government Permits and Fees                26,893     SF            $1.50       $40,340        $20,153\n\nTotal Direct Costs                         26,893     SF         $113.67      $3,056,835    $2,417,929\n\nInsurable Value                                                               $2,759,165\n        Construction Duration, Months                                                         12\n\nEstimate subject to a variation of plus/minus 5%\n\nHollywood Production Center                                                               9/25/12\n\nAPPENDIX 3\n\nBorrower’s Budget\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com",
+      "tokens": 256
+    },
+    "d620ad5ccff0": {
+      "index": 22,
+      "indices": [
+        22,
+        26
+      ],
+      "text": "EAST WEST BANK\n                                                           CONSTRUCTION DISBURSEMENT BUDGET\nLoan No. 582236                                                                         PROJECT DESCRIPTION\nPROJECT:                                                                                Tenant improvement and renovation of office building\nOWNER: A & G, LLC                                                                                     ADDRESS:\nAddress: 370 Convention Way, Redwood City, CA 94063                                                   6350 Santa Monica Blvd., Los Angeles, CA 90038\nPhone:                               Fax:                                                             PAY SCHEDULE:        Monthly/PACS\nContact: Rahim Amidhozour            Ali Afshar        aliafshar50@yahoo.com                          ACCOUNT OFFICER: David C. Lin\nCONTRACTOR: ATA REAL ESTATE CONSTRUCTION INC. (RELATED)                                               TERM:\nAddress: 1010 Wilshire Blvd., Suite #109, Los Angeles, CA 90017                                                            completion: April 2013\nPhone: 213-820-9899                  Fax: 323-871-8603                                                CONTRACT AMOUNT:\nContact: Ali Afshar                  aliafshar50@yahoo.com                                            COMPLETION DATE:\nLINE           DESCRIPTION                           PROJECT BUDGET                      DISBURSED      CURRENT        %        TOTAL       BALANCE          %\nNO.",
+      "tokens": 292
+    },
+    "c88fb1618426": {
+      "index": 23,
+      "indices": [
+        23
+      ],
+      "text": "Original Adjustments Current PREVIOUSLY REQUEST TOTAL AMOUNT COMP Land 0.00 0.00 ##### 0.00 0.00 Interest Reserve 103,571.00 103,571.00 0% 0.00 103,571.00 Disbursement Fee 12,000.00 12,000.00 0% 0.00 12,000.00 Closing incl title 4,000.00 4,000.00 0% 0.00 4,000.00 Loan Fees 12,500.00 12,500.00 0% 0.00 12,500.00 Hard Contingency 47,410.00 47,410.00 0% 0.00 47,410.00 0.00 0.00 ##### 0.00 0.00 0.00 ##### 0.00 0.00 TOTAL OWNER ITEMS 179,481.00 0.00 179,481.00 0.00 0.00 0% 0.00 179,481.00 Less Borrower Equity/Funds -1,275,000.00 -1,275,000.00 0% 0.00 -1,275,000.00 TOTAL EWB SOFT COSTS -1,095,519.00 0.00 -1,095,519.00 0.00 0.00 0% 0.00 -1,095,519.00 test 0.00 DATE Design Phase 50,000.00 50,000.00 0% 0.00 50,000.00 Demolition 51,750.00 51,750.00 0% 0.00 51,750.00 Mechanical Permit 4,628.75 4,628.75 0% 0.00 4,628.75 Electrical Engineering(Abrari) 9,200.00",
+      "tokens": 380
+    },
+    "ffc2e754ffca": {
+      "index": 24,
+      "indices": [
+        24
+      ],
+      "text": "9,200.00 0% 0.00 9,200.00 Electrical Permit 6,325.00 6,325.00 0% 0.00 6,325.00 Roofing 102,226.38 102,226.38 0% 0.00 102,226.38 Sheet Metal 6,900.00 6,900.00 0% 0.00 6,900.00 Soil Engineer 5,750.00 5,750.00 0% 0.00 5,750.00 Excavation 65,320.00 65,320.00 0% 0.00 65,320.00 Structural Steel 48,070.00 48,070.00 0% 0.00 48,070.00 Metal Stud Framing/Drywall 276,276.00 276,276.00 0% 0.00 276,276.00 Drywall 47,150.00 47,150.00 0% 0.00 47,150.00 Wood Floor 20,240.00 20,240.00 0% 0.00 20,240.00 Drop Ceiling 80,500.00 80,500.00 0% 0.00 80,500.00 Carpet 45,540.00 45,540.00 0% 0.00 45,540.00 Doors & Hardwares 73,600.00 73,600.00 0% 0.00 73,600.00 Window - exterior 27,600.00 27,600.00 0% 0.00 27,600.00 Window - interior 22,080.00 22,080.00 0% 0.00 22,080.00 Tile on wall,floor,hallway 85,215.00 85,215.00 0% 0.00 85,215.00 Paint 63,480.00 63,480.00",
+      "tokens": 380
+    },
+    "03f92695253f": {
+      "index": 25,
+      "indices": [
+        25
+      ],
+      "text": "0% 0.00 63,480.00 Kitchen Cabinet 6,325.00 6,325.00 0% 0.00 6,325.00 Insulation 33,032.60 33,032.60 0% 0.00 33,032.60 Sky Light 10,062.50 10,062.50 0% 0.00 10,062.50 Elevator 74,750.00 74,750.00 0% 0.00 74,750.00\n\nBUDGET - EWB EXCEL WORKSHEET                                                          9/25/2012                                                                1",
+      "tokens": 126
+    },
+    "7c3983db6fcf": {
+      "index": 27,
+      "indices": [
+        27
+      ],
+      "text": "Original Adjustments Current PREVIOUSLY REQUEST TOTAL AMOUNT COMP Plumbing 100,050.00 100,050.00 0% 0.00 100,050.00 Toilet Partitions 9,200.00 9,200.00 0% 0.00 9,200.00 Bathroom Accessories 3,450.00 3,450.00 0% 0.00 3,450.00 Interior Signage 3,450.00 3,450.00 0% 0.00 3,450.00 Appliances 3,450.00 3,450.00 0% 0.00 3,450.00 HVAC 80,500.00 80,500.00 0% 0.00 80,500.00 Electrical (TI) 248,400.00 248,400.00 0% 0.00 248,400.00 Swith Gear & Vault 57,500.00 57,500.00 0% 0.00 57,500.00 Fire Sprinkler 55,775.00 55,775.00 0% 0.00 55,775.00 Low Voltage 40,250.00 40,250.00 0% 0.00 40,250.00 Fire Alarm 17,250.00 17,250.00 0% 0.00 17,250.00 2 story new addition wood fram 18,112.50 18,112.50 0% 0.00 18,112.50 Stucco 17,020.00 17,020.00 0% 0.00 17,020.00 Restoring Façade of Building 11,500.00 11,500.00 0% 0.00 11,500.00 Stairway Railing 8,050.00 8,050.00 0% 0.00 8,050.00 GYM",
+      "tokens": 378
+    },
+    "f1097f1abfa8": {
+      "index": 28,
+      "indices": [
+        28
+      ],
+      "text": "Equipments 28,750.00 28,750.00 0% 0.00 28,750.00 Fire Extinguishers 4,600.00 4,600.00 0% 0.00 4,600.00 Mirrors 1,380.00 1,380.00 0% 0.00 1,380.00 Reception Counter 3,450.00 3,450.00 0% 0.00 3,450.00 Signage - outside 11,500.00 11,500.00 0% 0.00 11,500.00 Hardscape, Landscaping 46,000.00 46,000.00 0% 0.00 46,000.00 Block wall 21,850.00 21,850.00 0% 0.00 21,850.00 Metal Fence 13,110.00 13,110.00 0% 0.00 13,110.00 Stripping 6,900.00 6,900.00 0% 0.00 6,900.00 Furnishing 115,000.00 115,000.00 0% 0.00 115,000.00 Trash Container&Temp Toilets 23,000.00 23,000.00 0% 0.00 23,000.00 Job Supervision 69,000.00 69,000.00 0% 0.00 69,000.00 Casual Labor 57,500.00 57,500.00 0% 0.00 57,500.00 Contingency 78,500.27 78,500.27 0% 0.00 78,500.27 0.00 ##### 0.00 0.00 TOTAL ONSITE 2,370,519.00 0.00 2,370,519.00 0.00 0.00 0% 0.00 2,370,519.00",
+      "tokens": 378
+    },
+    "b05670d13676": {
+      "index": 29,
+      "indices": [
+        29
+      ],
+      "text": "TOTAL HARD COSTS                 2,370,519.00             0.00     2,370,519.00             0.00           0.00    0%           0.00   2,370,519.00\n\nTOTAL PROJECT COSTS             2,550,000.00              0.00 2,550,000.00                 0.00           0.00   0%            0.00 2,550,000.00\n      <Less Total Other Funds>       -1,275,000.00              0.00 -1,275,000.00                0.00           0.00   0%            0.00 -1,275,000.00\n\nBUDGET - EWB EXCEL WORKSHEET                                                          9/25/2012                                                                2",
+      "tokens": 177
+    },
+    "67d36808f0e1": {
+      "index": 30,
+      "indices": [
+        30
+      ],
+      "text": "EAST WEST BANK\n                                                          CONSTRUCTION DISBURSEMENT BUDGET\nLoan No. 582236                                                                        PROJECT DESCRIPTION\nPROJECT:                                                                               Tenant improvement and renovation of office building\nOWNER: A & G, LLC                                                                                   ADDRESS:\nAddress: 370 Convention Way, Redwood City, CA 94063                                                 6350 Santa Monica Blvd., Los Angeles, CA 90038\nPhone:                               Fax:                                                           PAY SCHEDULE:        Monthly/PACS\nContact: Rahim Amidhozour            Ali Afshar      aliafshar50@yahoo.com                          ACCOUNT OFFICER: David C. Lin\nCONTRACTOR: ATA REAL ESTATE CONSTRUCTION INC. (RELATED)                                             TERM:\nAddress: 1010 Wilshire Blvd., Suite #109, Los Angeles, CA 90017                                                          completion: April 2013\nPhone: 213-820-9899                  Fax: 323-871-8603                                              CONTRACT AMOUNT:\nContact: Ali Afshar                  aliafshar50@yahoo.com                                          COMPLETION DATE:\nLINE           DESCRIPTION                          PROJECT BUDGET                   DISBURSED        CURRENT        %        TOTAL       BALANCE         %\nNO.                                        Original     Adjustments      Current     PREVIOUSLY       REQUEST     TOTAL      AMOUNT                      COMP\n      TOTAL                          1,275,000.00              0.00   1,275,000.00           0.00             0.00   0%            0.00   1,275,000.00",
+      "tokens": 363
+    },
+    "8b7e365e541f": {
+      "index": 31,
+      "indices": [
+        31
+      ],
+      "text": "BUDGET - EWB EXCEL WORKSHEET                                                     9/25/2012                                                                  3\n\nHollywood Production Center                                                               9/25/12\n\nAPPENDIX 4\n\nContractor’s Budget\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nDATE: 09/10/2012\n               6350 Santa Monica Blvd Project Cost Estimate\n\nExhibit C\n                                      Description                       Unit       Quantity   Unit Price     T Budget",
+      "tokens": 138
+    },
+    "1580425d6b83": {
+      "index": 32,
+      "indices": [
+        32
+      ],
+      "text": "1    Design Phase 1                                              LS          1         $50,000        $50,000.00\n          2    Demolition                                                  LS          1         $45,000         $51,750.00\n          3    Mechanical Permit                                           LS          1          $3,500         $4,629.02\n          4    Electrical Engineering(Abrari)                              LS          1          $8,000         $9,200.00\n          5    Electrical Permit                                           LS          1          $5,500         $6,325.00\n               Roof Preparation (relocation of AC units & platforms),\n          6                                                                LS          1         $15,000         $17,250.00\n               Roof Drains and piping to roof.\n          7    Removing the existing Roofing Material & hauling out        LS          1          $7,500         $8,625.00\n          8    Cutting the roof for Elevator and building new framing      LS          1          $5,000         $5,750.00\n          9    Roofing                                                     sqft     18,890         3.25          $70,601.38\n          10   Sheet Metal and roof Gutters Around the Roof                LS          1          $6,000         $6,900.00\n          11   Soil Engineer                                               LS          1          $5,000         $5,750.00\n\n12   Excavation & RC Concrete For Steel Structure with BP       cyrd        127         400.00         $58,420.00",
+      "tokens": 352
+    },
+    "37920c01513c": {
+      "index": 33,
+      "indices": [
+        33
+      ],
+      "text": "13 Steel structure Framing Ib 19,000 2.20 $48,070.00 Excavation and RC concrete for outside wood 14 cyrd 15 400.00 $6,900.00 structure addtion 15 Metal stud Framing and dry wall(2600 lft) sqft 34,320 7.00 $276,276.00 16 Dry wall on existing wood frame sqft 21,500 1.50 $37,087.50 17 wood floor addition on steel structure sqft 2,200 8.00 $20,240.00 18 Dry wall on ceiling of the existing joist second floor sqft 5,000 1.75 $10,062.50 19 Drop ceiling on 1st floor & 2nd Floor sqft 20,000 3.50 $80,500.00 20 Carpet yrd 2,200 18.00 $45,540.00 21 Doors & Hardwares Each 128 500.00 $73,600.00 22 Window (Exterior) sqft 1,200 20.00 $27,600.00 23 Window (Interior) sqft 1,280 15.00 $22,080.00 24 Tile on the wall sqft 2,800 12.00 $38,640.00 25 Tile on the Floor sqft 1,950 6.00 $13,455.00 26 Tile on the Hall way sqft 4,800 6.00 $33,120.00 27 Paint sqft 92,000 0.60 $63,480.00 28 Kitchen Cabinet LS 1 5,500.00 $6,325.00 29 Insulation on Ceiling 2nd Floor(R30) sqft 14,500 0.50 $8,337.50 PHASE 2",
+      "tokens": 362
+    },
+    "15d4940c16a4": {
+      "index": 34,
+      "indices": [
+        34
+      ],
+      "text": "30 Insulation on Exterior Wall First & 2nd Floor(R19) sqft 13,400 0.45 $6,934.50 31 Insulation on Interior Wall First & 2nd Floor(R19) sqft 34,320 0.45 $17,760.60 32 Sky Light Each 5 1,750.00 $10,062.50 33 Elevator with excavation and framing/ Shaft LS 1 65,000.00 $74,750.00 34 Plumbing (Hot & Cold & Gas Rough & Finish) LS 1 87,000.00 $100,050.00 35 Toilet Partitions LS 1 8,000.00 $9,200.00 36 Bathroom Accessories LS 1 3,000.00 $3,450.00 37 Interior Signage LS 1 3,000.00 $3,450.00 38 Appliances LS 1 3,000.00 $3,450.00 39 HVAC Rough & Finish & Ventilation LS 1 70,000.00 $80,500.00 40 Electrical(TI) sqft 27000 8.00 $248,400.00 41 Swith Gear & Vault LS 1 50,000.00 $57,500.00 42 Fire Sprinkler LS 1 48,500.00 $55,775.00 43 Low Voltage LS 1 35,000.00 $40,250.00 44 Fire Alarm LS 1 15,000.00 $17,250.00 45 2 story new addition wood frame sqft 630 25.00 $18,112.50 46 Stucco sqyrd 370 40.00 $17,020.00 47 Restoring Façade of the Building(North & east) LS 1 10,000.00 $11,500.00 48 Stairway",
+      "tokens": 379
+    },
+    "36a2f62ed484": {
+      "index": 35,
+      "indices": [
+        35
+      ],
+      "text": "Railing LS 1 7,000.00 $8,050.00 49 GYM Equipments LS 1 25,000.00 $28,750.00 50 Fire Extinguishers LS 1 4,000.00 $4,600.00 51 Mirrorrs LS 1 1,200.00 $1,380.00 52 Reception Counter LS 1 3,000.00 $3,450.00 53 Budget for Outsite Signage(on the Roof) LS 1 10,000.00 $11,500.00 54 HardScape , LandScaping & shade LS 1 40,000.00 $46,000.00 55 Block wall around the Parking(3' Height) sqft 380 50.00 $21,850.00 56 Metal Fence around the Parking sqft 380 30.00 $13,110.00 57 Stripping LS 1 6,000.00 $6,900.00 58 Furnishing LS 1 100,000.00 $115,000.00 59 Trash Container & Temporary Toilets LS 1 20,000.00 $23,000.00 60 Job Supervision LS 1 60,000.00 $69,000.00 61 Casual Labor LS 1 50,000.00 $57,500.00 62 Contingency $78,500.00 TOTAL Phase 2 $2,320,519\n\nProject Manager: ALI AFSHAR                               TOTAL BUDGET Phase 1 & 2              $2,370,519.00\n               Senior Project Manager: NASSER AHMADI\n\nHollywood Production Center                                                               9/25/12\n\nAPPENDIX 5\n\nBlank",
+      "tokens": 354
+    },
+    "fea8521636cd": {
+      "index": 36,
+      "indices": [
+        36
+      ],
+      "text": "1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nHollywood Production Center                                                               9/25/12\n\nAPPENDIX 6\n\nSite Plan\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nHollywood Production Center                                                                 9/25/12\n\nAPPENDIX 7\n\nList of Plans\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com\n\nHollywood Production Center                                                                9/25/12\n\nAPPENDIX 8\n\nProject Data\n\nSee Appendix 7\n\n1626 East 4th Street, Suite 200, Santa Ana, CA 92701\n                        T: (714) 571-0287 F: (714) 571-0033 info@costreview.com",
+      "tokens": 260
+    }
+  }
+}

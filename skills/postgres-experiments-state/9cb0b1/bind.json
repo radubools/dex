@@ -1,0 +1,4 @@
+{
+  "$comment": "No widgets: this skill moves rows in and out of Postgres and writes no file worth looking at.",
+  "rules": []
+}

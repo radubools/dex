@@ -1,0 +1,4 @@
+# Pure-Python client: the model is hosted, so nothing local is needed but a
+# tokenizer to size chunks with. No mlx, no Apple silicon requirement.
+tokenizers>=0.15
+huggingface_hub>=0.20

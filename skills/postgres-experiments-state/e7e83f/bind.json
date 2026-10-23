@@ -1,0 +1,11 @@
+{
+  "$comment": "`chunks.json` is the trigger: it is in 87 of the project's 104 packages and in all 76 that have rows in experiments.history, so there is no package with something to show and no file to click. The widget reads the store out of the opened file and derives the task from the directory name. `*.criteria.json` stays for the two explicit cases — a pointer naming a task directly, and the self-contained file `dashboard.write` produces. The excludes guard the suffix rule: 26 packages hold a plain `criteria.json` question set, which is not a pointer, and a rename must not make it one.",
+  "rules": [
+    {
+      "widget": "criteria-dashboard",
+      "filenames": ["chunks.json"],
+      "extensions": [".criteria.json"],
+      "excludes": ["criteria.json", "final-criteria.json", "criteria_final.json"]
+    }
+  ]
+}

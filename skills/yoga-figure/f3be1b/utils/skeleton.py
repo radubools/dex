@@ -190,6 +190,161 @@ def hip_flexion(pose, side, trunk=("TOP_OF_THORACIC_SPINE",
     return angle_between(down, thigh)
 
 
+def shoulder_carry(pose, side, trunk=("TOP_OF_THORACIC_SPINE",
+                                      "BOTTOM_OF_SACRAL_SPINE")):
+    """Where a humerus is carried, as degrees out to the side and onto the chest.
+
+    The other joint `joint_angles` cannot report: a ball with no third landmark
+    to take an interior angle at, exactly the gap `hip_flexion` fills at the
+    hip. One number is not enough for this one, though — an arm forty degrees
+    off the trunk is unremarkable out to the side and impossible straight
+    backwards — so this gives two, both measured from an arm lying along the
+    trunk toward the pelvis. The first is how far out across the shoulder line,
+    unsigned, since left and right abduct the same way. The second is how far
+    round toward the front, signed, so an arm drawn behind the back reads
+    negative.
+
+        out, forward = skeleton.shoulder_carry(pose, "LEFT")
+        if out > 90:
+            problems.append("that arm has gone past overhead sideways")
+
+    `trunk` is the axis to measure against, superior end first, for a pose that
+    would rather use the lumbar spine than the whole trunk chord. Returns the
+    pair; which values a shoulder can reach is the pose's own business.
+    """
+    landmarks = pose["landmarks"]
+    superior, inferior = landmarks[trunk[0]], landmarks[trunk[1]]
+    up = [superior[i] - inferior[i] for i in range(3)]
+    length = math.sqrt(sum(component * component for component in up))
+    if length == 0:
+        raise ValueError("the two trunk landmarks coincide, so the trunk has "
+                         "no axis to carry an arm against")
+    up = [component / length for component in up]
+
+    # The shoulder line, squared against the trunk, and the front it implies.
+    across = [landmarks["RIGHT_SHOULDER"][i] - landmarks["LEFT_SHOULDER"][i]
+              for i in range(3)]
+    leaning = sum(across[i] * up[i] for i in range(3))
+    right = [across[i] - up[i] * leaning for i in range(3)]
+    width = math.sqrt(sum(component * component for component in right))
+    if width == 0:
+        raise ValueError("the shoulder line runs along the trunk axis, so it "
+                         "names no side to carry an arm out to")
+    right = [component / width for component in right]
+    front = [right[1] * up[2] - right[2] * up[1],
+             right[2] * up[0] - right[0] * up[2],
+             right[0] * up[1] - right[1] * up[0]]
+
+    humerus = [landmarks[f"{side}_ELBOW"][i] - landmarks[f"{side}_SHOULDER"][i]
+               for i in range(3)]
+    along = -sum(humerus[i] * up[i] for i in range(3))
+    return (math.degrees(math.atan2(
+                abs(sum(humerus[i] * right[i] for i in range(3))), along)),
+            math.degrees(math.atan2(
+                sum(humerus[i] * front[i] for i in range(3)), along)))
+
+
+def pelvis_axes(pose, sacrum_up=0.045, sacrum_back=0.035):
+    """The pelvis's own (superior, right, anterior) axes, from its three landmarks.
+
+    `rig.frame` builds a frame from a direction the landmarks hand you, and the
+    pelvis is the one part of the figure where they do not. The two hips give
+    its left-right axis and the only other point on it is the sacrum, which
+    sits up *and* back, so neither remaining axis is any landmark difference.
+    Turning that one offset back by the angle it was built at separates them
+    again.
+
+    `sacrum_up` and `sacrum_back` are how the figure was built — how far above
+    the hip midpoint the sacrum sits and how far behind it — and only their
+    ratio is read, so a figure scaled differently still recovers. The defaults
+    are an adult's; a build that used other offsets passes its own.
+
+        superior, right, anterior = skeleton.pelvis_axes(pose)
+
+    This is the frame a hip has to be measured in. Against the trunk instead —
+    which is what `hip_flexion` does, and the right answer when the trunk is
+    the reference the pose cares about — a figure is flattered by every degree
+    its spine has side-bent away from the leg, so a side-bending pose reads a
+    hip far inside its range that is in fact at the end of it.
+
+    Raises if the two hips coincide, or if the sacrum sits on the line between
+    them, since neither leaves the pelvis an orientation.
+    """
+    landmarks = pose["landmarks"]
+    left, right = landmarks["LEFT_HIP"], landmarks["RIGHT_HIP"]
+    across = [right[i] - left[i] for i in range(3)]
+    width = math.sqrt(sum(c * c for c in across))
+    if width == 0:
+        raise ValueError("the two hips are in the same place, so the pelvis "
+                         "has no left-right axis")
+    across = [c / width for c in across]
+
+    middle = [(left[i] + right[i]) / 2 for i in range(3)]
+    offset = [landmarks["BOTTOM_OF_SACRAL_SPINE"][i] - middle[i]
+              for i in range(3)]
+    along = sum(offset[i] * across[i] for i in range(3))
+    sagittal = [offset[i] - across[i] * along for i in range(3)]
+    if math.sqrt(sum(c * c for c in sagittal)) < 1e-9:
+        raise ValueError("the sacrum sits on the line between the hips, so the "
+                         "pelvis has no up and no front")
+
+    lean = math.degrees(math.atan2(sacrum_back, sacrum_up))
+    # Rodrigues about `across`, the same turn `rig.rotate` makes; duplicated
+    # rather than imported because this module does not depend on that one.
+    angle = math.radians(lean)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    turned = [sagittal[i] * cosine
+              + (across[(i + 1) % 3] * sagittal[(i + 2) % 3]
+                 - across[(i + 2) % 3] * sagittal[(i + 1) % 3]) * sine
+              + across[i] * sum(across[k] * sagittal[k] for k in range(3))
+              * (1.0 - cosine) for i in range(3)]
+    length = math.sqrt(sum(c * c for c in turned))
+    superior = [c / length for c in turned]
+    anterior = [across[(i + 1) % 3] * superior[(i + 2) % 3]
+                - across[(i + 2) % 3] * superior[(i + 1) % 3] for i in range(3)]
+    return superior, across, anterior
+
+
+def femur_against_pelvis(pose, side, sacrum_up=0.045, sacrum_back=0.035):
+    """One femur in its own pelvis's frame: (degrees out of neutral, direction).
+
+    What decides whether a lifted leg is a leg a body could lift. A hip's range
+    is not one number: pure abduction is stopped early by the femoral neck
+    against the rim of the socket, pure flexion by the hamstrings with the knee
+    straight, and the diagonal between them runs much further than either —
+    which is the direction every leg-over-shoulder pose uses. So a single angle
+    cannot be compared against a single limit, and one that is lets a figure
+    pass with a leg lifted 135 degrees in the frontal plane, 45 past a middle
+    split.
+
+    The first number is how far the femur has travelled out of neutral, 0 being
+    a leg hanging straight down the pelvis and 180 one folded flat against it.
+    The second is which way it went: the angle between the lift and the
+    pelvis's own side, 0 straight out sideways and 90 straight up the front,
+    and it is the number the caller looks its limit up against.
+
+        out, direction = skeleton.femur_against_pelvis(pose, "RIGHT")
+        if out > opens_to(direction):
+            problems.append(f"the hip is {out:.0f} deg out of neutral")
+
+    `sacrum_up` and `sacrum_back` are the figure's build, and mean what they
+    mean in `pelvis_axes`. Direction comes back unsigned and measured off the
+    named side's own half of the pelvis, so left and right read alike. Data,
+    not a verdict — what a hip opens to is the caller's table, since it depends
+    on the knee, the rotation and the practitioner.
+    """
+    superior, across, _ = pelvis_axes(pose, sacrum_up, sacrum_back)
+    if side == "LEFT":
+        across = [-c for c in across]
+    landmarks = pose["landmarks"]
+    femur = [landmarks[f"{side}_KNEE"][i] - landmarks[f"{side}_HIP"][i]
+             for i in range(3)]
+    along = sum(femur[i] * superior[i] for i in range(3))
+    lift = [femur[i] - superior[i] * along for i in range(3)]
+    return (180.0 - angle_between(femur, superior),
+            angle_between(lift, across))
+
+
 def chain_turns(points):
     """Each turn along a chain of landmarks, as the axis it turns about.
 

@@ -1,0 +1,6 @@
+# Apple silicon only. clef_mlx (loaded from the pinned HF snapshot) is tested on mlx-lm 0.32.
+mlx>=0.32,<0.33
+mlx-lm>=0.32,<0.33
+huggingface_hub>=0.20
+mlx-vlm>=0.7.4,<0.8
+pillow>=10
