@@ -45,11 +45,11 @@ class Config:
     state_dir: Path = field(default_factory=lambda: _env_path("DEX_STATE", Path.cwd() / ".dex"))
     #: Where threads, tasks, queue state, and events are persisted.
     database_url: str = os.environ.get("DEX_DATABASE_URL", "postgresql://localhost/dex")
-    model: str = os.environ.get("DEX_MODEL", "claude-opus-5")
+    model: str = os.environ.get("DEX_MODEL", "claude-opus-5-5")
     #: Planning is a short, cheap call; it does not need the big model.
     planner_model: str = os.environ.get("DEX_PLANNER_MODEL", "claude-sonnet-5")
     #: An agent run that has not finished by now is almost certainly stuck.
-    task_timeout_s: float = float(os.environ.get("DEX_TASK_TIMEOUT", "2400"))
+    task_timeout_s: float = float(os.environ.get("DEX_TASK_TIMEOUT", "3600"))
     max_turns: int = int(os.environ.get("DEX_MAX_TURNS", "160"))
     effort: str = os.environ.get("DEX_EFFORT", "high")
     host: str = os.environ.get("DEX_HOST", "0.0.0.0")

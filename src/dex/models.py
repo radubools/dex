@@ -98,6 +98,13 @@ EventType = Literal[
 ]
 
 
+#: Scopes whose run is a turn of a conversation rather than generation work: a
+#: design turn and a survey are both agent runs someone is sitting in a thread
+#: waiting for. They are tasks so they get the activity surface, but they are
+#: budgeted as chats — see `Task.interactive`.
+INTERACTIVE_SCOPES = ("design", "survey")
+
+
 @dataclass(slots=True)
 class Event:
     type: EventType
@@ -253,6 +260,19 @@ class Task:
             "urls": [str(u) for u in packed.get("urls") or []],
             "guide": str(packed.get("guide", "")),
         }
+
+    @property
+    def interactive(self) -> bool:
+        """Whether someone is waiting on this run in a chat thread.
+
+        A design turn and a survey are chat turns that happen to run as tasks.
+        They used to be budgeted as tasks too, which meant a reply the operator
+        was waiting for queued behind however much generation work was in front
+        of it — and could be paused to make room for a planner call. The two
+        ceilings are separate now: this is what tells the queue which one a row
+        belongs under.
+        """
+        return self.scope in INTERACTIVE_SCOPES
 
     @property
     def is_design(self) -> bool:

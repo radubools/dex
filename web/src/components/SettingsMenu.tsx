@@ -217,7 +217,9 @@ export function SettingsMenu({
           <div className="menu-row">
             <span>
               Chats at once
-              <small>{data ? `${data.planning} planning` : ' '}</small>
+              {/* Its own ceiling: planning and design turns run against this
+                  number, not against the task limit above. */}
+              <small>{data ? `${data.planning} in flight, apart from tasks` : ' '}</small>
             </span>
             <Stepper
               value={settings?.chat_concurrency ?? 3}

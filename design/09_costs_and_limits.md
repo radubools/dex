@@ -184,16 +184,18 @@ the fallback:
 flowchart LR
     OP["operator Pause<br/>settings.paused"] --> WH{"work_held()<br/>paused OR limit_paused"}
     LIM["limit watcher<br/>settings.limit_paused"] --> WH
-    WH -- true --> CAP0["task_capacity = 0"]
-    CAP0 --> RB["rebalance: park running tasks"]
+    WH -- true --> CAP0["task_capacity = 0<br/>chat_capacity = 0"]
+    CAP0 --> RB["rebalance: park running runs"]
     WH -- false --> NORM["normal capacity"]
 ```
 
 Holding is a reason for capacity to be zero, handled by the same machinery as
 the operator's Pause ([02](02_task_lifecycle.md#how-many-run-at-once)). Every
 caller asks `work_held()` rather than either flag, so a new reason to hold work
-is one change in one place. Chats and planning are **not** held — only
-generation tasks.
+is one change in one place. It holds both pools: a design turn and a survey spend
+tokens like anything else. The **inline planner calls** are what it does not hold
+— they go through `chat_limiter`, which never consults the flag, so a held fleet
+still answers in the chat.
 
 ### Probing, sparingly
 

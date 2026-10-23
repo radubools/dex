@@ -93,7 +93,7 @@ sequenceDiagram
     API->>B: thread_message (user)
     API->>B: thread_busy true
     loop batch 1..10
-        API->>L: acquire (takes a task slot)
+        API->>L: acquire (takes a chat slot)
         L->>P: plan_from_message(request, existing slugs, guide)
         P->>SDK: tool-less, max_turns 1
         SDK-->>P: reply text
@@ -146,12 +146,14 @@ The planner is also told to restate the pages in `problem`. The generation
 agent reads only `problem` and never sees the anchor, so a brief that says
 "translate the document" translates all of it.
 
-### It takes a task slot
+### It takes a chat slot, not a task slot
 
-Planning goes through `chat_limiter`, and every chat in flight subtracts one
-from task capacity. The operator is waiting on a plan, so it outranks
-background generation; a running task may be paused to make room and resumes
-the moment the plan returns. See [02](02_task_lifecycle.md#how-many-run-at-once).
+Planning goes through `chat_limiter`, which is bounded by `chat_concurrency` and
+nothing else. It used to subtract from task capacity as well, parking a running
+task to make room; the two budgets are separate now, so a plan and a generation
+task no longer compete. What planning does share is the chat ceiling with the
+design and survey turns that run as tasks — a planner call in flight is one fewer
+of those. See [02](02_task_lifecycle.md#how-many-run-at-once).
 
 ### Batches
 

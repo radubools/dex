@@ -4,6 +4,9 @@ from dex.pricing import estimate, price_for
 def test_known_models_and_fallbacks():
     assert price_for("claude-opus-5") == (5.0, 25.0)
     assert price_for("claude-sonnet-5") == (2.0, 10.0)
+    # "claude-opus-5" is a substring of this id; the longer key must win.
+    assert price_for("claude-opus-5-5") == (4.0, 20.0)
+    assert price_for("anthropic.claude-opus-5-5") == (4.0, 20.0)
     # Dated snapshots and provider prefixes still resolve.
     assert price_for("anthropic.claude-opus-5") == (5.0, 25.0)
     # Anything unrecognised falls back rather than pricing at zero.

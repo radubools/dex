@@ -243,7 +243,10 @@ export type Settings = {
   auto_approve: boolean
   /** Generation work is held; chats and planning still run. */
   paused: boolean
+  /** Generation tasks at once. Chat work has its own ceiling and does not
+   * draw on this one. */
   task_concurrency: number
+  /** Chat turns at once: planner calls and design or survey turns together. */
   chat_concurrency: number
   /** Tasks may ask about promoting a helper into a project's utils/. */
   utility_proposals: boolean
@@ -268,8 +271,13 @@ export type SettingsResponse = {
   defaultModel: string
   defaultEffort: string
   running: number
+  /**
+   * Chat work in flight against the chat ceiling: planner calls, plus the
+   * design and survey turns that run as tasks. Generation work is counted by
+   * `running` and bounded separately.
+   */
   planning: number
-  /** Tasks currently parked, whether by a pause or by chat pressure. */
+  /** Tasks currently parked, whether by a pause or by a lowered limit. */
   paused: number
   limit: LimitStatus
 }

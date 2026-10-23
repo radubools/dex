@@ -18,7 +18,7 @@ import asyncpg
 
 from .config import DEFAULT_CONCURRENCY, MAX_WORKERS
 from .db import Database
-from .models import Task, TaskState
+from .models import INTERACTIVE_SCOPES, Task, TaskState
 from .threads import Thread, ThreadMessage
 
 TASK_COLUMNS = """
@@ -346,8 +346,21 @@ class TaskStore:
             "UPDATE tasks SET session_id = $2 WHERE id = $1", task_id, session_id
         )
 
-    async def claim(self, worker: str) -> Task | None:
-        """Take the oldest queued task, skipping rows another worker holds."""
+    async def claim(self, worker: str, interactive: bool | None = None) -> Task | None:
+        """Take the oldest queued task, skipping rows another worker holds.
+
+        `interactive` picks which kind of work to look at: True for the chat
+        turns that run as tasks, False for generation, None for either. The two
+        have separate ceilings, so a worker belonging to one pool must not claim
+        the other's work — a chat worker that took a generation task would put
+        that task past the task limit and leave the reply waiting anyway.
+        """
+        scope_filter = ""
+        if interactive is True:
+            scope_filter = "AND scope = ANY($1::text[])"
+        elif interactive is False:
+            scope_filter = "AND NOT (scope = ANY($1::text[]))"
+        scopes = [list(INTERACTIVE_SCOPES)] if scope_filter else []
         async with self.db.pool.acquire() as conn, conn.transaction():
             row = await conn.fetchrow(
                 # Only queued work is claimable. A paused task is deliberately
@@ -357,9 +370,10 @@ class TaskStore:
                 # worth continuing, so it is finished before anything untouched
                 # is begun. `seq` alone made that true only by coincidence,
                 # because parked tasks usually happen to be the older ones.
-                """SELECT id FROM tasks WHERE state = 'queued'
+                f"""SELECT id FROM tasks WHERE state = 'queued' {scope_filter}
                    ORDER BY (started_at IS NOT NULL) DESC, seq
-                   FOR UPDATE SKIP LOCKED LIMIT 1"""
+                   FOR UPDATE SKIP LOCKED LIMIT 1""",
+                *scopes,
             )
             if row is None:
                 return None
@@ -385,7 +399,7 @@ class TaskStore:
             task_id, activity,
         )
 
-    async def paused(self, limit: int = 10) -> list[Task]:
+    async def paused(self, limit: int = 10, interactive: bool | None = None) -> list[Task]:
         """Tasks dex paused and may start again, oldest first.
 
         Not the ones the operator paused: those are `held`, and starting them
@@ -395,11 +409,20 @@ class TaskStore:
         marked that way — and starting those would build directories for
         packages that have since been superseded.
         """
+        # Filtered the same way as `claim`, and for the same reason: each pool
+        # puts back only what it is allowed to run.
+        scope_filter = ""
+        if interactive is True:
+            scope_filter = "AND scope = ANY($2::text[])"
+        elif interactive is False:
+            scope_filter = "AND NOT (scope = ANY($2::text[]))"
+        scopes = [list(INTERACTIVE_SCOPES)] if scope_filter else []
         rows = await self.db.pool.fetch(
             f"""SELECT {TASK_COLUMNS} FROM tasks
                 WHERE state = 'paused' AND started_at IS NOT NULL AND NOT held
+                  {scope_filter}
                 ORDER BY seq LIMIT $1""",
-            limit,
+            limit, *scopes,
         )
         return [task_from_row(row) for row in rows]
 

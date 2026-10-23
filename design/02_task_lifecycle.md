@@ -119,20 +119,20 @@ sequenceDiagram
     participant R as TaskRunner
 
     loop until retired
-        W->>M: index ≥ task limit?
+        W->>M: index ≥ this pool's limit?
         alt yes
             W->>W: retire (pool shrank)
         end
         W->>G: acquire
-        W->>M: live count ≥ task_capacity()?
+        W->>M: this pool's runs ≥ its capacity?
         alt at capacity
             G-->>W: release
             W->>W: sleep until woken or 2s
         else room
-            W->>DB: SELECT … FOR UPDATE SKIP LOCKED<br/>UPDATE state = running
+            W->>DB: SELECT … WHERE scope matches this pool<br/>FOR UPDATE SKIP LOCKED<br/>UPDATE state = running
             DB-->>W: task or none
             W->>M: re-check capacity
-            alt a chat took the slot meanwhile
+            alt something took the slot meanwhile
                 W->>DB: set state back to queued
             else still room
                 W->>M: live[task.id] = task
@@ -155,6 +155,7 @@ The claim query:
 
 ```sql
 SELECT id FROM tasks WHERE state = 'queued'
+  -- and, for a pool, either scope = ANY('{design,survey}') or NOT that
 ORDER BY (started_at IS NOT NULL) DESC, seq
 FOR UPDATE SKIP LOCKED LIMIT 1
 ```
@@ -169,9 +170,25 @@ FOR UPDATE SKIP LOCKED LIMIT 1
 
 Capacity is checked **inside the gate** and **reserved inside the gate**, so a
 second worker cannot read a stale count and claim past the ceiling. The re-check
-after the claim exists because a chat can take the last slot during the
-database round trip; giving a claim back costs nothing because nothing has
+after the claim exists because a planner call can take the last chat slot during
+the database round trip; giving a claim back costs nothing because nothing has
 started.
+
+### Two pools
+
+There are two worker pools over the one queue, and a worker claims only its own
+kind of work:
+
+| Pool | Ceiling | Claims |
+|---|---|---|
+| task | `task_concurrency` | every scope except `design` and `survey` |
+| chat | `chat_concurrency` | `design` and `survey` — see `Task.interactive` |
+
+A design turn and a survey run as tasks so they get the whole activity surface
+(streamed text, tool calls, diffs, `ask_user`), but someone is sitting in a
+thread waiting for them, so they are **budgeted as chats, not as tasks**. With
+one pool they queued behind however much generation work was in front of them,
+and a planner call could park one to make room.
 
 ### Waking workers
 
@@ -189,28 +206,49 @@ here.
 
 ```mermaid
 flowchart TD
-    C([task_capacity]) --> G{"Inside the 30s<br/>startup grace?"}
+    C([capacity]) --> G{"Inside the 30s<br/>startup grace?"}
     G -- yes --> Z1["0"]
     G -- no --> H{"work_held()?<br/>operator pause OR<br/>limit pause"}
     H -- yes --> Z2["0"]
-    H -- no --> L["task_concurrency<br/>− chats in flight"]
-    L --> MAX["max(0, …)"]
+    H -- no --> K{"which pool?"}
+    K -- task --> L["task_concurrency"]
+    K -- chat --> M["chat_concurrency<br/>− planner calls in flight"]
+    M --> MAX["max(0, …)"]
 ```
 
-This is **the priority ladder**: a planning or chat call outranks generation
-work, so every chat in flight removes a task slot. Chats pass through
-`chat_limiter`, whose `on_change` triggers `rebalance()` immediately rather than
-at the supervisor's next tick.
+**Neither ceiling moves the other.** `task_capacity()` was once
+`task_concurrency − chats in flight`, a priority ladder in which a chat took a
+task's slot and the task was paused to hand it over. It made both numbers mean
+something other than what they said: raising "chats at once" quietly lowered how
+many tasks could run, and a burst of chat parked generation work that had nothing
+to do with it. What the chat ceiling does cover is *all* chat work — the inline
+planner calls through `chat_limiter` and the design and survey turns in the chat
+pool — so it stays one operator-facing number. `chat_limiter.on_change` triggers
+`rebalance()` immediately rather than at the supervisor's next tick, so a
+finished planner call hands its slot to a queued design turn at once.
 
 ```mermaid
 flowchart TD
-    RB([rebalance]) --> CAP["capacity = task_capacity()<br/>running = live tasks with a runtime"]
+    RB([rebalance]) --> CAP["for each pool:<br/>capacity = that pool's capacity<br/>running = its live runs with a runtime"]
     CAP --> D{"running vs capacity"}
     D -- "running > capacity" --> P["Pause the surplus,<br/>newest first"]
-    D -- "running < capacity" --> Q["resume_paused(free)<br/>oldest first, skipping held"]
+    D -- "running < capacity" --> Q["resume_paused(free, pool)<br/>oldest first, skipping held"]
     Q --> W["wake workers"]
     D -- equal --> N([nothing])
 ```
+
+Per pool, and the paused work each puts back is its own: free chat capacity must
+not resume a generation task, or the task limit is exceeded by however many chats
+are idle.
+
+**A chat turn is never the surplus unless work is held.** Pausing the fleet parks
+a design turn like anything else, because it spends. A planner call arriving does
+not: the ceiling is already enforced where work is claimed, so the surplus drains
+by itself, and parking the turn would cancel a survey in the window where the
+survey's *own* planning call holds the slot. That one-way accounting is also why
+`chat_limiter` does not count running turns — a limiter that did would have the
+survey waiting on a call waiting on the survey. Chat work can therefore briefly
+reach twice the ceiling; the alternative is a deadlock.
 
 **Newest first** because it loses the least work and is the most likely to be
 cheap to redo.
@@ -219,19 +257,29 @@ The same mechanism implements three features without special cases:
 
 | Feature | How |
 |---|---|
-| Global **Pause** | `work_held()` → capacity 0 → `rebalance` parks everything |
+| Global **Pause** | `work_held()` → both capacities 0 → `rebalance` parks everything. Inline planner calls are the one thing it does not hold: they do not consult it. |
 | **Usage-limit hold** | Same flag, set by the usage watcher (see [09](09_costs_and_limits.md)) |
 | **Startup grace** | Capacity 0 for 30s after a restart, so a mistake can be caught before a hundred agents resume |
 
 ### Scaling the worker pool
 
-The pool holds exactly as many workers as the limit allows. `_scale()` spawns
-missing indices; shrinking is left to the workers, which retire at the top of
-their loop once their index is above the limit. **Lowering the limit therefore
-never cuts a running task short** — a busy worker finishes and then retires.
+Each pool holds exactly as many workers as its own limit allows. `_scale()`
+spawns missing indices in both; shrinking is left to the workers, which retire at
+the top of their loop once their index is above their pool's limit. **Lowering a
+limit therefore never cuts a running task short** — a busy worker finishes and
+then retires.
 
 `set_concurrency()` calls `_scale()` directly rather than waiting for the
-supervisor's two-second poll, so a raised limit takes effect at once.
+supervisor's two-second poll, so a raised limit takes effect at once — for either
+ceiling.
+
+A worker must never swallow its own cancellation. Two awaits in the loop are
+shaped so it cannot: the heartbeat's cancellation is distinguished from the
+worker's by `current_task().cancelling()`, and the idle sleep uses
+`asyncio.wait` rather than `wait_for`, which reports a cancellation racing its
+timeout as a `TimeoutError` that looks exactly like the timeout being suppressed.
+Either swallow left a worker waiting for work with its cancellation already
+spent, and `stop()` waited on it forever.
 
 ---
 
