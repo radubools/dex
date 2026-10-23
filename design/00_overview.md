@@ -37,6 +37,7 @@ This document is the map. Each feature has its own document:
 | [13](13_source_material.md) | Source material the operator supplies |
 | [14](14_survey_and_anchors.md) | Pre-planning survey and anchors |
 | [15](15_skills.md) | Skills — a capability as one copyable directory |
+| [16](16_game_chat.md) | Game chat — a game's players talk to its project from inside the game |
 
 ---
 
@@ -149,6 +150,8 @@ flowchart TB
 | Module | One line |
 |---|---|
 | `api` | Every HTTP route and the SSE endpoint; wires the app together |
+| `game_chat` | The game-chat API: games talk to their project's Chats thread (tokens, CORS, polling) |
+| `sql` | Read-only SQL for project widgets |
 | `cli` | A thin client for driving the server without the UI |
 | `config` | Runtime configuration, all overridable from the environment |
 | `models` / `threads` | Task, event and chat-thread models, shared across the layers |

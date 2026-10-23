@@ -1975,6 +1975,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # materialised copy of each, which meant a bundle could be built in one
     # place and served from the other. One silently was.
 
+    # Game chat (before the UI's catch-all mount): games talk to their project's Chats thread (game_chat.py),
+    # with a per-project token and CORS of their own.
+    from .game_chat import GameChatCors, build_game_chat_router  # noqa: PLC0415
+
+    app.include_router(build_game_chat_router(config, db, tasks, threads, publish_message))
+    app.add_middleware(GameChatCors)
+
     web_dist = config.workspace / "web" / "dist"
     if (web_dist / "index.html").exists():
         app.mount("/", _SpaFiles(directory=web_dist, html=True), name="web")

@@ -8,6 +8,7 @@ can be resumed instead of vanishing.
 from __future__ import annotations
 
 import asyncio
+import uuid
 import contextlib
 import logging
 import os
@@ -255,6 +256,21 @@ class TaskManager:
             await self.deliver_messages(task_id)
         return message
 
+    def say(self, task_id: str, body: str) -> dict[str, Any] | None:
+        """Hand a message to a running chat task now: no queueing.
+
+        The runner interrupts the turn under way and sends it as the next one
+        (`TaskRunner._converse`). None when the task is not a chat that is
+        running here; the caller then queues it as a follow-up note instead.
+        """
+        task = self.live.get(task_id)
+        if task is None or task.inbox is None:
+            return None
+        message = {"id": f"{task_id}-live-{uuid.uuid4().hex[:8]}", "body": body, "delivered": True, "live": True, "at": time.time()}
+        task.inbox.put_nowait(body)
+        self.bus.publish(Event(type="task_message", task_id=task_id, data={"message": message}, project=task.project))
+        return message
+
     async def deliver_messages(self, task_id: str) -> Task | None:
         """Start a follow-up attempt carrying everything queued for a task."""
         task = await self.tasks.get(task_id)
@@ -270,7 +286,10 @@ class TaskManager:
             "The previous attempt has finished. The operator has since asked for:\n\n"
             f"{notes}"
         )
-        if not task.is_design:
+        if task.is_chat:
+            # A game chat is a conversation: the player answered.
+            note = "## The player replied\n\n" + "\n\n".join(bodies)
+        elif not task.is_design:
             note += (
                 "\n\nWork in the existing task directory, keep what is still "
                 "correct, and re-run the test suite before you finish."
