@@ -166,10 +166,14 @@ updates that chat's options for what it starts from then on.
 - finished chains joined by an edge to an active one;
 - finished chains that took part in an edge and ended in the last 6 hours.
 
-The top bar's 🕸 button opens it. The view redraws every few seconds as a
-Mermaid flowchart: an edge runs from the task that waits to the one it waits
-on, nodes are coloured by state, and each names its thread. Clicking a node
-opens the task.
+The top bar's 🕸 button opens it. The view redraws every few seconds as
+Mermaid flowcharts, one per group of connected tasks, drawn bottom up: the
+task that asked (a chat, say) at the bottom, an edge running up from it to
+each task it waits on. Groups stack newest first, by when their asking task
+last started, so they keep their place while their tasks move. Tasks with no
+dependencies share one column at the end, newest at the top. Every diagram
+is drawn at one scale, the one that fits the widest. Nodes are coloured by
+state, and each names its thread. Clicking a node opens the task.
 
 ## Improvement opportunities
 
