@@ -1,9 +1,10 @@
 ## `catalog`
 
-Game-asset conventions, package manifests, validation, and installing into a game.
+Game-asset conventions, package manifests, validation, and export into the game.
 
 - `UNITS_PER_TILE` — constant
 - `PIXELS_PER_UNIT` — constant
+- `GAME_ROOT` — constant
 - `EXPORT_SUBDIR` — constant
 - `KINDS` — constant
 - `CHARACTER_CLIPS` — constant
@@ -17,11 +18,11 @@ Game-asset conventions, package manifests, validation, and installing into a gam
 - `read_manifest(package: str | Path) -> dict` — The package's manifest.
 - `wav_duration(path: str | Path) -> float` — Length of a WAV file in seconds.
 - `validate_package(package: str | Path) -> dict` — Check a package against its kind's contract; `ok` is what "done" means.
-- `export(package: str | Path, game_root: str | Path) -> dict` — Copy a valid package's files into the game at `game_root` and register it in its `public/assets/index.json`.
+- `export(package: str | Path, game_root: str | Path=GAME_ROOT) -> dict` — Copy a valid package's files into the game and register it in `public/assets/index.json`.
 - `packages(directory: str | Path) -> list[Path]` — Every asset package (a directory with a manifest.json) at or below `directory`, sets excluded.
 - `write_set_manifest(directory: str | Path, *, name: str, tags: Sequence[str], title: str='', **fields: Any) -> Path` — Write the top-level manifest of a task that made several packages (one per subdirectory).
-- `export_all(directory: str | Path, game_root: str | Path) -> list[dict]` — Export every package under `directory` (a task that made a set of them).
-- `rebuild_index(game_root: str | Path) -> dict` — Regenerate `public/assets/index.json` from the exported manifests, written atomically.
+- `export_all(directory: str | Path, game_root: str | Path=GAME_ROOT) -> list[dict]` — Export every package under `directory` (a task that made a set of them).
+- `rebuild_index(game_root: str | Path=GAME_ROOT) -> dict` — Regenerate `public/assets/index.json` from the exported manifests, written atomically.
 
 ## `gltf`
 
@@ -63,7 +64,6 @@ Low-poly triangle meshes for game assets: primitives, transforms, UVs, merging.
 - `triangulate(pts: Sequence[tuple[float, float]]) -> list[tuple[int, int, int]]` — Ear-clip a simple 2D polygon into triangles of its point indices.
 - `lathe(profile: Sequence[tuple[float, float]], material: str='default', *, segments: int=16, smooth: bool=True, uv_scale: float=1.0) -> Mesh` — Spin a profile of (radius, y) points, bottom to top, around the Y axis.
 - `beam(p0: Sequence[float], p1: Sequence[float], thickness: float, material: str='default', *, depth: float | None=None, uv_scale: float=1.0) -> Mesh` — A square-section bar from p0 to p1 — struts, lattice members, poles, rails.
-- `rod(p0: Sequence[float], p1: Sequence[float], radius: float, material: str='default', *, segments: int=8, caps: bool=True, uv_scale: float=3.0) -> Mesh` — A round rod from p0 to p1 (cylinder UVs, so wood grain runs along it) — branches, pipes, round struts.
 - `array_around(m: Mesh, count: int, radius: float=0.0, *, face_out: bool=True) -> Mesh` — `count` copies spaced evenly around the Y axis at `radius`.
 
 ## `preview`
@@ -72,17 +72,9 @@ Render a `.glb` to PNG with a small software rasteriser — look at what you bui
 
 - `SUN` — constant
 - `render(path: str | Path, out: str | Path | None=None, *, size: int=512, yaw: float=45.0, pitch: float=30.0, clip: str | None=None, time: float=0.0, hidden: Sequence[str]=(), frame: tuple[np.ndarray, np.ndarray] | None=None, floor: bool=True, background: tuple[int, int, int]=(238, 240, 244), supersample: int=2) -> Image.Image` — Render one view of a `.glb`; also write it to `out` if given.
-- `bounds(path: str | Path, *, pad: float=0.0, clip: str | None=None, time: float=0.0, hidden: Sequence[str]=()) -> tuple[np.ndarray, np.ndarray]` — A `.glb`'s world (min, max) box, grown by `pad` x its largest span — pass as `frame=` to zoom on a small model.
 - `turntable(path: str | Path, out: str | Path | None=None, *, yaws: Sequence[float]=(45, 135, 225, 315), pitch: float=30.0, size: int=320, clip: str | None=None, time: float=0.0, floor: bool=True, frame: tuple[np.ndarray, np.ndarray] | None=None, hidden: Sequence[str]=()) -> Image.Image` — The model from several corners in one sheet — check every side, not just the front.
 - `clip_strip(path: str | Path, out: str | Path | None=None, clip: str='idle', *, frames: int=8, yaw: float=45.0, pitch: float=30.0, size: int=220, floor: bool=True, hidden: Sequence[str]=()) -> Image.Image` — Evenly spaced frames of one clip on a shared frame, so motion reads left to right.
 - `stage_strip(path: str | Path, out: str | Path | None=None, *, prefix: str='stage_', yaw: float=45.0, pitch: float=30.0, size: int=240, hidden: Sequence[str]=('scaffold',)) -> Image.Image` — A landmark at each construction stage: stage nodes hidden from the top down (scaffold hidden too).
-
-## `scenes`
-
-Compose built scenes and custom polygons: instance one scene in another, wind polygons outward.
-
-- `poly_mesh(polys: Sequence[tuple[Sequence[Sequence[float]], Sequence[float]]], material: str='default', *, smooth: bool=False) -> mesh.Mesh` — A mesh from (points, outward direction) polygons, each wound so its normal faces its outward direction.
-- `place(dst: gltf.Scene, src: gltf.Scene, label: str, *, t: Sequence[float]=(0, 0, 0), r: Sequence[float]=(0, 0, 0, 1), s: Sequence[float]=(1, 1, 1), parent: gltf.Node | None=None) -> gltf.Node` — Instance `src` in `dst` under a wrapper node `label` (translation, rotation quat, scale); returns the wrapper.
 
 ## `texture`
 

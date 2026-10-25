@@ -92,9 +92,7 @@ work="hammer"|"direct"|"smash", …)` bakes all eight. Or one at a time:
   their clip, the silhouette reads from every side at small size.
 - Budget: `catalog.TRIANGLE_BUDGET["character"]` (1500); the cast uses 500–700.
 
-## Reaching the game
+## Shipping
 
-A task's deliverable is the validated package in its task directory. Games
-pull packages from dex themselves (see game-mesh, "How a package reaches a
-game", and each game's `AGENTS.md`); a task does not export unless its brief
-asks, and then always with an explicit `game_root`.
+`catalog.export(package_dir)` copies a validated package into the game and
+registers it in `public/assets/index.json`. It refuses packages that fail.

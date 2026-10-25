@@ -1,6 +1,6 @@
 ---
 name: game-mesh
-description: Core of the game-asset pipeline — meshes, textures, GLB writing with animation, previews, and package conventions; games pull validated packages from dex.
+description: Core of the game-asset pipeline — meshes, textures, GLB writing with animation, previews, and package/export conventions.
 ---
 
 # Game mesh — the core every game asset is built on
@@ -74,28 +74,19 @@ A task that makes several packages (a family of trees, a category of sounds)
 puts each in its own subdirectory with its own manifest, then writes
 `catalog.write_set_manifest(task_dir, name=..., tags=[...])` at the top so the
 set itself is tagged. `catalog.packages(dir)` lists a set's packages and
-`catalog.export_all(dir, game_root)` installs them all into a game.
+`catalog.export_all(dir)` exports them all.
 
-## How a package reaches a game
+## Shipping it to the game
 
-A task's deliverable is the **validated package in its task directory**, with
-its previews judged. **Games pull packages from dex; dex does not push them.**
-Each game's own `AGENTS.md` says what it takes from which dex project and how
-it copies, converts and deploys it; the games in `~/games` share a puller,
-`~/games/tools/pull_dex_assets.py`.
-
-The pull installs each package with `catalog.export(package, game_root)`: it
-refuses a package that does not validate, copies the listed files to
-`<game_root>/public/assets/<kind>/<name>/`, and rebuilds
-`<game_root>/public/assets/index.json` (the catalog the game's loader reads)
-from every installed manifest, atomically, so concurrent installs cannot drop
-each other's entries. `game_root` has no default: nothing in these skills
-knows which games exist. A task calls `export` only when its brief explicitly
-asks for it and names the game root.
+`catalog.export(package_dir)` copies a validated package into
+`~/games/many-builders/public/assets/<kind>/<name>/` and registers it in
+`public/assets/index.json`, the catalog the game's loader reads. It refuses a
+package that does not validate, and is safe to run from several tasks at once:
+the index is rebuilt from every exported manifest, never edited in place.
 
 ## Audio packages
 
-Sounds and music use the same package, manifest and install path (kinds `sfx`
+Sounds and music use the same package, manifest and export path (kinds `sfx`
 and `music`; `REQUIRED_FIELDS` lists what their manifests carry). The
 generators are the `game-sfx` and `game-music` skills.
 

@@ -49,7 +49,7 @@ class Config:
     #: Planning is a short, cheap call; it does not need the big model.
     planner_model: str = os.environ.get("DEX_PLANNER_MODEL", "claude-sonnet-5")
     #: An agent run that has not finished by now is almost certainly stuck.
-    task_timeout_s: float = float(os.environ.get("DEX_TASK_TIMEOUT", "3600"))
+    task_timeout_s: float = float(os.environ.get("DEX_TASK_TIMEOUT", "36000"))
     max_turns: int = int(os.environ.get("DEX_MAX_TURNS", "160"))
     effort: str = os.environ.get("DEX_EFFORT", "high")
     host: str = os.environ.get("DEX_HOST", "0.0.0.0")

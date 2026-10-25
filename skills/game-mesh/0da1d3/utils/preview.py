@@ -233,14 +233,6 @@ def _union_frame(g: _gltf.Gltf, poses: Sequence[tuple[str | None, float, Sequenc
     return lo, hi
 
 
-def bounds(path: str | Path, *, pad: float = 0.0, clip: str | None = None, time: float = 0.0,
-           hidden: Sequence[str] = ()) -> tuple[np.ndarray, np.ndarray]:
-    """A `.glb`'s world (min, max) box, grown by `pad` x its largest span — pass as `frame=` to zoom on a small model."""
-    lo, hi = _union_frame(_gltf.read(path), [(clip, time, hidden)])
-    margin = pad * float((hi - lo).max())
-    return lo - margin, hi + margin
-
-
 def turntable(path: str | Path, out: str | Path | None = None, *, yaws: Sequence[float] = (45, 135, 225, 315),
               pitch: float = 30.0, size: int = 320, clip: str | None = None, time: float = 0.0,
               floor: bool = True, frame: tuple[np.ndarray, np.ndarray] | None = None,

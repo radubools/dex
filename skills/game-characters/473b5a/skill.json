@@ -1,8 +1,8 @@
 {
   "name": "game-characters",
   "description": "Animated low-poly characters for ~/games: a parametric blocky rig builder (rigid jointed parts, team-tintable clothing), procedural clips with no-slide walk/run cycles from game speeds, and the Many Builders cast (builder, foreman, clone, boss, turret) as validated GLB packages.",
-  "version": "473b5a",
-  "updated": 1792650883.530174,
+  "version": "b1aada",
+  "updated": 1792649481.80459,
   "requires": [
     "PIL",
     "numpy",

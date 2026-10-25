@@ -1,12 +1,10 @@
-"""Game-asset conventions, package manifests, validation, and installing into a game.
+"""Game-asset conventions, package manifests, validation, and export into the game.
 
 An **asset package** is one task's output directory: the files it made plus a
-`manifest.json` saying what each one is. A validated package in dex is the
-deliverable. Games **pull** packages from dex: each game's own tooling (see its
-`AGENTS.md`) calls `export(package, game_root)`, which copies the shipped files
-into that game's `public/assets/<kind>/<name>/` and rebuilds the game-wide
-`index.json` its loader reads. Nothing here knows which games exist, so
-`game_root` is always given.
+`manifest.json` saying what each one is. The game never reads the package
+directory itself — `export()` copies the shipped files into the game's
+`public/assets/<kind>/<name>/` and updates the game-wide `index.json` the
+loader reads.
 
 Kinds and what each must carry:
 
@@ -23,7 +21,7 @@ Kinds and what each must carry:
     catalog.write_manifest(out, name="tokyo-tower", kind="landmark",
                            files=["tokyo-tower.glb"], footprint=[2, 2])
     report = catalog.validate_package(out)      # {"ok": ..., "errors": [...]}
-    catalog.export(out, game_root)              # done by a game's pull, not by the task
+    catalog.export(out)                         # into ~/games/many-builders
 """
 
 from __future__ import annotations
@@ -45,7 +43,8 @@ UNITS_PER_TILE = 1.0
 #: The game's current 2D renderer draws heights in pixels; this many pixels is one unit.
 #: Use it to carry an existing landmark's proportions across (`px(92)`).
 PIXELS_PER_UNIT = 32.0
-#: Where `export()` puts things, under the game root it is given.
+#: Where `export()` puts things by default.
+GAME_ROOT = Path.home() / "games" / "many-builders"
 EXPORT_SUBDIR = Path("public") / "assets"
 
 KINDS = ("block", "landmark", "character", "environment", "sfx", "music")
@@ -190,8 +189,8 @@ def validate_package(package: str | Path) -> dict:
                                                  for k, v in models.items()}}
 
 
-def export(package: str | Path, game_root: str | Path) -> dict:
-    """Copy a valid package's files into the game at `game_root` and register it in its `public/assets/index.json`.
+def export(package: str | Path, game_root: str | Path = GAME_ROOT) -> dict:
+    """Copy a valid package's files into the game and register it in `public/assets/index.json`.
 
     Refuses an invalid package: the game should never load something the
     checks have not passed. Safe to run from several tasks at once: each
@@ -263,12 +262,12 @@ def write_set_manifest(directory: str | Path, *, name: str, tags: Sequence[str],
     return path
 
 
-def export_all(directory: str | Path, game_root: str | Path) -> list[dict]:
+def export_all(directory: str | Path, game_root: str | Path = GAME_ROOT) -> list[dict]:
     """Export every package under `directory` (a task that made a set of them)."""
     return [export(p, game_root) for p in packages(directory)]
 
 
-def rebuild_index(game_root: str | Path) -> dict:
+def rebuild_index(game_root: str | Path = GAME_ROOT) -> dict:
     """Regenerate `public/assets/index.json` from the exported manifests, written atomically."""
     root = Path(game_root) / EXPORT_SUBDIR
     assets = {}

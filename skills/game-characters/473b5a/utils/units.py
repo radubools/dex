@@ -26,9 +26,8 @@ from typing import Callable
 from . import catalog, gltf, mesh, motion, preview, rigs
 from .rigs import block, mirror_x
 
-#: Many Builders' tunables file, read for speeds, cooldowns and radii. This
-#: module is that game's cast, so it names the game; nothing here exports.
-CONFIG_JS = Path.home() / "games" / "many-builders" / "src" / "config.js"
+#: The game's tunables file; read for speeds, cooldowns and radii.
+CONFIG_JS = catalog.GAME_ROOT / "src" / "config.js"
 #: Fallbacks, copied from config.js — used when the file is not there.
 DEFAULT_CONFIG = {
     "BUILDER": {"speed": 2.4, "attackCooldown": 1.1, "attackRange": 3, "radius": 0.22, "hp": 100},

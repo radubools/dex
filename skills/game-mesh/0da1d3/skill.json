@@ -1,8 +1,8 @@
 {
   "name": "game-mesh",
   "description": "Core of the game-asset pipeline: low-poly meshes, seamless procedural textures, a GLB (glTF 2.0) writer and reader with node animation, a software preview renderer, and the package/export conventions every 3D and audio asset for ~/games follows.",
-  "version": "0da1d3",
-  "updated": 1792656443.0250938,
+  "version": "fd510f",
+  "updated": 1792484471.89261,
   "requires": [
     "PIL",
     "numpy"

@@ -1,0 +1,9 @@
+{
+  "name": "game-story",
+  "description": "Lesson scripts (\"stories\") for the games in ~/games: the schema-1 story format the engine's story runner plays (beats with cues, camera, spawns, actions, choices), the catalogue of per-algorithm act actions, and write/validate/outline/export of kind \"story\" packages.",
+  "version": "eca5ad",
+  "updated": 1792883290.358471,
+  "requires": [
+    "pytest"
+  ]
+}

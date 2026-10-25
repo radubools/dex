@@ -497,22 +497,6 @@ def beam(p0: Sequence[float], p1: Sequence[float], thickness: float, material: s
     return m.translate(*a)
 
 
-def rod(p0: Sequence[float], p1: Sequence[float], radius: float, material: str = "default", *,
-        segments: int = 8, caps: bool = True, uv_scale: float = 3.0) -> Mesh:
-    """A round rod from p0 to p1 (cylinder UVs, so wood grain runs along it) — branches, pipes, round struts."""
-    a, b = np.asarray(p0, dtype=np.float64), np.asarray(p1, dtype=np.float64)
-    length = float(np.linalg.norm(b - a))
-    m = cylinder(radius, length, material, segments=segments, caps=caps, uv_scale=uv_scale)
-    d = (b - a) / max(length, 1e-12)
-    axis = np.cross([0.0, 1.0, 0.0], d)
-    s = float(np.linalg.norm(axis))
-    if s > 1e-9:
-        m = m.transform(rotation_matrix(axis, math.degrees(math.atan2(s, float(d[1])))))
-    elif d[1] < 0:
-        m = m.rotate_x(180)
-    return m.translate(*a)
-
-
 def array_around(m: Mesh, count: int, radius: float = 0.0, *, face_out: bool = True) -> Mesh:
     """`count` copies spaced evenly around the Y axis at `radius`."""
     parts = []
