@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import mermaid from 'mermaid'
 import { getTaskGraph } from '../api'
 import type { TaskGraph as Graph, TaskGraphNode } from '../types'
@@ -10,7 +10,8 @@ import type { TaskGraph as Graph, TaskGraphNode } from '../types'
  * connected tasks is its own diagram, drawn bottom up (the task that asked at
  * the bottom, what it asked for above it); the groups stack newest first, and
  * tasks with no dependencies share one column at the end, newest at the top.
- * Redrawn every few seconds; a click opens a task.
+ * Refetched when the event stream reports a task change (and every half
+ * minute in case it is down); a click opens a task.
  */
 
 // The same look as the diagrams in Markdown; initialising twice is harmless.
@@ -21,7 +22,13 @@ mermaid.initialize({
   themeVariables: { fontFamily: 'ui-sans-serif, system-ui, sans-serif', fontSize: '13px' },
 })
 
-const REFRESH_MS = 4000
+// The event stream drives refreshes (App's `changes`): a fetch this long after
+// the last reported change, and a slow poll in case the stream is down.
+const SETTLE_MS = 400
+const FALLBACK_MS = 30_000
+
+// Mermaid's render is not reentrant: every drawing waits for the one before.
+let renderQueue: Promise<void> = Promise.resolve()
 
 const STATE_LABEL: Record<string, string> = {
   queued: 'queued', running: 'running', awaiting_input: 'waiting on you',
@@ -95,71 +102,102 @@ function chart(g: Graph, group: Group): string {
 
 export function TaskGraph({
   project,
+  changes = 0,
   onOpenTask,
   onClose,
 }: {
   project: string
+  /** Bumped by the app when the event stream reports a task change: refetch soon. */
+  changes?: number
   onOpenTask: (node: TaskGraphNode) => void
   onClose: () => void
 }) {
   const [graph, setGraph] = useState<Graph | null>(null)
   const [error, setError] = useState<string | null>(null)
   const host = useRef<HTMLDivElement>(null)
+  // What is on screen now: set only once a drawing has landed, so a drawing
+  // that was interrupted is tried again rather than taken as done.
   const drawn = useRef('')
+  // The parent's handler changes on every render of the app (which re-renders
+  // on every streamed event); read it at click time instead of redrawing for it.
+  const openTask = useRef(onOpenTask)
+  openTask.current = onOpenTask
 
+  // Fetches: at once, soon after each change the stream reports (several
+  // close together make one fetch), and every so often in case the stream dropped.
+  const load = useRef<() => void>(() => {})
   useEffect(() => {
     let live = true
-    const load = () =>
+    load.current = () => {
       getTaskGraph(project)
         .then((g) => live && (setGraph(g), setError(null)))
         .catch((e: Error) => live && setError(e.message))
-    void load()
-    const timer = setInterval(load, REFRESH_MS)
+    }
+    load.current()
+    const timer = setInterval(() => load.current(), FALLBACK_MS)
     return () => { live = false; clearInterval(timer) }
   }, [project])
-
   useEffect(() => {
-    const el = host.current
-    if (!el || !graph || !graph.nodes.length) return
+    if (!changes) return
+    const t = setTimeout(() => load.current(), SETTLE_MS)
+    return () => clearTimeout(t)
+  }, [changes])
+
+  // The diagrams' sources; a fetch with the same content draws nothing new.
+  const plan = useMemo(() => {
+    if (!graph || !graph.nodes.length) return null
     const parts = groups(graph)
     const srcs = parts.map((p) => chart(graph, p))
-    const all = srcs.join('\n%%\n')
-    if (all === drawn.current) return // unchanged: keep the drawing (and any scroll)
-    drawn.current = all
+    return { graph, parts, srcs, all: srcs.join('\n%%\n') }
+  }, [graph])
+  const planRef = useRef(plan)
+  planRef.current = plan
+
+  useEffect(() => {
+    const p = planRef.current
+    if (!p || !host.current) return
+    if (p.all === drawn.current) return // unchanged: keep the drawing (and any scroll)
     let live = true
     const stampNow = Date.now()
-    // Mermaid renders one diagram at a time.
-    srcs
-      .reduce<Promise<string[]>>(
-        (done, src, k) => done.then(async (svgs) => [...svgs, (await mermaid.render(`task-graph-${stampNow}-${k}`, src)).svg]),
-        Promise.resolve([]),
-      )
-      .then((svgs) => {
-        if (!live || !host.current) return
+    // Mermaid draws one diagram at a time, across every caller.
+    const svgs: string[] = []
+    const job = p.srcs.reduce<Promise<void>>(
+      (done, src, k) => done.then(async () => {
+        if (!live) return
+        svgs.push((await mermaid.render(`task-graph-${stampNow}-${k}`, src)).svg)
+      }),
+      renderQueue,
+    )
+    renderQueue = job.catch(() => {})
+    job
+      .then(() => {
+        if (!live || !host.current || svgs.length !== p.srcs.length) return
         host.current.innerHTML = svgs
-          .map((svg, k) => `<div class="task-graph-group${parts[k].alone ? ' alone' : ''}">${parts[k].alone ? '<p class="muted small">On their own</p>' : ''}${svg}</div>`)
+          .map((svg, k) => `<div class="task-graph-group${p.parts[k].alone ? ' alone' : ''}">${p.parts[k].alone ? '<p class="muted small">On their own</p>' : ''}${svg}</div>`)
           .join('')
+        drawn.current = p.all
         // One scale for every diagram (the one that fits the widest), so a
         // small group is not blown up to the full width.
         const drawnSvgs = [...host.current.querySelectorAll<SVGSVGElement>('.task-graph-group svg')]
         const widths = drawnSvgs.map((el) => Number(el.getAttribute('viewBox')?.split(/\s+/)[2]) || 0)
-        const scale = Math.min(1, (host.current.clientWidth - 4) / Math.max(1, ...widths))
+        const room = host.current.clientWidth - 4
+        const scale = room > 0 ? Math.min(1, room / Math.max(1, ...widths)) : 1
         drawnSvgs.forEach((el, k) => {
           el.removeAttribute('style')
           el.setAttribute('width', String(Math.round(widths[k] * scale)))
         })
         // Clicks by node, without Mermaid's own click hooks (they need a loose
         // security level): its node groups carry the id we gave them.
-        graph.nodes.forEach((n, i) => {
+        p.graph.nodes.forEach((n, i) => {
           const g = host.current?.querySelector<SVGGElement>(`g.node[id*="-n${i}-"]`)
           if (!g) return
           g.style.cursor = 'pointer'
-          g.addEventListener('click', () => onOpenTask(n))
+          g.addEventListener('click', () => openTask.current(n))
         })
       })
       .catch((e: Error) => live && setError(`could not draw the graph: ${e.message}`))
     return () => { live = false }
-  }, [graph, onOpenTask])
+  }, [plan?.all])
 
   const edges = graph?.edges.length ?? 0
   return (

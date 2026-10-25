@@ -166,7 +166,12 @@ updates that chat's options for what it starts from then on.
 - finished chains joined by an edge to an active one;
 - finished chains that took part in an edge and ended in the last 6 hours.
 
-The top bar's 🕸 button opens it. The view redraws every few seconds as
+The top bar's 🕸 button opens it. It refetches when the event stream reports
+a change to the graph (`task_created`, `task_state`, `task_dependency`,
+`task_message_delivered`; several close together make one fetch), and every
+half minute in case the stream is down. A drawing counts as done only once it
+is on screen, and the app's re-renders (one per streamed event) never
+interrupt it, so a busy project can no longer leave the view blank. It draws
 Mermaid flowcharts, one per group of connected tasks, drawn bottom up: the
 task that asked (a chat, say) at the bottom, an edge running up from it to
 each task it waits on. Groups stack newest first, by when their asking task

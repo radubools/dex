@@ -65,6 +65,9 @@ function urlState(): {
   }
 }
 
+// Stream events that change the task graph (design/18).
+const GRAPH_EVENTS = new Set<string>(['task_created', 'task_state', 'task_dependency', 'task_message_delivered'])
+
 export default function App() {
   const [state, dispatch] = useReducer(reduce, initialState)
   const [threads, setThreads] = useState<ThreadSummary[]>([])
@@ -99,12 +102,16 @@ export default function App() {
   /** Whether this project has a pose library worth offering a tab for. */
   const [hasPackages, setHasPackages] = useState(false)
   const loaded = useRef<Set<string>>(new Set())
+  const [graphChanges, setGraphChanges] = useState(0)
 
   // One stream for the whole app; tasks and threads are demultiplexed by the store.
   useEffect(() => {
     const close = openStream(
       (event) => {
         dispatch({ type: 'event', event })
+        // The task graph refetches on what changes it (a task made, moved on,
+        // or made to wait on another), not on every streamed token.
+        if (GRAPH_EVENTS.has(event.type)) setGraphChanges((n) => n + 1)
         // Open viewers refresh from this, throttled per file (assetChanges.ts).
         if (event.type === 'asset' && event.change !== 'deleted') notifyAssetChanged(event.path)
         // A note typed into a finished task starts a follow-up; follow it, or
@@ -704,6 +711,7 @@ export default function App() {
         <Suspense fallback={null}>
           <TaskGraph
             project={project}
+            changes={graphChanges}
             onClose={() => setShowGraph(false)}
             onOpenTask={(node) => {
               // Into the task's own thread, with its run open beside it.
