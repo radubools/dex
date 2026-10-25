@@ -14,6 +14,7 @@ import { Chat } from './components/Chat'
 import { Composer } from './components/Composer'
 import { ProjectPicker } from './components/ProjectPicker'
 import { SettingsMenu } from './components/SettingsMenu'
+import { IconTips } from './components/IconTips'
 import { ChangePassword, SignIn, Unauthorized } from './components/SignIn'
 import { UserAdmin } from './components/UserAdmin'
 // Three.js is nowhere near this, but the table is admin-only and rarely
@@ -382,6 +383,7 @@ export default function App() {
         viewing || showCosts || showGraph || showGuide || showUsers || showSkills ? 'with-viewer' : ''
       }`}
     >
+      <IconTips />
       <aside className={`threads ${drawerOpen ? 'open' : ''}`}>
         <div className="threads-head">
           <span className="brand">dex</span>
@@ -455,7 +457,7 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
-          <button className="icon-btn menu" onClick={() => setDrawerOpen(true)} aria-label="Threads">
+          <button className="icon-btn menu" onClick={() => setDrawerOpen(true)} aria-label="Threads — every conversation in this project">
             ☰
           </button>
           <ProjectPicker

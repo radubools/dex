@@ -1875,3 +1875,6 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 .task-graph-canvas svg { max-width: none; height: auto; }
 .task-graph-canvas g.node:hover rect { filter: brightness(1.25); }
 .task-graph .small { font-size: 12px; }
+
+/* Names for icon-only buttons (components/IconTips.tsx). */
+.icon-tip { position: fixed; z-index: 10000; pointer-events: none; max-width: min(280px, calc(100vw - 12px)); padding: 4px 8px; border-radius: 6px; background: #0b0f14; color: #e5e7eb; border: 1px solid rgba(255, 255, 255, 0.16); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); font-size: 12px; line-height: 1.35; white-space: normal; }
