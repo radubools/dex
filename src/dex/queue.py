@@ -59,6 +59,12 @@ class TaskManager:
         self.tasks = TaskStore(db)
         self.settings = SettingsStore(db)
         self.messages = TaskMessageStore(db)
+        # Tasks that start, continue and wait for other tasks (deps.py).
+        from .deps import Dependencies
+
+        self.graph = Dependencies(self)
+        #: Posts a message into a thread (the API's publish_message), set by the API.
+        self.post: Callable[..., Awaitable[None]] | None = None
         #: Only the tasks this process is running: their cancel handles and the
         #: futures the agent is parked on. Everything else comes from Postgres.
         self.live: dict[str, Task] = {}
@@ -144,6 +150,8 @@ class TaskManager:
         # Sweep periodically, so a task stranded by another process is
         # recovered without waiting for someone to restart this one.
         self._sweeper = asyncio.create_task(self._sweep(), name="dex-orphan-sweep")
+        # Blocked tasks go back in the queue when what they wait for is done.
+        self.graph.start()
         log.info(
             "started %d task workers and %d chat workers as %s "
             "(limits %d and %d, adjustable from the UI); "
@@ -163,6 +171,7 @@ class TaskManager:
         # polling the database. So the supervisor goes first, and `_stopping`
         # closes the window where it is already inside `_scale()`.
         self._stopping = True
+        await self.graph.stop()
         for extra in (self._supervisor, self._sweeper):
             if extra is not None:
                 extra.cancel()
@@ -209,6 +218,7 @@ class TaskManager:
         resumed_from: str | None = None,
         scope: str = "package",
         anchor: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> Task:
         display_title = (title or problem.strip().splitlines()[0])[:80]
         directory = self.config.project_dir(project or self.config.default_project)
@@ -229,6 +239,7 @@ class TaskManager:
         task.output_slug = output_slug
         task.resumed_from = resumed_from
         task.scope = scope
+        task.options = dict(options or {})
         task.model = await self.settings.model_for(self.config.project, self.config.model)
         await self.tasks.create(task)
 
@@ -243,12 +254,16 @@ class TaskManager:
         self._wake_workers()
         return task
 
-    async def queue_message(self, task_id: str, body: str) -> dict[str, Any] | None:
-        """Hold a follow-up note, and deliver it now if the task has stopped."""
+    async def queue_message(self, task_id: str, body: str,
+                            options: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Hold a follow-up note, and deliver it now if the task has stopped.
+
+        `options` go with it to the attempt it starts (design/18: run options).
+        """
         task = await self.tasks.get(task_id)
         if task is None:
             return None
-        message = await self.messages.add(task_id, body)
+        message = await self.messages.add(task_id, body, options)
         self.bus.publish(
             Event(type="task_message", task_id=task_id, data={"message": message})
         )
@@ -276,6 +291,7 @@ class TaskManager:
         task = await self.tasks.get(task_id)
         if task is None or not task.state.terminal:
             return None
+        options = {**(task.options or {}), **await self.messages.pending_options(task_id)}
         bodies = await self.messages.take(task_id)
         if not bodies:
             return None
@@ -309,6 +325,8 @@ class TaskManager:
             # package task: it took the generation prompt, lost the design
             # tools, and built a package directory for a conversation.
             scope=task.scope,
+            # The attempt runs as it was asked to (tests off stay off; a note can change it).
+            options=options,
         )
         # Echo the notes onto the follow-up as well, so opening it shows what
         # was asked for rather than starting mid-conversation.
@@ -794,6 +812,7 @@ class TaskManager:
             return FakeTaskRunner(task, self.config, self.bus, self.tasks, self.settings)
         runner = TaskRunner(task, self.config, self.bus, self.tasks, self.settings)
         runner.surveyed = self.surveyed
+        runner.graph = self.graph
         return runner
 
     async def _scale(self) -> None:

@@ -26,6 +26,9 @@ import type { ViewerTarget } from './components/Viewer'
 
 // highlight.js (and, for markdown, mermaid) only load when something is opened.
 const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })))
+const TaskGraph = lazy(() =>
+  import('./components/TaskGraph').then((m) => ({ default: m.TaskGraph })),
+)
 const CostDashboard = lazy(() =>
   import('./components/CostDashboard').then((m) => ({ default: m.CostDashboard })),
 )
@@ -81,6 +84,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [threadError, setThreadError] = useState<string | null>(null)
   const [showCosts, setShowCosts] = useState(false)
+  const [showGraph, setShowGraph] = useState(false)
   const [showGuide, setShowGuide] = useState(false)
   /** The thread a hide has been asked for but not yet confirmed. */
   const [confirmHide, setConfirmHide] = useState<ThreadSummary | null>(null)
@@ -375,7 +379,7 @@ export default function App() {
   return (
     <div
       className={`app ${activeTask ? 'with-panel' : ''} ${
-        viewing || showCosts || showGuide || showUsers || showSkills ? 'with-viewer' : ''
+        viewing || showCosts || showGraph || showGuide || showUsers || showSkills ? 'with-viewer' : ''
       }`}
     >
       <aside className={`threads ${drawerOpen ? 'open' : ''}`}>
@@ -495,6 +499,17 @@ export default function App() {
               threads.find((t) => t.id === threadId)?.title ??
               'dex'}
           </span>
+          {/* The live task graph: what runs, what waits, and on what (design/18). */}
+          <button
+            className={`ghost-btn small icon-only ${showGraph ? 'on' : ''}`}
+            onClick={() => setShowGraph((open) => !open)}
+            disabled={!project}
+            title="Task graph — the active tasks and what waits on what"
+            aria-label="Task graph — the active tasks and what waits on what"
+            aria-pressed={showGraph}
+          >
+            <span aria-hidden="true">🕸</span>
+          </button>
           <button
             className="ghost-btn small icon-only"
             onClick={() => setShowGuide(true)}
@@ -621,7 +636,7 @@ export default function App() {
         />
       )}
 
-      {viewing && !showCosts && !showGuide && !showUsers && !showSkills && (
+      {viewing && !showCosts && !showGraph && !showGuide && !showUsers && !showSkills && (
         <Suspense fallback={null}>
           <Viewer
             target={viewing}
@@ -681,6 +696,22 @@ export default function App() {
       {showCosts && (
         <Suspense fallback={null}>
           <CostDashboard onClose={() => setShowCosts(false)} />
+        </Suspense>
+      )}
+      {showGraph && project && (
+        <Suspense fallback={null}>
+          <TaskGraph
+            project={project}
+            onClose={() => setShowGraph(false)}
+            onOpenTask={(node) => {
+              // Into the task's own thread, with its run open beside it.
+              setShowGraph(false)
+              setViewing(null)
+              setView('chat')
+              if (node.threadId) setThreadId(node.threadId)
+              setActiveTaskId(node.id)
+            }}
+          />
         </Suspense>
       )}
       {/* Only reachable for an admin, and gated again here: a caller without

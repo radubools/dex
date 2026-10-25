@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 
@@ -188,7 +189,8 @@ def test_destinations_stay_inside_the_game(tmp_path):
     brief = chat_brief({"game": "Model Workshop", "root": str(root), "project": "ml"},
                        ChatMessage(text="Add a lesson", context=ChatContext(view="lab", destinations={"story": "public/assets/story/", "bad": "../../x"})))
     assert "Model Workshop" in brief and str(root / "public/assets/story/") in brief and "../../x" not in brief
-    assert "export_story" in brief and "Add a lesson" in brief
+    # A chat delegates: it never builds or exports a package itself.
+    assert "never made or edited in this chat" in brief and "export_story" not in brief and "Add a lesson" in brief
 
 
 def test_merge_keeps_the_feed_and_trims_output():
@@ -252,3 +254,98 @@ async def test_converse_interrupts_for_a_live_message_and_waits_for_both_turns(c
     assert task.inbox is None
     # The interrupted turn's result is not reported (it would read as a failure).
     assert len([m for m in observed if isinstance(m, ResultMessage)]) == 1
+
+
+def test_a_chat_is_told_to_pull_what_other_tasks_made_with_the_games_own_puller(tmp_path):
+    from dex.game_chat import ChatMessage, chat_brief, pull_command
+
+    game = tmp_path / "games" / "lab"
+    game.mkdir(parents=True)
+    entry = {"game": "Lab", "root": str(game)}
+    # No puller beside the game: it installs by export, as before.
+    assert pull_command(entry) is None
+    assert "--only" not in chat_brief(entry, ChatMessage(text="hello"))
+    (tmp_path / "games" / "tools").mkdir()
+    (tmp_path / "games" / "tools" / "pull_dex_assets.py").write_text("")
+    cmd = pull_command(entry)
+    assert cmd.endswith(f"pull_dex_assets.py {game}")
+    brief = chat_brief(entry, ChatMessage(text="hello"))
+    assert f"{cmd} --only <task-dir>" in brief and "never force it" in brief
+
+
+def test_chat_brief_starts_a_lesson_set_with_the_catalog(tmp_path):
+    brief = chat_brief({"game": "Lab", "root": str(tmp_path)}, ChatMessage(text="add statistics lessons"))
+    assert "A new set of lessons" in brief and "story catalog" in brief
+    # The catalog first, the stories after it.
+    assert brief.index("catalog task") < brief.index("one story task per lesson")
+
+
+SNAPSHOT = {
+    "algorithm": "kmeans", "mode": "story", "level": "medium",
+    "story": {"id": "kmeans-medium", "title": "k-means (medium)", "level": "medium", "schema": 2},
+    "beat": {"label": "k-means", "index": 4, "of": 29, "beat": "assign", "section": "Assignment",
+             "title": "", "text": "Now assign each point: p2 through p5 join c1.", "choice": None,
+             "input": None, "done": False, "path": ["intro", "start", "ruler", "d2-table", "assign"],
+             "vars": {"inertia0": 24.5}},
+    "lab": {"state": "assigned", "entities": [{"id": "c1", "asset": "environment/centroid", "at": [1, 0, 2]}],
+            "labels": [{"id": "pt:p2", "text": "x 1.50 · z -2.50"}], "points": [{"id": "p2", "x": 1.5, "z": -2.5, "cls": 0}],
+            "params": [{"name": "k", "value": 2}]},
+    "storyJson": {"schema": 2, "id": "kmeans-medium", "beats": [{"id": "assign", "say": "Now assign each point: ..."}]},
+}
+
+
+def test_the_lesson_on_screen_reaches_the_agent_hidden_from_the_player(client, config):
+    t = client.thread_id
+    r = client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH, json={
+        "text": "this sentence is clumsy", "context": {"view": "k-means, medium", "story": SNAPSHOT}}).json()
+    chat = r["chatId"]
+    task = client.get(f"/api/tasks/{chat}").json()["task"]
+    brief = task["problem"]
+    # Appended to the player's message, in the block a game's chat panel strips.
+    words, hidden = brief.split("## The player's message", 1)[1].split("<dex-context>", 1)
+    assert words.strip() == "this sentence is clumsy" and hidden.rstrip().endswith("</dex-context>")
+    assert "instantiation of the lesson's state so far" in hidden
+    assert "Beat 5 of 29: `assign`" in hidden and "Now assign each point: p2 through p5 join c1." in hidden
+    assert "`assigned`" in hidden and "x 1.50 · z -2.50" in hidden
+    # The whole snapshot, story JSON included, is a file in the chat's directory.
+    rel = re.search(r"`(context/snapshot-\d+\.json)`", hidden).group(1)
+    saved = json.loads((Path(task["outputDir"]) / rel).read_text())
+    assert saved["storyJson"]["id"] == "kmeans-medium" and saved["beat"]["vars"] == {"inertia0": 24.5}
+    # The thread records only what the player typed.
+    thread = client.get(f"/api/threads/{t}").json()
+    texts = [m["text"] for m in (thread.get("messages") or thread.get("thread", {}).get("messages", []))]
+    assert "this sentence is clumsy" in texts and not any("dex-context" in (x or "") for x in texts)
+    # A follow-up carries what is on screen then, also appended for the agent only.
+    wait_state(client, chat, {"succeeded"})
+    moved = {**SNAPSHOT, "beat": {**SNAPSHOT["beat"], "index": 9, "beat": "update"}}
+    client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH, json={
+        "text": "and this one", "chatId": chat, "context": {"story": moved}})
+    follow = wait_state(client, chat, {"succeeded", "running", "queued"})
+    latest = client.get(f"/api/tasks/{follow['chat']['taskId']}").json()["task"]
+    assert "and this one" in latest["problem"] and "Beat 10 of 29: `update`" in latest["problem"]
+
+
+def test_a_huge_snapshot_is_refused(client):
+    big = {**SNAPSHOT, "storyJson": {"blob": "x" * 4_100_000}}
+    r = client.post(f"/api/game-chat/ml/threads/{client.thread_id}/messages", headers=AUTH,
+                    json={"text": "hi", "context": {"story": big}})
+    assert r.status_code == 422
+
+
+def test_the_e2e_switch_off_reaches_the_chat_its_follow_ups_and_its_pull(client):
+    t = client.thread_id
+    (client.game.parent / "tools").mkdir(exist_ok=True)
+    (client.game.parent / "tools" / "pull_dex_assets.py").write_text("")
+    r = client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH,
+                    json={"text": "rephrase it", "context": {"e2e": False}}).json()
+    task = client.get(f"/api/tasks/{r['chatId']}").json()["task"]
+    assert task["options"] == {"e2e": False}
+    brief = task["problem"]
+    assert "End-to-end tests are off" in brief.split("## The player's message", 1)[1]  # in the hidden block
+    assert "--allow-untested --only <task-dir>" in brief
+    wait_state(client, r["chatId"], {"succeeded"})
+    client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH,
+                json={"text": "and run them now", "chatId": r["chatId"], "context": {"e2e": True}})
+    follow = wait_state(client, r["chatId"], {"succeeded", "running", "queued"})
+    latest = client.get(f"/api/tasks/{follow['chat']['taskId']}").json()["task"]
+    assert latest["attempt"] == 2 and latest["options"] == {"e2e": True}

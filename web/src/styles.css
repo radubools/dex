@@ -417,6 +417,7 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 .state-dot.succeeded { background: var(--add); }
 .state-dot.failed, .state-dot.cancelled { background: var(--del); }
 .state-dot.paused { background: var(--accent); opacity: 0.6; }
+.state-dot.blocked { background: #fb923c; }
 
 /* ---------------- composer ---------------- */
 
@@ -517,6 +518,7 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 .badge.succeeded { color: var(--add); }
 .badge.failed, .badge.cancelled { color: var(--del); }
 .badge.paused { color: var(--accent); }
+.badge.blocked { color: #fb923c; }
 .ghost-btn {
   min-height: 40px; padding: 0 14px; border-radius: 10px;
   background: var(--panel-2); border: 1px solid var(--line);
@@ -1863,3 +1865,10 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
 }
+
+/* The task graph (components/TaskGraph.tsx). */
+.task-graph .viewer-body { display: flex; flex-direction: column; gap: 10px; }
+.task-graph-canvas { overflow: auto; }
+.task-graph-canvas svg { max-width: none; height: auto; }
+.task-graph-canvas g.node:hover rect { filter: brightness(1.25); }
+.task-graph .small { font-size: 12px; }

@@ -27,7 +27,7 @@ TASK_COLUMNS = """
     extract(epoch from started_at)::float8 AS started_at,
     extract(epoch from finished_at)::float8 AS finished_at,
     error, cost_usd, turns, session_id, attempt, parent_id, resumed_from, output_slug,
-    model, cost_is_estimate, project, scope, held, anchor
+    model, cost_is_estimate, project, scope, held, anchor, waiting_on, wake_note, options
 """
 
 
@@ -68,6 +68,11 @@ def task_from_row(row: asyncpg.Record) -> Task:
             task.anchor = None
     else:
         task.anchor = raw_anchor
+    raw_waiting = row["waiting_on"]
+    task.waiting_on = json.loads(raw_waiting) if isinstance(raw_waiting, str) else raw_waiting
+    task.wake_note = row["wake_note"]
+    raw_options = row["options"]
+    task.options = (json.loads(raw_options) if isinstance(raw_options, str) else raw_options) or {}
     return task
 
 
@@ -221,14 +226,15 @@ class TaskStore:
         await self.db.pool.execute(
             """INSERT INTO tasks (id, thread_id, title, slug, problem, state, created_at,
                                   attempt, parent_id, session_id, output_slug, resumed_from,
-                                  model, project, scope, held, anchor)
+                                  model, project, scope, held, anchor, options)
                VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8, $9, $10, $11, $12, $13, $14,
-                       $15, $16, $17)""",
+                       $15, $16, $17, $18)""",
             task.id, task.thread_id, task.title, task.slug, task.problem,
             task.state.value, task.created_at, task.attempt, task.parent_id, task.session_id,
             task.output_slug, task.resumed_from, task.model, task.project, task.scope,
             task.held,
             json.dumps(task.anchor) if task.anchor else None,
+            json.dumps(task.options) if task.options else None,
         )
         return task
 
@@ -341,6 +347,11 @@ class TaskStore:
             counts.get("thinking_tokens", 0),
         )
 
+    async def set_options(self, task_id: str, options: dict[str, Any]) -> None:
+        """Replace a task's run options (a chat's player turned a switch while it runs)."""
+        await self.db.pool.execute("UPDATE tasks SET options = $2 WHERE id = $1", task_id,
+                                   json.dumps(options) if options else None)
+
     async def set_session(self, task_id: str, session_id: str) -> None:
         await self.db.pool.execute(
             "UPDATE tasks SET session_id = $2 WHERE id = $1", task_id, session_id
@@ -370,8 +381,10 @@ class TaskStore:
                 # worth continuing, so it is finished before anything untouched
                 # is begun. `seq` alone made that true only by coincidence,
                 # because parked tasks usually happen to be the older ones.
+                # A woken task (priority) goes before both: what it waited on
+                # is done, and it holds the session that asked for it.
                 f"""SELECT id FROM tasks WHERE state = 'queued' {scope_filter}
-                   ORDER BY (started_at IS NOT NULL) DESC, seq
+                   ORDER BY priority DESC, (started_at IS NOT NULL) DESC, seq
                    FOR UPDATE SKIP LOCKED LIMIT 1""",
                 *scopes,
             )
@@ -380,7 +393,7 @@ class TaskStore:
             claimed = await conn.fetchrow(
                 f"""UPDATE tasks
                     SET state = 'running', claimed_by = $2, claimed_at = now(),
-                        started_at = now(), activity = 'starting'
+                        started_at = now(), activity = 'starting', priority = 0
                     WHERE id = $1
                     RETURNING {TASK_COLUMNS}""",
                 row["id"], worker,
@@ -483,6 +496,161 @@ def _claimed_by_dead_local_process(claimed_by: str | None, hostname: str | None)
     return False
 
 
+class DepStore:
+    """Task dependencies (design/18_task_dependencies.md).
+
+    A task that starts or continues another from its own run depends on it.
+    An edge points at the attempt it was made to; the attempt that counts is
+    the latest one of that chain (attempts link by `parent_id`), so a
+    follow-up of the dependency is waited for too.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def add(self, task_id: str, depends_on: str, kind: str = "started") -> None:
+        await self.db.pool.execute(
+            """INSERT INTO task_deps (task_id, depends_on, kind) VALUES ($1, $2, $3)
+               ON CONFLICT (task_id, depends_on) DO NOTHING""",
+            task_id, depends_on, kind,
+        )
+
+    async def of(self, task_id: str) -> list[str]:
+        """What a task depends on, oldest edge first."""
+        rows = await self.db.pool.fetch(
+            "SELECT depends_on FROM task_deps WHERE task_id = $1 ORDER BY created_at", task_id)
+        return [r["depends_on"] for r in rows]
+
+    async def latest(self, task_id: str) -> Task | None:
+        """The newest attempt of the chain `task_id` belongs to (itself if none follow it)."""
+        row = await self.db.pool.fetchrow(
+            f"""WITH RECURSIVE chain AS (
+                    SELECT id FROM tasks WHERE id = $1
+                    UNION SELECT t.id FROM tasks t JOIN chain c ON t.parent_id = c.id)
+                SELECT {TASK_COLUMNS} FROM tasks WHERE id IN (SELECT id FROM chain)
+                ORDER BY attempt DESC, created_at DESC LIMIT 1""",
+            task_id,
+        )
+        return task_from_row(row) if row else None
+
+    async def status(self, task_id: str) -> dict[str, Any] | None:
+        """Where a dependency stands: its latest attempt, and whether it is done.
+
+        Done means that attempt has ended (succeeded, failed, cancelled or
+        archived) and no follow-up note is still queued for it: a note becomes
+        another attempt, which is waited for in turn.
+        """
+        latest = await self.latest(task_id)
+        if latest is None:
+            return None
+        queued = await self.db.pool.fetchval(
+            "SELECT count(*) FROM task_messages WHERE task_id = $1 AND delivered_at IS NULL", latest.id)
+        summary = await self.db.pool.fetchval(
+            """SELECT data->>'summary' FROM events WHERE task_id = $1 AND type = 'result'
+               ORDER BY seq DESC LIMIT 1""", latest.id)
+        thread = await self.db.pool.fetchval(
+            "SELECT title FROM threads WHERE id = $1", latest.thread_id) if latest.thread_id else None
+        return {
+            "task": latest, "done": latest.state.terminal and not queued,
+            "queuedNotes": queued, "summary": summary, "threadTitle": thread,
+        }
+
+    async def waiters(self, task_id: str) -> list[str]:
+        """Every task that waits on `task_id`, directly or through others."""
+        rows = await self.db.pool.fetch(
+            """WITH RECURSIVE up AS (
+                   SELECT task_id FROM task_deps WHERE depends_on = $1
+                   UNION SELECT d.task_id FROM task_deps d JOIN up ON d.depends_on = up.task_id)
+               SELECT task_id FROM up""",
+            task_id,
+        )
+        return [r["task_id"] for r in rows]
+
+    async def packages(self, ids: list[str]) -> set[str]:
+        """The package keys (output directory names) of these tasks."""
+        if not ids:
+            return set()
+        rows = await self.db.pool.fetch(
+            "SELECT coalesce(output_slug, slug) AS pkg FROM tasks WHERE id = ANY($1::text[])", ids)
+        return {r["pkg"] for r in rows}
+
+    async def depth(self, task_id: str) -> int:
+        """How many tasks stand above this one in the graph (0 for a task nobody waits on)."""
+        depth, level = 0, [task_id]
+        while level and depth < 50:
+            rows = await self.db.pool.fetch(
+                "SELECT DISTINCT task_id FROM task_deps WHERE depends_on = ANY($1::text[])", level)
+            level = [r["task_id"] for r in rows]
+            if level:
+                depth += 1
+        return depth
+
+    async def count(self, task_id: str) -> int:
+        return await self.db.pool.fetchval("SELECT count(*) FROM task_deps WHERE task_id = $1", task_id)
+
+    async def blocked(self) -> list[Task]:
+        rows = await self.db.pool.fetch(
+            f"SELECT {TASK_COLUMNS} FROM tasks WHERE state = 'blocked' AND NOT held ORDER BY seq")
+        return [task_from_row(r) for r in rows]
+
+    async def graph(self, project: str | None, recent_s: float = 6 * 3600) -> dict[str, Any]:
+        """The active part of the task graph: nodes and the edges between them.
+
+        A node is a task chain, shown by its latest attempt. Active chains are
+        the ones queued, running, waiting on input, paused or blocked; finished
+        ones are kept when an edge joins them to an active one, or when they
+        ended in the last `recent_s` seconds and took part in an edge.
+        """
+        rows = await self.db.pool.fetch(
+            f"""WITH RECURSIVE roots AS (
+                    SELECT id, id AS root FROM tasks WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM tasks)
+                    UNION SELECT t.id, r.root FROM tasks t JOIN roots r ON t.parent_id = r.id)
+                SELECT {TASK_COLUMNS},
+                       (SELECT r.root FROM roots r WHERE r.id = tasks.id LIMIT 1) AS root,
+                       (SELECT th.title FROM threads th WHERE th.id = tasks.thread_id) AS thread_title
+                  FROM tasks
+                 WHERE ($1::text IS NULL OR project = $1) AND state <> 'archived'""",
+            project,
+        )
+        latest: dict[str, Any] = {}
+        root_of: dict[str, str] = {}
+        for r in rows:
+            root_of[r["id"]] = r["root"]
+            cur = latest.get(r["root"])
+            if cur is None or (r["attempt"], r["created_at"] or 0) > (cur["attempt"], cur["created_at"] or 0):
+                latest[r["root"]] = r
+        edges_rows = await self.db.pool.fetch("SELECT task_id, depends_on, kind FROM task_deps")
+        edges = {}
+        for e in edges_rows:
+            a, b = root_of.get(e["task_id"]), root_of.get(e["depends_on"])
+            if a and b and a != b:
+                edges[(a, b)] = e["kind"]
+        active = {"queued", "running", "awaiting_input", "paused", "blocked"}
+        now = time.time()
+        keep = {k for k, r in latest.items() if r["state"] in active}
+        linked = {k for pair in edges for k in pair}
+        for a, b in edges:
+            if a in keep or b in keep:
+                keep |= {a, b}
+        keep |= {k for k in linked if (latest[k]["finished_at"] or 0) > now - recent_s}
+        nodes = []
+        for k in keep:
+            r = latest[k]
+            nodes.append({
+                "id": r["id"], "chain": k, "slug": r["slug"], "package": r["output_slug"] or r["slug"],
+                "title": r["title"], "state": r["state"], "activity": r["activity"],
+                "attempt": r["attempt"], "threadId": r["thread_id"], "threadTitle": r["thread_title"],
+                "costUsd": r["cost_usd"], "createdAt": r["created_at"], "finishedAt": r["finished_at"],
+            })
+        nodes.sort(key=lambda n: n["createdAt"] or 0)
+        ids = {n["chain"]: n["id"] for n in nodes}
+        return {
+            "nodes": nodes,
+            "edges": [{"from": ids[a], "to": ids[b], "kind": kind}
+                      for (a, b), kind in edges.items() if a in ids and b in ids],
+        }
+
+
 class TaskMessageStore:
     """Follow-up notes queued against a running task.
 
@@ -495,13 +663,13 @@ class TaskMessageStore:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def add(self, task_id: str, body: str) -> dict[str, Any]:
+    async def add(self, task_id: str, body: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         message_id = uuid.uuid4().hex[:12]
         row = await self.db.pool.fetchrow(
-            """INSERT INTO task_messages (id, task_id, body)
-               VALUES ($1, $2, $3)
+            """INSERT INTO task_messages (id, task_id, body, options)
+               VALUES ($1, $2, $3, $4)
                RETURNING id, body, extract(epoch from created_at)::float8 AS created_at""",
-            message_id, task_id, body,
+            message_id, task_id, body, json.dumps(options) if options else None,
         )
         return {"id": row["id"], "body": row["body"], "createdAt": row["created_at"],
                 "delivered": False}
@@ -528,6 +696,18 @@ class TaskMessageStore:
             task_id,
         )
         return [r["body"] for r in sorted(rows, key=lambda r: r["created_at"])]
+
+    async def pending_options(self, task_id: str) -> dict[str, Any]:
+        """The options the undelivered notes carry, merged oldest first (the last word wins)."""
+        rows = await self.db.pool.fetch(
+            """SELECT options FROM task_messages
+               WHERE task_id = $1 AND delivered_at IS NULL AND options IS NOT NULL
+               ORDER BY created_at""", task_id)
+        merged: dict[str, Any] = {}
+        for r in rows:
+            o = r["options"]
+            merged.update(json.loads(o) if isinstance(o, str) else o or {})
+        return merged
 
 
 class CostStore:

@@ -6,6 +6,9 @@ export type TaskState =
   /** Stopped mid-run — by dex making room, or by the server dying under it.
       Either way it goes again on its own. */
   | 'paused'
+  /** Waiting on tasks it started or continued (design/18): holds no slot, and
+      goes again on its own, first in line, when they are all done. */
+  | 'blocked'
   /** Taken out of every listing, with everything it built left on disk. */
   | 'archived'
 
@@ -429,3 +432,27 @@ export type Skill = {
 }
 
 export type SkillsResponse = { projects: string[]; skills: Skill[] }
+
+/** One task chain in the task graph, shown by its latest attempt (GET /api/dag). */
+export type TaskGraphNode = {
+  id: string
+  chain: string
+  slug: string
+  package: string
+  title: string
+  state: TaskState
+  activity: string | null
+  attempt: number
+  threadId: string | null
+  threadTitle: string | null
+  costUsd: number | null
+  createdAt: number | null
+  finishedAt: number | null
+}
+
+/** The active part of a project's task graph: an edge runs from a task to one it waits on. */
+export type TaskGraph = {
+  project: string
+  nodes: TaskGraphNode[]
+  edges: { from: string; to: string; kind: 'started' | 'continued' | 'waited' }[]
+}

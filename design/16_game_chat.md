@@ -61,6 +61,36 @@ sequenceDiagram
   tool output is trimmed, so a poll carries what changed and little else.
 - **Pause, resume, cancel** act on the chat's latest attempt.
 
+## What is on the player's screen
+
+A game may send, with every message, `context.story`: its snapshot of the
+lesson the player is in, as instantiated so far. Model Workshop sends
+`lesson.snapshot()`: the lesson's id, title and level; the beat on the card
+(index, id, section, title, text and choice as shown, values filled in, from
+the engine's `StoryRunner.snapshot()`); the beats taken and the story's
+variables; the lab machine's state, what stands on the stage, the floor's
+labels, the data points and the bench's values; and the story JSON it was
+instantiated from. It is what makes "this sentence" or "that number"
+unambiguous.
+
+It is hidden from the player. dex saves the whole of it to
+`context/snapshot-<ms>.json` in the chat's task directory and appends a short
+summary to the player's message for the agent, between `<dex-context>` and
+`</dex-context>`: in a new chat's brief, in a message to a running chat, in a
+queued follow-up. The summary says it is an instantiation, so numbers and
+text may differ from the story's template, and that changes go into the
+story or the asset. The thread records only what the player typed, and the
+engine's chat panel strips the block (`playerText`). Over 4 MB is refused.
+
+### The panel's two switches
+
+The engine's chat panel has two checkboxes in its header, on by default and
+kept on the device for every chat: **Screen context** (send `context.story`
+and `context.view`) and **E2E tests** (`context.e2e`). When tests are off
+the hidden block says so even without a snapshot, the chat task runs with
+`options.e2e = false`, and every task it starts or continues inherits that
+(design/18).
+
 ## Auth and settings
 
 Each project's chat has a token. `.dex/game-chat.json` (gitignored, re-read on

@@ -279,3 +279,28 @@ CREATE INDEX IF NOT EXISTS events_project_seq ON events (project, seq);
 UPDATE events e SET project = t.project
   FROM tasks t
  WHERE e.task_id = t.id AND e.project IS NULL AND t.project IS NOT NULL;
+
+-- Task dependencies: a task that started or continued another task, from its
+-- own run, waits on it (design/18_task_dependencies.md). `depends_on` names the
+-- attempt the edge was made to; whether it is done is read off the latest
+-- attempt of that task's chain, so a follow-up keeps the edge meaningful.
+CREATE TABLE IF NOT EXISTS task_deps (
+    task_id    TEXT        NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    depends_on TEXT        NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    -- 'started' (a new task), 'continued' (a change asked of an existing one).
+    kind       TEXT        NOT NULL DEFAULT 'started',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (task_id, depends_on)
+);
+CREATE INDEX IF NOT EXISTS task_deps_on ON task_deps (depends_on);
+-- A blocked task: the dependencies it is waiting for (task ids), what dex tells
+-- it when they are done, and a claim priority so a woken task goes first.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS waiting_on JSONB;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS wake_note  TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority   INTEGER NOT NULL DEFAULT 0;
+
+-- How a task runs, set by whoever started it and inherited by the tasks it
+-- starts or continues (design/18): {"e2e": false} skips end-to-end tests. A
+-- follow-up note carries the options its sender had to the attempt it starts.
+ALTER TABLE tasks         ADD COLUMN IF NOT EXISTS options JSONB;
+ALTER TABLE task_messages ADD COLUMN IF NOT EXISTS options JSONB;

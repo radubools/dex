@@ -80,6 +80,23 @@ ESCALATING_TOOLS = {"mcp__dex__link_local_source"}
 #: Everything else beside a task's own directory is a sibling package.
 NOT_A_PACKAGE = {"utils", "AGENTS.md", "widgets.json", "skills.json"}
 
+#: Files that make a package: a chat never writes these (it asks the asset's task).
+PACKAGE_FILES = {"manifest.json", "story.json", "e2e.json", "catalog.json"}
+PACKAGE_SUFFIXES = {".glb", ".gltf", ".wav", ".ogg", ".mp3", ".flac", ".m4a"}
+#: Shell words that build, copy or install a package. In a chat's command they mean
+#: it is doing an asset task's work itself (the game's puller is the one exception).
+PACKAGE_COMMAND_HINTS = ("write_story(", "export_story(", "catalog.export(", "write_package(",
+                         "write_catalog(", "export_catalog(",
+                         "build_story", "/public/assets/", "public/assets/")
+PULLER = "pull_dex_assets.py"
+
+DELEGATE = (
+    "A chat does not make or edit assets or stories itself: each is made by its own task, in "
+    "its own thread, where its history and checks live. Use `find_tasks` and `continue_task` "
+    "to change one that exists, or `start_task` in the right thread for a new one; when they "
+    "are done, install them with the game's pull (`{puller} … --only <task-dir>`)."
+).format(puller=PULLER)
+
 
 class PermissionPolicy:
     """Builds the `can_use_tool` callback for one task."""
@@ -93,6 +110,8 @@ class PermissionPolicy:
         extra_writable: tuple[Path, ...] = (),
         read_only: tuple[Path, ...] = (),
         escalate: Callable[[str, str, dict[str, Any], str | None], Awaitable[str]],
+        delegate_assets: bool = False,
+        asset_dirs: tuple[Path, ...] = (),
     ) -> None:
         self.workspace = workspace.resolve()
         self.task_dir = task_dir.resolve()
@@ -112,6 +131,11 @@ class PermissionPolicy:
         self.read_only = tuple(p.resolve() for p in read_only)
         #: Called when a decision needs a human; resolves to "allow" or "deny".
         self.escalate = escalate
+        #: A chat: every asset change goes to the asset's own task (deps.py), so
+        #: it may not write package files, nor into `asset_dirs` (a game's
+        #: installed assets, which only the game's pull writes).
+        self.delegate_assets = delegate_assets
+        self.asset_dirs = tuple(p.resolve() for p in asset_dirs)
 
     def _within(self, raw: str | None, root: Path) -> bool:
         if not raw:
@@ -220,6 +244,10 @@ class PermissionPolicy:
         else a task might do outside its directory is a judgement call, and
         judgement calls belong to the operator.
         """
+        if self.delegate_assets:
+            why = self._delegation_refusal(tool_name, input_data)
+            if why is not None:
+                return why
         if tool_name not in WRITE_TOOLS:
             return None
         path = _target_path(input_data)
@@ -245,6 +273,26 @@ class PermissionPolicy:
             "project, but only your own directory is yours to change — and that "
             "package may be being written right now by the task that owns it."
         )
+
+    def _delegation_refusal(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
+        """Why a chat may not do this itself: it is an asset task's work."""
+        if tool_name in WRITE_TOOLS:
+            target = self._resolved(_target_path(input_data))
+            if target is None:
+                return None
+            if any(target == d or d in target.parents for d in self.asset_dirs):
+                return f"`{target}` is the game's installed assets. {DELEGATE}"
+            if target.name in PACKAGE_FILES or target.suffix.lower() in PACKAGE_SUFFIXES:
+                return f"`{target.name}` is part of a package. {DELEGATE}"
+            return None
+        if tool_name == "Bash":
+            command = str(input_data.get("command", ""))
+            if PULLER in command:
+                return None
+            hint = next((h for h in PACKAGE_COMMAND_HINTS if h in command), None)
+            if hint is not None:
+                return f"This command builds, copies or installs a package (`{hint.strip('/(')}`). {DELEGATE}"
+        return None
 
     def _auto_reason(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
         """None means auto-approve; a string explains why a human is needed."""

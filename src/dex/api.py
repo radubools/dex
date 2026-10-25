@@ -808,6 +808,16 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "moved": moved,
         }
 
+    @app.get("/api/dag", dependencies=guard)
+    async def task_graph(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """The active task graph of a project: tasks and what waits on what (deps.py)."""
+        name = await resolve_project(project)
+        access.check(name)
+        return {"project": name, **await tasks.graph.store.graph(name)}
+
     @app.get("/api/feed", dependencies=guard)
     async def feed(
         project: str | None = Query(default=None),
@@ -1958,6 +1968,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # A follow-up started by a worker (from a queued note) is announced the
     # same way one started from a button is.
     tasks.announce = _announce
+    # Tasks a task starts in another thread say so there (deps.py).
+    tasks.post = publish_message
     # The queue hands a finished survey back here, because planning from one
     # needs the thread store and the planner and the queue has neither.
     tasks.surveyed = _plan_from_survey

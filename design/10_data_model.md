@@ -14,7 +14,7 @@ old one. The consequence is a hard rule — **changes must stay additive**.
 
 | Area | Tables |
 |---|---|
-| Work | `projects`, `threads`, `messages`, `tasks`, `task_messages` |
+| Work | `projects`, `threads`, `messages`, `tasks`, `task_messages`, `task_deps` |
 | Activity | `events` |
 | Configuration | `settings` |
 | Library and feed | `package_tags`, `topic_reviews` |
@@ -67,6 +67,7 @@ erDiagram
     threads ||--o{ tasks : started
     tasks ||--o{ task_messages : "queued notes"
     tasks |o--o{ tasks : parent_id
+    tasks ||--o{ task_deps : "waits on"
 
     projects {
         text slug PK "directory under assets/"
@@ -118,12 +119,23 @@ erDiagram
         bigint cache_write_tokens "billed at 1.25x"
         bigint output_tokens
         bigint thinking_tokens "subset of output"
+        jsonb waiting_on "blocked: the task ids"
+        text wake_note "told on waking"
+        int priority "woken tasks claimed first"
+        jsonb options "run options, inherited: e2e"
     }
     task_messages {
         text id PK
         text task_id FK "CASCADE"
         text body
         timestamptz delivered_at "NULL while queued"
+        jsonb options "carried to the attempt it starts"
+    }
+    task_deps {
+        text task_id PK "the task that waits"
+        text depends_on PK "the attempt it started or continued"
+        text kind "started continued waited"
+        timestamptz created_at
     }
 ```
 

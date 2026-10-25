@@ -38,6 +38,8 @@ This document is the map. Each feature has its own document:
 | [14](14_survey_and_anchors.md) | Pre-planning survey and anchors |
 | [15](15_skills.md) | Skills — a capability as one copyable directory |
 | [16](16_game_chat.md) | Game chat — a game's players talk to its project from inside the game |
+| [17](17_locks_and_ports.md) | Locked skill promotion and port leases — concurrent tasks never drop each other's work |
+| [18](18_task_dependencies.md) | Task dependencies — a task starts, continues and waits for work in other threads; the task graph view |
 
 ---
 
@@ -170,6 +172,9 @@ flowchart TB
 | `uploads` | Material the operator supplies, in `datasets/<project>/` |
 | `local_sources` | Linking a directory from elsewhere on the machine, read-only |
 | `skills` | A project's helpers and widgets, versioned and shareable |
+| `locks` | Lock, read, write, release: thread and file locks for shared state (skills, port leases) |
+| `ports` | Leased TCP ports for task servers, never handed out twice (`python -m dex.ports`) |
+| `deps` | Task dependencies: start, continue and wait for tasks in other threads; blocking and waking |
 | `designer` | Conversation history for design turns |
 | `store` / `db` | Reads and writes; schema applied at startup |
 | `projects` / `migrate` | Projects, starter guides, design threads, adopting old installs |

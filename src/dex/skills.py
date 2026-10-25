@@ -33,6 +33,7 @@ import ast
 import hashlib
 import io
 import json
+import os
 import logging
 import shutil
 import sys
@@ -307,7 +308,8 @@ def all_skills(workspace: Path) -> list[Skill]:
     found = [
         read(version)
         for named in sorted(root.iterdir()) if named.is_dir()
-        for version in sorted(named.iterdir()) if version.is_dir()
+        # A dot-named directory is a promotion being staged under its lock, not a version yet.
+        for version in sorted(named.iterdir()) if version.is_dir() and not version.name.startswith(".")
     ]
     return [s for s in found if s is not None]
 
@@ -748,10 +750,188 @@ def resync(
     return changed
 
 
+# ------------------------------------------------------- locked promotion
+#
+# A task used to write its promotion straight into the published version
+# directory its project was on. Two tasks on the same version then shared one
+# directory: whichever finished first published (renamed) it with the other's
+# half-written files in it, the other kept writing into the restored original,
+# and its own publish dropped the first one's work. Each now gets a working
+# copy of its own, and at the end its changes are applied, under the skill's
+# lock, onto whatever version the project is on by then: lock, read, write,
+# release.
+
+#: Files a promotion never carries: generated from the rest, or the version itself.
+_DERIVED = {MANIFEST_NAME, "utils/API.md"}
+
+
+def _files(root: Path) -> dict[str, bytes]:
+    """A skill directory's files, by relative path (junk and derived files left out)."""
+    if not root or not Path(root).is_dir():
+        return {}
+    out: dict[str, bytes] = {}
+    for f in _copyable(Path(root)):
+        rel = str(f.relative_to(root))
+        if rel in _DERIVED:
+            continue
+        out[rel] = f.read_bytes()
+    return out
+
+
+def _merge_text(base: bytes, ours: bytes, theirs: bytes) -> bytes | None:
+    """A three-way line merge (git merge-file), or None when the changes collide."""
+    import subprocess
+    import tempfile
+
+    try:
+        b, o, t = (x.decode("utf-8") for x in (base, ours, theirs))
+    except UnicodeDecodeError:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = []
+        for name, text in (("ours", o), ("base", b), ("theirs", t)):
+            p = Path(tmp) / name
+            p.write_text(text, encoding="utf-8")
+            paths.append(str(p))
+        try:
+            proc = subprocess.run(["git", "merge-file", "-p", *paths], capture_output=True, text=True)
+        except FileNotFoundError:
+            return None
+    return proc.stdout.encode("utf-8") if proc.returncode == 0 else None
+
+
+def rebase(base: Path, work: Path, onto: Path) -> tuple[dict[str, bytes | None], list[str]]:
+    """What a working copy changed against its base, applied onto another version.
+
+    Returns (writes, conflicts): `writes` maps each relative path to its new
+    bytes (None to delete), relative to `onto`; `conflicts` lists the files
+    both sides changed in ways a line merge cannot reconcile. A file the task
+    did not touch keeps whatever `onto` has, so another task's promotion since
+    the base stays in.
+    """
+    b, w, c = _files(base), _files(work), _files(onto)
+    writes: dict[str, bytes | None] = {}
+    conflicts: list[str] = []
+    for rel in sorted(set(b) | set(w) | set(c)):
+        bv, wv, cv = b.get(rel), w.get(rel), c.get(rel)
+        if wv == bv or wv == cv:
+            continue  # the task left it alone, or both sides agree
+        if cv == bv:
+            writes[rel] = wv  # only the task changed it (None: the task deleted it)
+            continue
+        if bv is not None and wv is not None and cv is not None:
+            merged = _merge_text(bv, cv, wv)
+            if merged is not None:
+                writes[rel] = merged
+                continue
+        if bv is None and wv is not None and cv is not None:
+            # Both added the same file: a merge with an empty base.
+            merged = _merge_text(b"", cv, wv)
+            if merged is not None:
+                writes[rel] = merged
+                continue
+        conflicts.append(rel)
+    return writes, conflicts
+
+
+def _apply(target: Path, writes: dict[str, bytes | None]) -> None:
+    for rel, data in writes.items():
+        dest = target / rel
+        if data is None:
+            dest.unlink(missing_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+
+
+def work_copies(workspace: Path, project_dir: Path, into: Path) -> dict[str, tuple[Path, Path]]:
+    """A base copy and a working copy of each enabled skill, for one task.
+
+    The task reads and promotes into the working copy (`into/work/<name>`); the
+    base copy (`into/base/<name>`) is what it started from, so its changes can
+    be told apart from everybody else's. Returns {name: (base, work)}.
+    """
+    recorded = read_enabled(project_dir).skills
+    out: dict[str, tuple[Path, Path]] = {}
+    for name, version in recorded.items():
+        skill = find(workspace, name, version)
+        if skill is None:
+            continue
+        base, work = into / "base" / name, into / "work" / name
+        stamp = into / "base" / f"{name}.version"
+        # A task coming back (woken after waiting on others, or resumed) keeps
+        # the copy it was working in, if it started from this same version.
+        if base.is_dir() and work.is_dir() and stamp.is_file() and stamp.read_text() == version:
+            out[name] = (base, work)
+            continue
+        for d in (base, work):
+            if d.exists():
+                shutil.rmtree(d)
+            shutil.copytree(skill.path, d, ignore=shutil.ignore_patterns(*JUNK))
+        stamp.write_text(version)
+        out[name] = (base, work)
+    return out
+
+
+def promote(workspace: Path, project_dir: Path, copies: dict[str, tuple[Path, Path]], *,
+            state_dir: Path | None = None, owner: str = "") -> dict[str, Any]:
+    """Publish what a task changed in its working copies: per skill, under its lock.
+
+    For each skill: lock; read the version the project is on *now* (another
+    task may have promoted since this one started); apply this task's changes
+    (rebase) onto it; publish the result as a new version; move the project
+    onto it and materialise; release. A file both sides changed in ways a line
+    merge cannot reconcile is a conflict: nothing is published for that skill,
+    and the conflict is reported.
+
+    Returns {"changed": {name: version}, "conflicts": {name: [files]}}.
+    """
+    from .locks import skill_lock
+
+    state = Path(state_dir) if state_dir else workspace / ".dex"
+    changed: dict[str, str] = {}
+    conflicts: dict[str, list[str]] = {}
+    for name, (base, work) in copies.items():
+        if _files(base) == _files(work):
+            continue
+        with skill_lock(state, name):
+            recorded = dict(read_enabled(project_dir).skills)
+            current = find(workspace, name, recorded.get(name, "")) if recorded.get(name) else None
+            onto = current.path if current else base
+            writes, clash = rebase(base, work, onto)
+            if clash:
+                conflicts[name] = clash
+                continue
+            if not writes:
+                continue
+            staging = skills_dir(workspace) / name / f".promote-{os.getpid()}-{int(time.time() * 1000)}"
+            shutil.copytree(onto, staging, ignore=shutil.ignore_patterns(*JUNK))
+            _apply(staging, writes)
+            fresh = read(staging)
+            if fresh is None:
+                shutil.rmtree(staging, ignore_errors=True)
+                continue
+            try:
+                published = publish(fresh)
+            except Collision:
+                existing = find(workspace, name, fingerprint(staging))
+                shutil.rmtree(staging, ignore_errors=True)
+                if existing is None:
+                    continue
+                published = existing
+            recorded[name] = published.version
+            materialise(workspace, project_dir, list(recorded), versions=recorded)
+            changed[name] = published.version
+            log.info("promoted %s into %s@%s (%s)", owner or "a task", name, published.version, project_dir.name)
+    return {"changed": changed, "conflicts": conflicts}
+
+
 #: A directory whose version is not a real digest is a **draft** — the design
 #: chat's working copy. Publishing one computes its true version, renames it,
 #: and moves every project that had that skill across.
 DRAFT = "draft"
+#: Beside a draft (`skills/<name>/.draft-base`): the version it was forked from.
+DRAFT_BASE = ".draft-base"
 
 
 def is_draft(skill: Skill) -> bool:
@@ -798,6 +978,9 @@ def fork(workspace: Path, name: str, version: str = "") -> Skill:
         )
     else:
         shutil.copytree(source.path, draft, ignore=shutil.ignore_patterns(*JUNK))
+        # What the draft started from, so publishing it can rebase its changes
+        # onto whatever the projects are on by then (tasks promote meanwhile).
+        (root / name / DRAFT_BASE).write_text(source.version)
     published = read(draft)
     assert published is not None
     return published
@@ -820,45 +1003,89 @@ def adopt(workspace: Path, assets_dir: Path) -> list[tuple[str, str, list[str]]]
 
     Returns `(name, version, projects moved)` per published draft.
     """
+    from .locks import skill_lock
+
     done: list[tuple[str, str, list[str]]] = []
     for draft in drafts(workspace):
-        try:
-            published = publish(draft)
-        except Collision:
-            # The draft hashes to a version that already exists: whatever was
-            # edited made no difference to the contents. There is nothing to
-            # publish, and the right outcome is to move onto what is already
-            # there rather than to fail the turn over it.
-            existing = find(workspace, draft.name, fingerprint(draft.path))
-            if existing is None:
-                log.warning("%s could not be published", draft.path.name)
-                continue
-            shutil.rmtree(draft.path, ignore_errors=True)
-            published = existing
-        if is_draft(published):
-            log.warning("%s could not be published", draft.path.name)
-            continue
-
-        moved: list[str] = []
-        for project_dir in sorted(p for p in assets_dir.iterdir() if p.is_dir()):
-            recorded = read_enabled(project_dir).skills
-            if published.name not in recorded:
-                continue
-            if recorded[published.name] == published.version:
-                continue
-            recorded[published.name] = published.version
-            try:
-                materialise(workspace, project_dir,
-                            list(recorded), versions=recorded)
-            except Collision as exc:
-                # One project refusing does not undo the publish, and must not
-                # stop the others: the version exists either way.
-                log.warning("could not move %s to %s: %s",
-                            project_dir.name, published.version, exc)
-                continue
-            moved.append(project_dir.name)
-        done.append((published.name, published.version, moved))
+        # Lock, read, write, release: no task's promotion lands between the
+        # rebase and the projects moving.
+        with skill_lock(workspace / ".dex", draft.name):
+            one = _adopt_one(workspace, assets_dir, draft)
+        if one is not None:
+            done.append(one)
     return done
+
+
+def _adopt_one(workspace: Path, assets_dir: Path, draft: Skill) -> tuple[str, str, list[str]] | None:
+    """Publish one draft (rebased onto what its projects are on now) and move them. Under the skill's lock."""
+    _rebase_draft(workspace, assets_dir, draft)
+    try:
+        published = publish(draft)
+    except Collision:
+        # The draft hashes to a version that already exists: whatever was
+        # edited made no difference to the contents. There is nothing to
+        # publish, and the right outcome is to move onto what is already
+        # there rather than to fail the turn over it.
+        existing = find(workspace, draft.name, fingerprint(draft.path))
+        if existing is None:
+            log.warning("%s could not be published", draft.path.name)
+            return None
+        shutil.rmtree(draft.path, ignore_errors=True)
+        published = existing
+    if is_draft(published):
+        log.warning("%s could not be published", draft.path.name)
+        return None
+
+    moved: list[str] = []
+    for project_dir in sorted(p for p in assets_dir.iterdir() if p.is_dir()):
+        recorded = read_enabled(project_dir).skills
+        if published.name not in recorded:
+            continue
+        if recorded[published.name] == published.version:
+            continue
+        recorded[published.name] = published.version
+        try:
+            materialise(workspace, project_dir,
+                        list(recorded), versions=recorded)
+        except Collision as exc:
+            # One project refusing does not undo the publish, and must not
+            # stop the others: the version exists either way.
+            log.warning("could not move %s to %s: %s",
+                        project_dir.name, published.version, exc)
+            continue
+        moved.append(project_dir.name)
+    return (published.name, published.version, moved)
+
+
+def _rebase_draft(workspace: Path, assets_dir: Path, draft: Skill) -> None:
+    """Carry a draft's changes onto the newest version a project is on, when that moved on since the fork.
+
+    Tasks keep promoting while a design turn edits its draft. Publishing the
+    draft as it stands would move every project back to the fork point and drop
+    those promotions; rebasing keeps them. A file both changed beyond a line
+    merge keeps the draft's version (the design turn is the deliberate edit).
+    """
+    marker = draft.path.parent / DRAFT_BASE
+    base_version = marker.read_text().strip() if marker.is_file() else ""
+    base = find(workspace, draft.name, base_version) if base_version else None
+    if base is None:
+        return
+    versions = {read_enabled(p).skills.get(draft.name) for p in assets_dir.iterdir() if p.is_dir()} - {None, base_version}
+    onto = max((s for s in (find(workspace, draft.name, v) for v in versions) if s), key=lambda s: s.updated, default=None)
+    if onto is None:
+        return
+    # The draft's changes, rebased: every file of `onto`, then the draft's own edits on top.
+    writes, clash = rebase(base.path, draft.path, onto.path)
+    theirs = _files(onto.path)
+    mine = _files(draft.path)
+    for rel, data in theirs.items():
+        if rel not in writes and rel not in clash and mine.get(rel) != data:
+            if _files(base.path).get(rel) == mine.get(rel):
+                writes[rel] = data  # changed only on the projects' side: take it
+    for rel in clash:
+        log.warning("%s: %s changed on both sides; keeping the draft's", draft.name, rel)
+    _apply(draft.path, {r: d for r, d in writes.items() if r not in clash})
+    log.info("rebased draft %s from %s onto %s", draft.name, base_version, onto.version)
 
 
 # ------------------------------------------------------------ export/import

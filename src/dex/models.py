@@ -24,6 +24,10 @@ class TaskState(str, Enum):
     #: because there is one thing to do about it: start it again. Not terminal;
     #: nobody needs to intervene.
     PAUSED = "paused"
+    #: Waiting on tasks it started or continued (`waiting_on`). Holds no worker
+    #: slot and no timeout runs; dex queues it again, ahead of other work, once
+    #: they are all done, and tells it how they went (`wake_note`).
+    BLOCKED = "blocked"
     #: Taken out of the thread and out of every listing, without touching what
     #: it produced. Not a failure and not a deletion: the package it built is
     #: still on disk and still in the Library, but the task itself is done
@@ -42,7 +46,7 @@ class TaskState(str, Enum):
     @property
     def waiting(self) -> bool:
         """Will run again without anyone asking."""
-        return self in (TaskState.QUEUED, TaskState.PAUSED)
+        return self in (TaskState.QUEUED, TaskState.PAUSED, TaskState.BLOCKED)
 
     @property
     def resumable(self) -> bool:
@@ -78,6 +82,8 @@ EventType = Literal[
     "thread_busy",
     "task_created",
     "task_state",
+    #: A task started or continued another and now depends on it (deps.py).
+    "task_dependency",
     "text",
     "text_delta",
     "thinking",
@@ -203,6 +209,17 @@ class Task:
     #: survey segment the planner built this task out of, and kept so the Files
     #: tab can show what went *in* beside what came out.
     anchor: dict[str, Any] | None = None
+    #: While blocked: the task ids it waits for. Cleared when it is woken.
+    waiting_on: list[str] | None = None
+    #: What dex tells a woken task about the tasks it waited for.
+    wake_note: str | None = None
+    #: How it runs, inherited by the tasks it starts or continues ({"e2e": False}).
+    options: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def e2e(self) -> bool:
+        """Whether end-to-end tests run in this task (on unless someone turned them off)."""
+        return (self.options or {}).get("e2e") is not False
 
     @property
     def project_wide(self) -> bool:
@@ -357,6 +374,8 @@ class Task:
             "scope": self.scope,
             "held": self.held,
             "anchor": self.anchor,
+            "waitingOn": self.waiting_on or [],
+            "options": self.options or {},
             "costIsEstimate": self.cost_is_estimate,
             "tokens": self.tokens or None,
             "canResume": self.state.resumable,

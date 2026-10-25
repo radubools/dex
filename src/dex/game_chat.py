@@ -34,12 +34,13 @@ from __future__ import annotations
 import hmac
 import json
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .config import Config
 from .models import Event, Task, TaskState
@@ -145,6 +146,22 @@ class ChatContext(BaseModel):
     #: Where each kind of asset goes in the game, relative to its folder
     #: ({"model": "public/assets/<kind>/<name>/", "story": "public/assets/story/<name>/"}).
     destinations: dict[str, str] = Field(default_factory=dict)
+    #: The lesson as the player sees it, when they are in one: the game's
+    #: snapshot of this run of the story so far (the beat as shown, variables,
+    #: lab state, stage, data) and the story JSON it was instantiated from.
+    #: Hidden from the player: appended to their message for the agent only,
+    #: in a <dex-context> block, with the whole of it saved to a file.
+    story: dict[str, Any] | None = None
+    #: Whether end-to-end tests run, in this chat and every task it starts or
+    #: continues (the chat panel's "E2E tests" switch). Off: quicker, untested.
+    e2e: bool = True
+
+    @field_validator("story")
+    @classmethod
+    def _not_huge(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is not None and len(json.dumps(v, default=str)) > MAX_CONTEXT_BYTES:
+            raise ValueError(f"story context over {MAX_CONTEXT_BYTES // 1_000_000} MB")
+        return v
 
 
 class ChatMessage(BaseModel):
@@ -167,13 +184,119 @@ def _inside(root: Path, rel: str) -> str | None:
     return str(root / rel) if target == root or root in target.parents else None
 
 
-def chat_brief(entry: dict[str, Any], message: ChatMessage) -> str:
+def pull_command(entry: dict[str, Any], e2e: bool = True) -> str | None:
+    """How a chat pulls dex packages into its game: the game's own puller, if it has one.
+
+    `entry["pull"]` names the script; otherwise a `tools/pull_dex_assets.py`
+    beside the game folder (the games monorepo's shared puller) is used.
+    """
+    root = Path(entry.get("root") or ".").expanduser()
+    script = Path(entry["pull"]).expanduser() if entry.get("pull") else root.parent / "tools" / "pull_dex_assets.py"
+    if not script.is_file():
+        return None
+    return f"{sys.executable} {script} {root}" + ("" if e2e else " --allow-untested")
+
+
+#: The largest lesson snapshot a game may send with a message.
+MAX_CONTEXT_BYTES = 4_000_000
+#: Wraps the hidden context appended to a player's message: the agent reads it,
+#: a game's chat panel strips it (engine chat/index.js `playerText`).
+CONTEXT_OPEN, CONTEXT_CLOSE = "<dex-context>", "</dex-context>"
+
+
+def _short(value: Any, limit: int) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[:limit] + " …"
+
+
+def context_file(stamp: float | None = None) -> str:
+    """Where a message's lesson snapshot is saved, relative to the chat's task directory."""
+    return f"context/snapshot-{int((stamp or time.time()) * 1000)}.json"
+
+
+def save_context(task_dir: Path, rel: str, story: dict[str, Any]) -> None:
+    path = task_dir / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(story, ensure_ascii=False, indent=1, default=str))
+
+
+def context_block(story: dict[str, Any] | None, rel: str | None, e2e: bool = True) -> str:
+    """The hidden part of a player's message: what is on their screen, in brief, and whether
+    end-to-end tests run (for this chat and every task it starts or continues)."""
+    if not story and e2e:
+        return ""
+    tests = ("" if e2e else
+             "\n**End-to-end tests are off** (the player's switch): skip them here and in every task "
+             "you start or continue (dex passes it on); pull with `--allow-untested`.\n")
+    if not story:
+        return "\n\n" + CONTEXT_OPEN + tests + CONTEXT_CLOSE
+    lines = ["", "", CONTEXT_OPEN + tests,
+             "## On the player's screen (a snapshot of this run of the lesson so far)", "",
+             "This is an instantiation of the lesson's state so far: the story's values are "
+             "filled in from this player's run (what they did, the numbers the lab produced), "
+             "so text and numbers can differ from the template in the story JSON. Use it to "
+             "tell what the player means by \"this\", \"here\" or \"that number\"; a change "
+             "goes into the story (the template) or the asset, never into this snapshot.", ""]
+    meta = story.get("story") or {}
+    lines.append(f"- Station `{story.get('algorithm')}`, {story.get('mode')} mode, level {story.get('level')}.")
+    if meta:
+        lines.append(f"- Lesson: “{meta.get('title')}” (story `{meta.get('id')}`, schema {meta.get('schema')}).")
+    beat = story.get("beat")
+    if beat:
+        lines.append(f"- Beat {beat.get('index', 0) + 1} of {beat.get('of')}: `{beat.get('beat')}`"
+                     + (f", section “{beat.get('section')}”" if beat.get("section") else "")
+                     + (" (its step is done)" if beat.get("done") else ""))
+        if beat.get("title"):
+            lines.append(f"- The card's title: {beat['title']}")
+        if beat.get("text"):
+            lines.append(f"- The card's text, as shown: {beat['text']}")
+        if beat.get("choice"):
+            c = beat["choice"]
+            lines.append(f"- Its question: {c.get('prompt')} Options: " + " | ".join(c.get("options") or []))
+        if beat.get("input"):
+            lines.append(f"- It asks for a number: {beat['input'].get('prompt')}")
+        if beat.get("path"):
+            lines.append(f"- Beats played so far: {' → '.join(map(str, beat['path'][-12:]))}")
+        if beat.get("vars"):
+            lines.append(f"- The story's variables now: {_short(beat['vars'], 1500)}")
+    lab = story.get("lab") or {}
+    if lab:
+        if lab.get("state"):
+            lines.append(f"- The lab machine's state: `{lab['state']}`")
+        ents = lab.get("entities") or []
+        if ents:
+            lines.append(f"- On the stage ({len(ents)}): " + ", ".join(f"`{e.get('id')}` ({e.get('asset')})" for e in ents[:30])
+                         + (" …" if len(ents) > 30 else ""))
+        labels = [l for l in lab.get("labels") or [] if l.get("text")]
+        if labels:
+            lines.append("- Labels on the floor: " + " | ".join(str(l["text"]) for l in labels[:20]) + (" …" if len(labels) > 20 else ""))
+        if lab.get("params"):
+            lines.append(f"- The bench's values: {_short(lab['params'][:14], 1200)}")
+        if lab.get("points"):
+            lines.append(f"- Data points: {len(lab['points'])} (in the file)")
+    if rel:
+        lines.append(f"\nThe whole snapshot, with the story JSON it was instantiated from (`storyJson`), "
+                     f"is in `{rel}` in your task directory.")
+    lines.append(CONTEXT_CLOSE)
+    return "\n".join(lines)
+
+
+def chat_brief(entry: dict[str, Any], message: ChatMessage, context_rel: str | None = None) -> str:
     """The task brief for a new chat: who is talking, where the game is, then the message."""
     game = entry.get("game") or entry.get("project")
     root = Path(entry.get("root") or ".").expanduser()
     dests = [(k, _inside(root, v)) for k, v in sorted(message.context.destinations.items())]
     dest_lines = "\n".join(f"  - {k}: `{v}`" for k, v in dests if v) or "  - (the game gave none; use `public/assets/<kind>/<name>/`)"
     view = message.context.view.strip()
+    pull = pull_command(entry, message.context.e2e)
+    pull_line = (
+        f"run the game's own pull for exactly those packages, one `--only` per task directory "
+        f"(the last part of each package path dex gives you):\n\n    {pull} --only <task-dir>\n\n"
+        "It validates each package and, for a story, insists on its passing in-game test. A `FAIL` "
+        "line means the game refused it: tell the player why, and never force it."
+        if pull else ("tell the player it is ready in dex: this game has no pull for a chat to "
+                      "run, so its operator installs it")
+    )
     return f"""# In-game chat: {game}
 
 You are talking with the player of **{game}** from inside the game (dex's
@@ -193,19 +316,37 @@ arrives as your next turn.
 
 ## When the player asks for something to be made or changed
 
-1. Build assets as packages in your task directory with this project's
-   skills, and check them as the project brief says (validate, look at the
-   previews).
-2. Install them into the game yourself:
-   `catalog.export(pkg, game_root=Path("{root}"))`, or
-   `story.export_story(pkg, Path("{root}"))` for a story. That writes
-   `public/assets/<kind>/<name>/` and the game's `public/assets/index.json`.
-3. If the game needs code to use the new asset (a new model in a scene, a new
-   sound on an event, a new lesson in a menu), change the game's code under
-   `{root}`, keeping to its `AGENTS.md`, and run its tests
-   (`npx vitest run` in that folder) before you finish.
-4. Do not commit, push or publish anything, and do not touch other games or
-   dex itself. The player reloads the game to see the change.
+Assets and lessons are never made or edited in this chat. Each was made by
+its own task, in its own thread of this project, which holds its history
+and its checks; a change goes there, and so does anything new (dex refuses
+package files and the game's installed assets here).
+
+1. **Look it up.** `find_tasks` with words from its name or from what is on
+   the player's screen (the hidden context below names the lesson, the beat,
+   what stands on the stage). It exists: `continue_task` it with exactly what
+   to change and why.
+2. **Something new**: `start_task` in the thread for its kind (the project
+   brief's "Which thread" table; `project_threads` lists them), with a brief
+   that stands on its own. Be judicious: every task spends the operator's
+   usage; never start one for a question you can answer.
+   **A new set of lessons** (a new section of the game's lesson map, or new
+   lessons in one) starts with the game's **story catalog**: continue the
+   catalog task (`find_tasks` "catalog") or start one in the catalog thread
+   with the new section or tiles, as placeholders with their story names.
+   Only when it is done (and pulled, so the game shows the set as coming
+   soon) start one story task per lesson, each brief naming its exact
+   `story/<name>` from the catalog, and any asset tasks they need.
+3. **Tell the player** in a sentence or two that it is under way and where,
+   and end your turn. This chat is then blocked until that work is done, and
+   dex resumes it with how each went.
+4. **When resumed**, check each result, {pull_line}
+5. **If the game needs code to use it** (a new model in a scene, a new sound
+   on an event, a new lesson in a menu), change the game's code under
+   `{root}`, keeping to its `AGENTS.md`, and run its tests (`npx vitest run`
+   in that folder). Code is yours to change; assets are not.
+6. Do not commit, push or publish anything, and do not touch other games or
+   dex itself. Finish by telling the player what is now in the game: it
+   reloads by itself when new assets are installed.
 
 ## Where the player is
 
@@ -213,7 +354,7 @@ arrives as your next turn.
 
 ## The player's message
 
-{message.text.strip()}
+{message.text.strip()}{context_block(message.context.story, context_rel, message.context.e2e)}
 """
 
 
@@ -317,10 +458,18 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
     async def send(thread_id: str, body: ChatMessage, entry: dict = Depends(access)) -> dict[str, Any]:
         await chats_thread(entry, thread_id)
         text = body.text.strip()
+        story = body.context.story
+        rel = context_file() if story else None
+        # The chat runs as the switch says, and so does every task it starts.
+        options = {"e2e": body.context.e2e}
         if not body.chatId:
             title = (body.title or text.splitlines()[0])[:80]
-            task = await tasks.submit(chat_brief(entry, body), title=title, slug=f"chat-{title}"[:60],
-                                      thread_id=thread_id, project=entry["project"], scope="chat")
+            task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"chat-{title}"[:60],
+                                      thread_id=thread_id, project=entry["project"], scope="chat",
+                                      options=options)
+            if story:
+                save_context(task.output_dir(config.assets_dir, config.default_project), rel, story)
+            # The thread records what the player typed; the snapshot is for the agent.
             await note(thread_id, text)
             await publish_message(thread_id, ThreadMessage(
                 role="dex", kind="tasks", text=f"Started a chat: {task.title}",
@@ -333,7 +482,17 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
             raise HTTPException(404, "that chat is in another thread")
         latest = tasks.merge_live(members[-1])
         await note(thread_id, text)
-        # Running here: straight into the agent, which stops its turn for it.
+        # What the agent reads: the player's words, and what is on their screen now
+        # (they may have moved on since the chat began). Follow-ups share the package.
+        if story:
+            save_context(latest.output_dir(config.assets_dir, config.default_project), rel, story)
+        text = text + context_block(story, rel, body.context.e2e)
+        # Running here: straight into the agent, which stops its turn for it,
+        # and the switch applies to what it starts from now on.
+        live = tasks.live.get(latest.id)
+        if live is not None and live.inbox is not None:
+            live.options = {**(live.options or {}), **options}
+            await tasks.tasks.set_options(latest.id, live.options)
         if tasks.say(latest.id, text) is not None:
             return {"chatId": body.chatId, "taskId": latest.id, "delivered": "live"}
         # Paused: end that attempt, so the message continues it as the next one.
@@ -342,9 +501,9 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
             latest = await tasks.tasks.get(latest.id) or latest
         if not latest.state.terminal:
             # Queued, or starting up: held until it stops, then the next attempt.
-            await tasks.queue_message(latest.id, text)
+            await tasks.queue_message(latest.id, text, options=options)
             return {"chatId": body.chatId, "taskId": latest.id, "delivered": "queued"}
-        await tasks.queue_message(latest.id, text)  # stopped: starts the next attempt at once
+        await tasks.queue_message(latest.id, text, options=options)  # stopped: starts the next attempt at once
         members = await chain(entry, body.chatId)
         return {"chatId": body.chatId, "taskId": members[-1].id, "delivered": "followup"}
 

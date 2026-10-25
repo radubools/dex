@@ -7,7 +7,7 @@ import { progressOf, type FeedItem, type TaskView } from '../store'
 import type { SourceAnchor, Task, TaskMessage, TaskState } from '../types'
 
 /** States in which the agent has not finished with this task. */
-const WORKING_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused'])
+const WORKING_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused', 'blocked'])
 import { Attachments, namesOf, type Attached } from './Attachments'
 import { ErrorNote } from './ErrorNote'
 import { Prose } from './Prose'

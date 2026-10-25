@@ -10,7 +10,7 @@ import { progressOf } from '../store'
 /** A slug is kebab-case, so only `-` needs care; escape defensively anyway. */
 const escapeForSlug = (slug: string) => slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const ACTIVE_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused'])
+const ACTIVE_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused', 'blocked'])
 
 /** A glance at what a source is, before it is worth opening the pane for. */
 function iconFor(name: string): string {
@@ -500,8 +500,8 @@ function PlanCard({
  * a wall of them, and the count says the rest; clicking opens the group.
  */
 const STATUS_RANK: Record<string, number> = {
-  running: 0, awaiting_input: 1, queued: 2, paused: 3,
-  failed: 4, cancelled: 5, succeeded: 6,
+  running: 0, awaiting_input: 1, blocked: 2, queued: 3, paused: 4,
+  failed: 5, cancelled: 6, succeeded: 7,
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -509,6 +509,7 @@ const STATUS_LABEL: Record<string, string> = {
   awaiting_input: 'waiting on you',
   queued: 'queued',
   paused: 'paused',
+  blocked: 'waiting on tasks',
   failed: 'failed',
   cancelled: 'cancelled',
   succeeded: 'done',

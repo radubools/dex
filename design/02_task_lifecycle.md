@@ -35,6 +35,9 @@ stateDiagram-v2
     running --> failed: error, timeout,<br/>or nothing written
     running --> cancelled: Stop
     running --> paused: dex made room,<br/>or the server died
+    running --> blocked: ended its turn waiting<br/>on tasks it started (doc 18)
+    blocked --> queued: they are all done<br/>(first in line)
+    blocked --> cancelled: Stop
     awaiting_input --> paused: dex made room
 
     paused --> queued: capacity frees up<br/>(unless held)
@@ -64,7 +67,7 @@ driven by those groups rather than by listing states:
 | Property | States | Offered as |
 |---|---|---|
 | `terminal` | succeeded, failed, cancelled, archived | *Rerun* — a new task |
-| `waiting` | queued, paused | runs again without being asked |
+| `waiting` | queued, paused, blocked | runs again without being asked |
 | `resumable` | failed, cancelled | forking *Resume* |
 | `continuable` | paused, failed, cancelled | *Continue* — same row back in the queue |
 | `pausable` | queued, running, awaiting_input | *Pause* |

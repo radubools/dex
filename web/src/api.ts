@@ -2,7 +2,7 @@ import type {
   AssetResponse, CostTotals, CostsResponse, DexEvent, Health, Plan, PlannedTask,
   AnimationInfo, FeedResponse, GuideResponse, Project, ProjectsResponse, Settings,
   SettingsResponse, Task, TaskMessage, Thread, ThreadSummary, DesignReply,
-  PackageEntry, TagCount, UploadBatch, SkillsResponse, SkillVersion,
+  PackageEntry, TagCount, UploadBatch, SkillsResponse, SkillVersion, TaskGraph,
 } from './types'
 
 /**
@@ -158,6 +158,10 @@ export const reviewTopic = (slug: string, rating: 'again' | 'good' | 'easy', pro
     `/api/feed/${encodeURIComponent(slug)}/reviewed${project ? `?project=${encodeURIComponent(project)}` : ''}`,
     { rating },
   )
+
+/** The project's live task graph: what runs, what waits, and on what (design/18). */
+export const getTaskGraph = (project: string) =>
+  request<TaskGraph>(`/api/dag?project=${encodeURIComponent(project)}`)
 
 export const getCosts = (period: string, granularity: string, group: string) =>
   request<CostsResponse>(`/api/costs?period=${period}&granularity=${granularity}&group=${group}`)
