@@ -172,9 +172,15 @@ a change to the graph (`task_created`, `task_state`, `task_dependency`,
 half minute in case the stream is down. A drawing counts as done only once it
 is on screen, and the app's re-renders (one per streamed event) never
 interrupt it, so a busy project can no longer leave the view blank. It draws
-Mermaid flowcharts, one per group of connected tasks, drawn bottom up: the
-task that asked (a chat, say) at the bottom, an edge running up from it to
-each task it waits on. Groups stack newest first, by when their asking task
+Mermaid flowcharts, one per group of connected tasks, drawn left to right: the
+task that asked (a chat, say) on the left, an edge running right from it to
+each task it waits on. A task's children fill columns of at most ten, newest
+at the top, and the rest go in further columns to the right (invisible links
+from the child in the same row one column back, so a chat that started forty
+tasks is a 10 × 4 grid rather than one long line). Such a task's arrows carry
+no label, dashed for an asked-for change: a label is a layout step of its own
+and knocks the grid's rows out of line. Mermaid's layout still staggers the
+rows a little and orders each column itself. Groups stack newest first, by when their asking task
 last started, so they keep their place while their tasks move. Tasks with no
 dependencies share one column at the end, newest at the top. Every diagram
 is drawn at one scale, the one that fits the widest. Nodes are coloured by

@@ -7,8 +7,9 @@ import type { TaskGraph as Graph, TaskGraphNode } from '../types'
  * The live task graph of a project (design/18_task_dependencies.md): every
  * task that is queued, running, waiting or blocked, the finished ones joined
  * to them, and an arrow from each task to the ones it waits on. Each group of
- * connected tasks is its own diagram, drawn bottom up (the task that asked at
- * the bottom, what it asked for above it); the groups stack newest first, and
+ * connected tasks is its own diagram, drawn left to right (the task that asked
+ * on the left, what it asked for to its right, in columns of at most ten); the
+ * groups stack newest first, and
  * tasks with no dependencies share one column at the end, newest at the top.
  * Refetched when the event stream reports a task change (and every half
  * minute in case it is down); a click opens a task.
@@ -69,10 +70,13 @@ function groups(g: Graph): Group[] {
   return out
 }
 
+/** At most this many of a task's children share a column; the rest go in further columns. */
+const GRID_ROWS = 10
+
 function chart(g: Graph, group: Group): string {
-  // Bottom up: an edge runs from the task that waits (below) to the one it waits on (above).
+  // Left to right: an edge runs from the task that waits (left) to the ones it waits on (right).
   // Tasks on their own stack top down instead, linked invisibly so they form a column.
-  const lines = [group.alone ? 'flowchart TD' : 'flowchart BT']
+  const lines = [group.alone ? 'flowchart TD' : 'flowchart LR']
   for (const i of group.nodes) {
     const n = g.nodes[i]
     const title = esc(n.title.length > 42 ? `${n.title.slice(0, 40)}…` : n.title)
@@ -81,10 +85,31 @@ function chart(g: Graph, group: Group): string {
     lines.push(`  n${i}["<b>${title}</b><br/><small>${meta}<br/>${thread}</small>"]:::${n.state}`)
   }
   const index = new Map(g.nodes.map((n, i) => [n.id, i]))
-  // Newest first, so Mermaid lays the latest asks out first (on the left of their row).
+  // Newest first, so Mermaid lays the latest asks out first (at the top of their column).
   const edges = [...group.edges].sort((a, b) => stamp(g.nodes[index.get(b.to)!]) - stamp(g.nodes[index.get(a.to)!]))
+  // Each task's children (in the grid of the first task that waits on them) fill
+  // columns of GRID_ROWS, newest first: an invisible link from the child in the
+  // same row one column back pushes each later column one rank to the right.
+  const children = new Map<number, number[]>()
+  const placed = new Set<number>()
   for (const e of edges) {
-    lines.push(`  n${index.get(e.from)} -->|${e.kind === 'continued' ? 'asked for a change' : 'waits on'}| n${index.get(e.to)}`)
+    const child = index.get(e.to)!
+    if (placed.has(child)) continue
+    placed.add(child)
+    const from = index.get(e.from)!
+    children.set(from, [...(children.get(from) ?? []), child])
+  }
+  // A label is a layout step of its own, which knocks a grid's rows out of line:
+  // a task whose children need more than one column gets plain arrows, dashed
+  // for an asked-for change, and the footnote says what an arrow means.
+  for (const e of edges) {
+    const from = index.get(e.from)!
+    const to = index.get(e.to)!
+    if ((children.get(from)?.length ?? 0) > GRID_ROWS) lines.push(`  n${from} ${e.kind === 'continued' ? '-.->' : '-->'} n${to}`)
+    else lines.push(`  n${from} -->|${e.kind === 'continued' ? 'asked for a change' : 'waits on'}| n${to}`)
+  }
+  for (const kids of children.values()) {
+    for (let k = GRID_ROWS; k < kids.length; k++) lines.push(`  n${kids[k - GRID_ROWS]} ~~~ n${kids[k]}`)
   }
   if (group.alone) for (let k = 1; k < group.nodes.length; k++) lines.push(`  n${group.nodes[k - 1]} ~~~ n${group.nodes[k]}`)
   lines.push(
@@ -225,8 +250,9 @@ export function TaskGraph({
         {!graph && !error && <p className="muted">Loading…</p>}
         <div ref={host} className="task-graph-canvas" hidden={!graph?.nodes.length} />
         <p className="muted small">
-          Each group of connected tasks is drawn bottom up, newest group first: an arrow
-          runs up from a task to the tasks it waits on. A task waiting on others is
+          Each group of connected tasks is drawn left to right, newest group first: an
+          arrow runs right from a task to the tasks it waits on, in columns of at most
+          ten. A task waiting on others is
           blocked: it holds no slot, and resumes first once they are all done.
         </p>
       </div>
