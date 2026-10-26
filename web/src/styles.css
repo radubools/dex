@@ -486,6 +486,19 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 .task-panel > .tabs { grid-area: tabs; }
 .task-panel > .panel-body { grid-area: body; }
 .task-panel > .task-composer { grid-area: composer; }
+/* ⤒ ⤓ over the activity's foot, centred above the note box (TaskPanel). */
+.task-panel > .scroll-jumps {
+  grid-area: body; align-self: end; justify-self: center; z-index: 2;
+  display: flex; gap: 6px; margin-bottom: 8px; pointer-events: none;
+}
+.scroll-jumps button {
+  pointer-events: auto; width: 34px; height: 30px; border-radius: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(17, 21, 28, 0.88);
+  color: #e5e7eb; font-size: 16px; line-height: 1; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px);
+}
+.scroll-jumps button:hover { background: rgba(40, 48, 60, 0.95); }
+.task-panel > .panel-body.with-jumps { padding-bottom: calc(52px + env(safe-area-inset-bottom)); }
 .viewer { grid-template-rows: auto minmax(0, 1fr); }
 
 .panel-head, .viewer-bar {

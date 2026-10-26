@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   answerQuestion, cancelTask, getTaskMessages, rerunTask,
   resolveApproval, resumeTask, sendTaskMessage,
@@ -39,37 +39,62 @@ export function TaskPanel({
 }) {
   const [tab, setTab] = useState<Tab>('activity')
   const [busy, setBusy] = useState(false)
-  const feedEnd = useRef<HTMLDivElement>(null)
+  const body = useRef<HTMLDivElement>(null)
+  const feedBox = useRef<HTMLDivElement>(null)
   const { task } = view
   const { pct, label } = progressOf(view)
   // Anything terminal has nothing left to stop. A
   // paused task is still live: dex will start it again by itself.
   const live = !['succeeded', 'failed', 'cancelled'].includes(task.state)
 
-  // Opening a task (or the Activity tab) jumps to the end; after that, follow
-  // the feed only while the reader is already near the bottom, so scrolling up
-  // to read something is not yanked back.
-  const anchored = useRef(false)
+  // The activity opens at its end and stays there while it loads and grows
+  // (its events arrive after the panel opens, and images and code blocks grow
+  // it after that), until the reader scrolls up: from then on it stays where
+  // they are, until they scroll back to the end or press ⤓.
+  //
+  // The scroller is moved directly rather than through scrollIntoView, which
+  // scrolls every scrollable ancestor it needs to: with a streaming feed that
+  // reached past the panel it would scroll the app shell itself, sliding the
+  // panes out from under their own fixed children.
+  const stuck = useRef(true)
+  const [scrollable, setScrollable] = useState(false)
+  const toEnd = useCallback(() => {
+    const el = body.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
+  const measure = useCallback(() => {
+    const el = body.current
+    setScrollable(!!el && el.scrollHeight > el.clientHeight + 4)
+  }, [])
+  useLayoutEffect(() => {
+    stuck.current = true
+    toEnd()
+  }, [task.id, tab, toEnd])
+  useLayoutEffect(() => {
+    if (stuck.current) toEnd()
+    measure()
+  }, [view.feed, view.queued, task.state, toEnd, measure])
   useEffect(() => {
-    anchored.current = false
-  }, [task.id, tab])
-
-  useEffect(() => {
-    const end = feedEnd.current
-    const scroller = end?.parentElement?.parentElement
-    if (!end || !scroller) return
-    // The scroller is moved directly rather than through scrollIntoView, which
-    // scrolls every scrollable ancestor it needs to: with a streaming feed that
-    // reached past the panel it would scroll the app shell itself, sliding the
-    // panes out from under their own fixed children.
-    if (!anchored.current) {
-      scroller.scrollTop = scroller.scrollHeight
-      anchored.current = true
-      return
-    }
-    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 220
-    if (nearBottom) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
-  }, [view.feed, tab, task.id])
+    const box = feedBox.current, el = body.current
+    if (!box || !el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (stuck.current) toEnd()
+      measure()
+    })
+    ro.observe(box)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [tab, task.id, toEnd, measure])
+  const onScroll = () => {
+    const el = body.current
+    if (el) stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }
+  const jump = (end: boolean) => {
+    const el = body.current
+    if (!el) return
+    stuck.current = end
+    el.scrollTo({ top: end ? el.scrollHeight : 0, behavior: 'smooth' })
+  }
 
   return (
     <section className="task-panel">
@@ -144,7 +169,7 @@ export function TaskPanel({
         </button>
       </nav>
 
-      <div className="panel-body">
+      <div className={`panel-body${tab === 'activity' && scrollable ? ' with-jumps' : ''}`} ref={body} onScroll={tab === 'activity' ? onScroll : undefined}>
         {tab === 'files' ? (
           <>
             {/* What went in, before what came out. A task planned from a
@@ -170,7 +195,7 @@ export function TaskPanel({
             />
           </>
         ) : (
-          <div className="feed">
+          <div className="feed" ref={feedBox}>
             {view.feed.length === 0 && (
               <p className="muted small">
                 {task.state === 'paused'
@@ -204,10 +229,17 @@ export function TaskPanel({
                 ))}
               </div>
             )}
-            <div ref={feedEnd} />
           </div>
         )}
       </div>
+
+      {/* To the start or the end of a long activity, centred over the note box. */}
+      {tab === 'activity' && scrollable && (
+        <div className="scroll-jumps">
+          <button type="button" onClick={() => jump(false)} title="Scroll to the top" aria-label="Scroll to the top">⤒</button>
+          <button type="button" onClick={() => jump(true)} title="Scroll to the bottom" aria-label="Scroll to the bottom">⤓</button>
+        </div>
+      )}
 
       {tab === 'activity' && (
         <TaskComposer
