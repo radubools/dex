@@ -1,0 +1,12 @@
+{
+  "name": "game-sfx",
+  "description": "Procedural, seeded sound effects for the games in ~/games: a shared DSP toolkit (oscillators, noise, envelopes, filters, reverb, loudness, limiter, seamless loops, WAV/OGG, spectrograms) and a generator per game event with variations and loopable ambiences, packaged as kind \"sfx\" assets.",
+  "version": "866ed4",
+  "updated": 1792961122.356079,
+  "requires": [
+    "PIL",
+    "numpy",
+    "pytest",
+    "scipy"
+  ]
+}

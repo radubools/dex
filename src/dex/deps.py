@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 #: How many tasks one task may start or continue.
-MAX_DEPS = 8
+MAX_DEPS = 50
 #: How deep the graph may go: a task this many levels below a waiter may not start more.
 MAX_DEPTH = 3
 #: How often blocked tasks are checked.

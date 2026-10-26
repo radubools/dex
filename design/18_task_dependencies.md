@@ -44,7 +44,7 @@ Refused, with the reason returned to the agent:
 - **a cycle**: depending on a task that already waits for this one, directly
   or through others, or on its own package;
 - **too deep**: a task `MAX_DEPTH` (3) levels below a waiter may not start more;
-- **too many**: one task may start or continue at most `MAX_DEPS` (8);
+- **too many**: one task may start or continue at most `MAX_DEPS` (50);
 - another project, an unknown thread (unless `create_thread`), an empty brief.
 
 ### Asset work always goes to its own task, in its own thread
