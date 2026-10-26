@@ -73,6 +73,7 @@ erDiagram
         text slug PK "directory under assets/"
         text name
         text description
+        timestamptz last_viewed_at "orders the project list"
     }
     threads {
         text id PK
@@ -80,6 +81,7 @@ erDiagram
         text project FK "CASCADE"
         text kind "chat or project_design"
         bool hidden "never deleted"
+        timestamptz last_viewed_at "orders the thread list"
     }
     messages {
         text id PK
