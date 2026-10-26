@@ -263,6 +263,14 @@ def test_a_deep_ui_path_serves_the_app_shell(ui_client):
         assert "<!doctype html" in response.text.lower(), path
 
 
+def test_the_app_shell_is_revalidated_on_every_visit(ui_client):
+    """Without a Cache-Control a browser may reuse a stale shell and run the
+    previous build; the hashed scripts it names can be cached as usual."""
+    for path in ("/", "/yoga/threads/abc123"):
+        assert ui_client.get(path).headers["cache-control"] == "no-cache", path
+    assert "cache-control" not in ui_client.get("/assets/real.js").headers
+
+
 def test_a_missing_asset_is_still_a_404(ui_client):
     """Only extensionless routes fall back; a broken build must stay obvious."""
     assert ui_client.get("/assets/real.js").status_code == 200

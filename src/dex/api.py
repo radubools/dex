@@ -2045,7 +2045,7 @@ class _SpaFiles(StaticFiles):
 
     async def get_response(self, path: str, scope: Any) -> Any:
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             # StaticFiles raises rather than returning a 404 response, so the
             # fallback has to catch rather than inspect.
@@ -2057,7 +2057,14 @@ class _SpaFiles(StaticFiles):
                 or path.startswith("api/")
             ):
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+        # The shell names the build's hashed scripts, so a browser must check
+        # it on every visit: without a Cache-Control it may reuse a stale copy
+        # (heuristic freshness) and run the previous build. Revalidating is
+        # cheap, an etag match answers 304.
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["cache-control"] = "no-cache"
+        return response
 
 
 def _check_asset_path(access: Access, path: str) -> None:
