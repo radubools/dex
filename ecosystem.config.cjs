@@ -47,6 +47,24 @@ function secrets(name) {
 const google = secrets('.env.google')
 const localAuth = secrets('.env.auth')
 
+/**
+ * How dex's agents sign in to Claude: the one-year token (`claude
+ * setup-token`), from `.env.claude` or else the shell running `pm2 start`.
+ * Everything else Claude-related is blanked: pm2 merges the starting shell's
+ * environment in and `--update-env` never removes a key, so a stray
+ * ANTHROPIC_API_KEY (which wins over the token) or a Claude app session's own
+ * CLAUDE_CODE_* settings would otherwise reach every task.
+ */
+function claudeEnv() {
+  const blank = Object.fromEntries(
+    Object.keys(process.env)
+      .filter((key) => key === 'CLAUDECODE' || key.startsWith('CLAUDE_') || key.startsWith('ANTHROPIC_'))
+      .map((key) => [key, '']),
+  )
+  const token = secrets('.env.claude').CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_CODE_OAUTH_TOKEN || ''
+  return { ...blank, ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: token }
+}
+
 module.exports = {
   apps: [
     {
@@ -65,6 +83,7 @@ module.exports = {
       cwd: root,
       interpreter: 'none', // it is a console-script shebang, not a JS file
       env: {
+        ...claudeEnv(),
         ...google,
         ...localAuth,
         DEX_DATABASE_URL: 'postgresql://127.0.0.1/dex',
