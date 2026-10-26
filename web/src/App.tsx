@@ -164,7 +164,10 @@ export default function App() {
         setProject((current) => {
           // A project named in the URL wins, but only if it still exists.
           if (current && r.projects.some((p) => p.slug === current)) return current
-          return r.default
+          // Otherwise the one opened last: the list comes last-viewed first.
+          // Falling back to the server's default instead would open it and so
+          // put it at the top, losing the order on every fresh visit.
+          return r.projects[0]?.slug ?? r.default
         })
       })
       .catch((err: Error) => setFatal(err.message))
