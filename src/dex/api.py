@@ -49,7 +49,7 @@ from .planner import Plan, plan_from_message
 from .queue import TaskManager
 from .store import (
     CostStore, PackageTagStore, SettingsStore, TaskMessageStore, ThreadStore,
-    read_manifest_tags,
+    ViewStore, read_manifest_tags,
 )
 from .threads import ThreadMessage
 from .runner import AUTH_HINT, credential_source, is_auth_error, manim_available
@@ -301,6 +301,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     bus = EventBus(db)
     tasks = TaskManager(config, bus, db)
     threads = ThreadStore(db)
+    views = ViewStore(db)
     watcher = AssetWatcher(config, bus, tasks)
     # Holds work before a Claude limit runs out. `rebalance` is what a change
     # has to reach: it parks running work and stops the workers claiming, the
@@ -418,6 +419,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 raise HTTPException(status_code=404, detail="no such thread")
             return
         access.check(project)
+
+    def viewer_of(access: Access) -> str:
+        """Whose views to record and sort by: the user, or '' with sign-in off
+        (and for the service credential), where everyone is the same person."""
+        return access.user.id if access.user is not None else ""
 
     async def guard_slug(slug: str, access: Access = Depends(access_dep)) -> None:
         """For routes whose path carries the project slug itself."""
@@ -597,7 +603,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     @app.get("/api/projects", dependencies=guard)
     async def list_projects(access: Access = Depends(access_dep)) -> dict[str, Any]:
         allowed = set(await visible(access))
-        listed = [p for p in await projects.list() if p.slug in allowed]
+        listed = [p for p in await projects.list(viewer_of(access)) if p.slug in allowed]
         # The default is only a default if the caller can actually open it;
         # otherwise the UI would boot into a project it cannot read.
         fallback = (
@@ -1368,9 +1374,27 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "project": chosen,
             "threads": [
                 {**t.summary(), "costUsd": costs.get(t.id, 0.0)}
-                for t in await threads.list(chosen)
+                for t in await threads.list(chosen, viewer=viewer_of(access))
             ],
         }
+
+    # Opening a project or a thread in the UI records it, and both lists lead
+    # with what this person opened last (`views`). A thread's view is its
+    # project's too.
+    @app.post("/api/projects/{slug}/viewed", dependencies=slug_guard)
+    async def project_viewed(slug: str, access: Access = Depends(access_dep)) -> dict[str, bool]:
+        await views.record(viewer_of(access), "project", slug)
+        return {"ok": True}
+
+    @app.post("/api/threads/{thread_id}/viewed", dependencies=thread_guard)
+    async def thread_viewed(thread_id: str, access: Access = Depends(access_dep)) -> dict[str, bool]:
+        project = await db.pool.fetchval("SELECT project FROM threads WHERE id = $1", thread_id)
+        if project is None and not await threads.get(thread_id):
+            raise HTTPException(404, "no such thread")
+        await views.record(viewer_of(access), "thread", thread_id)
+        if project:
+            await views.record(viewer_of(access), "project", project)
+        return {"ok": True}
 
     @app.post("/api/threads", dependencies=can_run)
     async def create_thread(

@@ -76,6 +76,25 @@ def task_from_row(row: asyncpg.Record) -> Task:
     return task
 
 
+class ViewStore:
+    """When each person last opened a project or a thread (the `views` table),
+    which orders both lists. `viewer` is a user id, or '' with sign-in off."""
+
+    KINDS = ("project", "thread")
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def record(self, viewer: str, kind: str, key: str) -> None:
+        if kind not in self.KINDS:
+            raise ValueError(f"unknown view kind {kind!r}")
+        await self.db.pool.execute(
+            """INSERT INTO views (viewer, kind, key) VALUES ($1, $2, $3)
+               ON CONFLICT (viewer, kind, key) DO UPDATE SET viewed_at = now()""",
+            viewer, kind, key,
+        )
+
+
 class ThreadStore:
     """Threads and their messages."""
 
@@ -94,7 +113,12 @@ class ThreadStore:
         )
         return thread
 
-    async def list(self, project: str | None = None, include_hidden: bool = False) -> list[Thread]:
+    async def list(
+        self, project: str | None = None, include_hidden: bool = False, viewer: str | None = None
+    ) -> list[Thread]:
+        """A project's threads: the design thread first, then the latest
+        updated; or, given a `viewer`, the ones they opened last first
+        (`views`), then the ones they never opened, newest first."""
         rows = await self.db.pool.fetch(
             """SELECT t.id, t.title, t.project, t.kind,
                       extract(epoch from t.created_at)::float8 AS created_at,
@@ -105,11 +129,15 @@ class ThreadStore:
                            FROM tasks k WHERE k.thread_id = t.id), '{}'
                       ) AS task_ids
                FROM threads t
+               LEFT JOIN views v ON v.viewer = $3 AND v.kind = 'thread' AND v.key = t.id
                WHERE ($1::text IS NULL OR t.project = $1)
                  AND ($2::boolean OR NOT t.hidden)
-               -- Design threads lead: they are the project's own conversation.
-               ORDER BY (t.kind = 'project_design') DESC, t.updated_at DESC""",
-            project, include_hidden,
+               ORDER BY CASE WHEN $3::text IS NULL THEN NULL
+                             ELSE COALESCE(v.viewed_at, t.created_at) END DESC NULLS LAST,
+                        -- Unsorted by viewer, design threads lead: they are the
+                        -- project's own conversation.
+                        (t.kind = 'project_design') DESC, t.updated_at DESC""",
+            project, include_hidden, viewer,
         )
         return [
             Thread(

@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } 
 import {
   can, confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTask, getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads,
+  markProjectViewed, markThreadViewed,
   openStream,
   sendMessage,
   setAutoApprove,
@@ -178,6 +179,16 @@ export default function App() {
       window.history.replaceState(null, '', next)
     }
   }, [project, threadId, view])
+
+  // What the reader opens orders the lists: projects and threads come back
+  // with the last opened first. The lists on screen keep their order until
+  // they are next fetched, so nothing jumps under the pointer.
+  useEffect(() => {
+    if (project) markProjectViewed(project).catch(() => {})
+  }, [project])
+  useEffect(() => {
+    if (threadId) markThreadViewed(threadId).catch(() => {})
+  }, [threadId])
 
   // The Poses tab appears only for a project that has any.
   useEffect(() => {

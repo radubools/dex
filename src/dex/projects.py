@@ -120,14 +120,21 @@ class ProjectStore:
     def guide_path(self, slug: str) -> Path:
         return self.directory(slug) / "AGENTS.md"
 
-    async def list(self) -> list[Project]:
+    async def list(self, viewer: str | None = None) -> list[Project]:
+        """Every project, by name; or, given a `viewer`, the ones they opened
+        last first (`views`), then the ones they never opened, newest first."""
         rows = await self.db.pool.fetch(
             """SELECT p.slug, p.name, p.description,
                       extract(epoch from p.created_at)::float8 AS created_at,
                       extract(epoch from p.updated_at)::float8 AS updated_at,
                       (SELECT count(*) FROM threads t WHERE t.project = p.slug) AS threads,
                       (SELECT count(*) FROM tasks k WHERE k.project = p.slug) AS tasks
-               FROM projects p ORDER BY p.name"""
+               FROM projects p
+               LEFT JOIN views v ON v.viewer = $1 AND v.kind = 'project' AND v.key = p.slug
+               ORDER BY CASE WHEN $1::text IS NULL THEN NULL
+                             ELSE COALESCE(v.viewed_at, p.created_at) END DESC NULLS LAST,
+                        p.name""",
+            viewer,
         )
         return [Project(**dict(row)) for row in rows]
 

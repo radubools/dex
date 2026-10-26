@@ -98,6 +98,15 @@ export const createThread = (project?: string) =>
 export const getThread = (id: string) =>
   request<{ thread: Thread; tasks: Task[] }>(`/api/threads/${id}`)
 
+/**
+ * Records that the reader opened this project or thread: both lists lead with
+ * what they opened last. A thread's view counts for its project too.
+ */
+export const markProjectViewed = (slug: string) =>
+  post<{ ok: boolean }>(`/api/projects/${encodeURIComponent(slug)}/viewed`)
+
+export const markThreadViewed = (id: string) => post<{ ok: boolean }>(`/api/threads/${id}/viewed`)
+
 export const deleteThread = (id: string) =>
   request<{ ok: boolean }>(`/api/threads/${id}`, { method: 'DELETE' })
 
