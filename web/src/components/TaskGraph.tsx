@@ -105,12 +105,15 @@ export function TaskGraph({
   changes = 0,
   onOpenTask,
   onClose,
+  onBack,
 }: {
   project: string
   /** Bumped by the app when the event stream reports a task change: refetch soon. */
   changes?: number
   onOpenTask: (node: TaskGraphNode) => void
   onClose: () => void
+  /** The ‹: a step back through what led here (else it closes). */
+  onBack?: () => void
 }) {
   const [graph, setGraph] = useState<Graph | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -203,6 +206,7 @@ export function TaskGraph({
   return (
     <section className="viewer task-graph" role="dialog" aria-label="Task graph">
       <header className="viewer-bar">
+        <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
         <span className="viewer-path">
           Task graph
           {graph && (

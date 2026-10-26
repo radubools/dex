@@ -27,7 +27,7 @@ const same = (a: Target, b: Target) =>
  * it in place would leave the name describing something that no longer exists.
  * The server forks, writes, and publishes; every project on that skill moves.
  */
-export function GuideEditor({ project, onClose }: { project: string; onClose: () => void }) {
+export function GuideEditor({ project, onClose, onBack }: { project: string; onClose: () => void; onBack?: () => void }) {
   const [target, setTarget] = useState<Target>({ kind: 'guide' })
   const [skills, setSkills] = useState<SkillVersion[]>([])
   const [text, setText] = useState('')
@@ -115,7 +115,7 @@ export function GuideEditor({ project, onClose }: { project: string; onClose: ()
   return (
     <section className="viewer guide" role="dialog" aria-label="Project instructions">
       <header className="viewer-bar">
-        <button className="back-btn" onClick={onClose} aria-label="Back">‹</button>
+        <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
         <span className="viewer-path" title={path}>{title}</span>
         {dirty && <span className="chip warn">unsaved</span>}
         <button className="ghost-btn small" onClick={() => setEditing((v) => !v)}>

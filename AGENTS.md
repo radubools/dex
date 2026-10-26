@@ -78,4 +78,12 @@ and remove any directory that has no task behind it.
 ```bash
 .venv/bin/python -m pytest tests -q          # needs dex_test
 cd web && npx tsc --noEmit -p tsconfig.json
+npx playwright test --config web/playwright.config.ts   # UI navigation, against the dev UI on :4318
 ```
+
+The browser tests (`web/e2e`) answer the API from fixtures inside the
+browser: no sign-in, nothing on the server touched. Navigation is one
+history (`web/src/navigation.ts`): a handler the reader triggers calls `go()`
+before it changes what is shown, so the place becomes a step that back (the
+browser's, or a pane's ‹ on a phone) returns to; changes the app makes by
+itself replace the current step instead.

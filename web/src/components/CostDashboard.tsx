@@ -20,7 +20,7 @@ const COLORS = ['#7dd3fc', '#4ade80', '#fbbf24', '#f87171', '#c4b5fd', '#67e8f9'
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`)
 
-export function CostDashboard({ onClose }: { onClose: () => void }) {
+export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack?: () => void }) {
   const [period, setPeriod] = useState('week')
   const [group, setGroup] = useState('model')
   const [granularity, setGranularity] = useState('day')
@@ -40,6 +40,7 @@ export function CostDashboard({ onClose }: { onClose: () => void }) {
   return (
     <section className="viewer costs" role="dialog" aria-label="Cost dashboard">
       <header className="viewer-bar">
+        <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
         <span className="viewer-path">Cost</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>

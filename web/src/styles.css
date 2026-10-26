@@ -462,8 +462,8 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   to { transform: none; opacity: 1; }
 }
 
-/* Back chevron: the navigation affordance on mobile, hidden on desktop where
-   the panes sit side by side. */
+/* Back chevron: a pane's step back through what led to it (navigation.ts),
+   on a phone and on a wide screen alike. */
 .back-btn {
   min-width: 40px; min-height: 44px; margin-left: -8px;
   background: none; border: none; color: var(--accent); font-size: 26px;
@@ -767,14 +767,13 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   .threads { position: static; transform: none; width: auto; }
   .scrim, .icon-btn.menu { display: none; }
 
-  /* Desktop is unchanged: three columns side by side, no navigation stack. */
+  /* Three columns side by side; each pane keeps its ‹ to step back. */
   .task-panel, .viewer {
     position: static; height: 100dvh; border-radius: 0;
     border-top: none; border-left: 1px solid var(--line);
     background: var(--panel);
     box-shadow: none; animation: none;
   }
-  .back-btn { display: none; }
   /* With both open the viewer takes the column and the panel steps aside. */
   .app.with-panel.with-viewer .task-panel { display: none; }
   .chat { padding: 24px max(24px, calc(50% - 420px)); }

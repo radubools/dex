@@ -25,6 +25,7 @@ const SkillAdmin = lazy(() =>
 )
 import { TaskPanel } from './components/TaskPanel'
 import type { ViewerTarget } from './components/Viewer'
+import { canGoBack, navState, record, type Overlay, type Place } from './navigation'
 
 // highlight.js (and, for markdown, mermaid) only load when something is opened.
 const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })))
@@ -77,6 +78,8 @@ function toFront<T>(items: T[], match: (item: T) => boolean): T[] {
 }
 
 export default function App() {
+  // A reload keeps the history entry: its panes come back too (navigation.ts).
+  const restored = useRef<Place | null>(navState()?.place ?? null).current
   const [state, dispatch] = useReducer(reduce, initialState)
   const [threads, setThreads] = useState<ThreadSummary[]>([])
   const [threadId, setThreadId] = useState<string | null>(urlState().thread)
@@ -84,20 +87,18 @@ export default function App() {
   const [fatal, setFatal] = useState<string | null>(null)
   /** Who the caller is. null while the first /api/auth/me is in flight. */
   const [me, setMe] = useState<Me | null>(null)
-  const [showUsers, setShowUsers] = useState(false)
-  const [showSkills, setShowSkills] = useState(false)
+  const [showUsers, setShowUsers] = useState(restored?.overlay === 'users')
+  const [showSkills, setShowSkills] = useState(restored?.overlay === 'skills')
   /** The change-my-password form, opened from the settings menu. */
   const [showPassword, setShowPassword] = useState(false)
   const [planning, setPlanning] = useState(false)
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
-  const [viewing, setViewing] = useState<ViewerTarget | null>(null)
-  /** What to return to when the viewer's back button is pressed. */
-  const [cameFrom, setCameFrom] = useState<ViewerTarget | null>(null)
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(restored?.task ?? null)
+  const [viewing, setViewing] = useState<ViewerTarget | null>(restored?.viewing ?? null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [threadError, setThreadError] = useState<string | null>(null)
-  const [showCosts, setShowCosts] = useState(false)
-  const [showGraph, setShowGraph] = useState(false)
-  const [showGuide, setShowGuide] = useState(false)
+  const [showCosts, setShowCosts] = useState(restored?.overlay === 'costs')
+  const [showGraph, setShowGraph] = useState(restored?.overlay === 'graph')
+  const [showGuide, setShowGuide] = useState(restored?.overlay === 'guide')
   /** The thread a hide has been asked for but not yet confirmed. */
   const [confirmHide, setConfirmHide] = useState<ThreadSummary | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
@@ -173,22 +174,72 @@ export default function App() {
       .catch((err: Error) => setFatal(err.message))
   }, [])
 
-  // Mirror the current place into the URL. `replaceState` rather than
-  // `pushState`: switching project is not a navigation the back button should
-  // have to unwind step by step.
+  // Every pane the reader opens is a step back walks through (navigation.ts).
+  // A handler the reader triggers calls `go()` before changing what is shown,
+  // and the change is pushed as a new history entry; anything the app changes
+  // by itself (a default project or thread, a follow-up task) replaces the
+  // entry instead. Back, the browser's or a pane's ‹, restores the place before.
+  // Until when the next change counts as the reader's: a `go()` that changed
+  // nothing (the thread already open) must not make a later automatic change a step.
+  const pushUntil = useRef(0)
+  const go = useCallback(() => {
+    pushUntil.current = Date.now() + 1000
+  }, [])
+  const overlay: Overlay = showGraph ? 'graph' : showCosts ? 'costs' : showGuide ? 'guide' : showUsers ? 'users' : showSkills ? 'skills' : null
   useEffect(() => {
     if (!project) return
-    const params = new URLSearchParams(window.location.search)
-    params.set('project', project)
-    if (threadId) params.set('thread', threadId)
-    else params.delete('thread')
-    if (view !== 'chat') params.set('view', view)
-    else params.delete('view')
-    const next = `${window.location.pathname}?${params}${window.location.hash}`
-    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
-      window.history.replaceState(null, '', next)
+    record({ project, thread: threadId, view, task: activeTaskId, viewing, overlay }, Date.now() < pushUntil.current)
+    pushUntil.current = 0
+  }, [project, threadId, view, activeTaskId, viewing, overlay])
+
+  // Back and forward: the entry's place, restored as it was.
+  useEffect(() => {
+    const onPop = () => {
+      const place = navState()?.place
+      if (!place) return
+      pushUntil.current = 0
+      setProject((current) => {
+        if (current !== place.project) loaded.current.clear()
+        return place.project
+      })
+      setThreadId(place.thread)
+      setView(place.view)
+      setActiveTaskId(place.task)
+      setViewing(place.viewing)
+      setShowGraph(place.overlay === 'graph')
+      setShowCosts(place.overlay === 'costs')
+      setShowGuide(place.overlay === 'guide')
+      setShowUsers(place.overlay === 'users')
+      setShowSkills(place.overlay === 'skills')
     }
-  }, [project, threadId, view])
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  /** A pane's ‹: one step back in dex, or `otherwise` (close it) when it is the first. */
+  const back = useCallback((otherwise: () => void) => {
+    if (canGoBack()) window.history.back()
+    else {
+      go()
+      otherwise()
+    }
+  }, [go])
+
+  /** Opens one full pane (they share a column, so the others close), as a step. */
+  const openPane = useCallback((pane: Overlay) => {
+    go()
+    setShowGraph(pane === 'graph')
+    setShowCosts(pane === 'costs')
+    setShowGuide(pane === 'guide')
+    setShowUsers(pane === 'users')
+    setShowSkills(pane === 'skills')
+  }, [go])
+
+  /** Opens something in the viewer, as a step back can return from. */
+  const openViewer = useCallback((target: ViewerTarget) => {
+    go()
+    setViewing(target)
+  }, [go])
 
   // What the reader opens orders the lists, last opened first: the server
   // records it and sorts by it, and the lists on screen move it to the top
@@ -337,15 +388,19 @@ export default function App() {
       // One task is unambiguous: opening it is what you wanted to look at.
       // Several are not — picking the first would hide the other twenty-nine
       // behind a pane nobody asked for, and the thread is where they all are.
-      if (created.length === 1) setActiveTaskId(created[0].id)
+      if (created.length === 1) {
+      go()
+      setActiveTaskId(created[0].id)
+    }
       refreshThreads()
     },
-    [threadId, refreshThreads],
+    [threadId, refreshThreads, go],
   )
 
   const newThread = async () => {
     const thread = await createThread(project ?? undefined)
     setThreads((current) => [thread, ...current])
+    go()
     setThreadId(thread.id)
     setActiveTaskId(null)
     setViewing(null)
@@ -430,6 +485,7 @@ export default function App() {
                 <button
                   className="thread-open"
                   onClick={() => {
+                    go()
                     setThreadId(thread.id)
                     setDrawerOpen(false)
                     setActiveTaskId(null)
@@ -496,6 +552,7 @@ export default function App() {
             projects={projects}
             current={project}
             onSelect={(slug) => {
+              go()
               setProject(slug)
               setActiveTaskId(null)
               setViewing(null)
@@ -505,6 +562,7 @@ export default function App() {
             onCreate={async (name) => {
               const created = await createProject(name)
               setProjects((all) => [...all, created])
+              go()
               setProject(created.slug)
             }}
             canCreate={mayManageProjects}
@@ -522,7 +580,10 @@ export default function App() {
                 aria-label={v.label}
                 title={v.label}
                 className={view === v.key ? 'on' : ''}
-                onClick={() => setView(v.key)}
+                onClick={() => {
+                  go()
+                  setView(v.key)
+                }}
               >
                 <span aria-hidden="true">{v.icon}</span>
               </button>
@@ -536,7 +597,7 @@ export default function App() {
           {/* The live task graph: what runs, what waits, and on what (design/18). */}
           <button
             className={`ghost-btn small icon-only ${showGraph ? 'on' : ''}`}
-            onClick={() => setShowGraph((open) => !open)}
+            onClick={() => openPane(showGraph ? null : 'graph')}
             disabled={!project}
             title="Task graph — the active tasks and what waits on what"
             aria-label="Task graph — the active tasks and what waits on what"
@@ -546,7 +607,7 @@ export default function App() {
           </button>
           <button
             className="ghost-btn small icon-only"
-            onClick={() => setShowGuide(true)}
+            onClick={() => openPane('guide')}
             // `title` is the hover description on a pointer; `aria-label` is
             // what a screen reader and a touch device get, where hover does
             // not exist. Both are needed — neither covers the other.
@@ -557,10 +618,10 @@ export default function App() {
           </button>
           <SettingsMenu
             autoApprove={state.autoApprove}
-            onOpenCosts={() => setShowCosts(true)}
+            onOpenCosts={() => openPane('costs')}
             me={me}
-            onOpenUsers={() => setShowUsers(true)}
-            onOpenSkills={() => setShowSkills(true)}
+            onOpenUsers={() => openPane('users')}
+            onOpenSkills={() => openPane('skills')}
             onChangePassword={() => setShowPassword(true)}
             onAutoApprove={(enabled) => {
               // Optimistic: the server echoes the change back over the stream.
@@ -579,13 +640,13 @@ export default function App() {
               key={project}
               project={project}
               liveTags={state.tags[project]}
-              onOpen={setViewing}
+              onOpen={openViewer}
               openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
             />
           </Suspense>
         ) : view === 'feed' ? (
           <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading feed…</p>}>
-            <Feed key={project ?? 'none'} project={project ?? undefined} onOpen={setViewing} />
+            <Feed key={project ?? 'none'} project={project ?? undefined} onOpen={openViewer} />
           </Suspense>
         ) : (
           <>
@@ -610,6 +671,7 @@ export default function App() {
             if (threadId) void loadThread(threadId)
           }}
           onOpenTask={(id) => {
+            go()
             setActiveTaskId(id)
             setViewing(null)
           }}
@@ -620,8 +682,8 @@ export default function App() {
             // upload under the project the thread belongs to, so reading it
             // back under whatever is selected now would look in the wrong
             // directory the moment the two differ.
+            go()
             setActiveTaskId(null)
-            setCameFrom(null)
             const owner = threads.find((t) => t.id === threadId)?.project
             setViewing({
               kind: 'source', project: owner ?? project ?? '', name, anchor,
@@ -654,16 +716,18 @@ export default function App() {
       {activeTask && (
         <TaskPanel
           view={activeTask}
-          onOpen={setViewing}
+          onOpen={openViewer}
           openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
-          onBack={() => setActiveTaskId(null)}
+          onBack={() => back(() => setActiveTaskId(null))}
           onQueued={(taskId, messages) => dispatch({ type: 'queued', taskId, messages })}
           onStarted={(task) => {
             dispatch({ type: 'tasks', tasks: [task] })
+            go()
             setActiveTaskId(task.id)
             setViewing(null)
           }}
           onClose={() => {
+            go()
             setActiveTaskId(null)
             setViewing(null)
           }}
@@ -675,18 +739,13 @@ export default function App() {
           <Viewer
             target={viewing}
             onClose={() => {
+              go()
               setViewing(null)
-              setCameFrom(null)
             }}
-            // One level of back is all this needs: package -> asset -> package.
-            onBack={() => {
-              setViewing(cameFrom)
-              setCameFrom(null)
-            }}
-            onOpen={(target) => {
-              setCameFrom(viewing)
-              setViewing(target)
-            }}
+            // Back through every step that led here (package → asset → …),
+            // then out of the viewer.
+            onBack={() => back(() => setViewing(null))}
+            onOpen={openViewer}
           />
         </Suspense>
       )}
@@ -723,13 +782,26 @@ export default function App() {
 
       {showGuide && project && (
         <Suspense fallback={null}>
-          <GuideEditor project={project} onClose={() => setShowGuide(false)} />
+          <GuideEditor
+            project={project}
+            onClose={() => {
+              go()
+              setShowGuide(false)
+            }}
+            onBack={() => back(() => setShowGuide(false))}
+          />
         </Suspense>
       )}
 
       {showCosts && (
         <Suspense fallback={null}>
-          <CostDashboard onClose={() => setShowCosts(false)} />
+          <CostDashboard
+            onClose={() => {
+              go()
+              setShowCosts(false)
+            }}
+            onBack={() => back(() => setShowCosts(false))}
+          />
         </Suspense>
       )}
       {showGraph && project && (
@@ -737,9 +809,14 @@ export default function App() {
           <TaskGraph
             project={project}
             changes={graphChanges}
-            onClose={() => setShowGraph(false)}
+            onClose={() => {
+              go()
+              setShowGraph(false)
+            }}
+            onBack={() => back(() => setShowGraph(false))}
             onOpenTask={(node) => {
               // Into the task's own thread, with its run open beside it.
+              go()
               setShowGraph(false)
               setViewing(null)
               setView('chat')
@@ -756,7 +833,10 @@ export default function App() {
         <UserAdmin
           projects={projects}
           me={me.user}
-          onClose={() => setShowUsers(false)}
+          onClose={() => {
+            go()
+            setShowUsers(false)
+          }}
         />
       )}
       {/* Gated the same way and for the same reason: the endpoint refuses a
@@ -764,7 +844,13 @@ export default function App() {
           that would come back empty. */}
       {showSkills && can(me.user, 'manage_users') && (
         <Suspense fallback={null}>
-          <SkillAdmin projects={projects} onClose={() => setShowSkills(false)} />
+          <SkillAdmin
+            projects={projects}
+            onClose={() => {
+              go()
+              setShowSkills(false)
+            }}
+          />
         </Suspense>
       )}
       {showPassword && (
