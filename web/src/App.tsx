@@ -69,6 +69,13 @@ function urlState(): {
 // Stream events that change the task graph (design/18).
 const GRAPH_EVENTS = new Set<string>(['task_created', 'task_state', 'task_dependency', 'task_message_delivered'])
 
+/** `items` with the first one matching moved to the front (the same array when it already is). */
+function toFront<T>(items: T[], match: (item: T) => boolean): T[] {
+  const at = items.findIndex(match)
+  if (at <= 0) return items
+  return [items[at], ...items.slice(0, at), ...items.slice(at + 1)]
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reduce, initialState)
   const [threads, setThreads] = useState<ThreadSummary[]>([])
@@ -180,14 +187,18 @@ export default function App() {
     }
   }, [project, threadId, view])
 
-  // What the reader opens orders the lists: projects and threads come back
-  // with the last opened first. The lists on screen keep their order until
-  // they are next fetched, so nothing jumps under the pointer.
+  // What the reader opens orders the lists, last opened first: the server
+  // records it and sorts by it, and the lists on screen move it to the top
+  // straight away rather than at the next fetch.
   useEffect(() => {
-    if (project) markProjectViewed(project).catch(() => {})
+    if (!project) return
+    markProjectViewed(project).catch(() => {})
+    setProjects((all) => toFront(all, (p) => p.slug === project))
   }, [project])
   useEffect(() => {
-    if (threadId) markThreadViewed(threadId).catch(() => {})
+    if (!threadId) return
+    markThreadViewed(threadId).catch(() => {})
+    setThreads((all) => toFront(all, (t) => t.id === threadId))
   }, [threadId])
 
   // The Poses tab appears only for a project that has any.
