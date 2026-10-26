@@ -305,15 +305,22 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority   INTEGER NOT NULL DEFAULT 0
 ALTER TABLE tasks         ADD COLUMN IF NOT EXISTS options JSONB;
 ALTER TABLE task_messages ADD COLUMN IF NOT EXISTS options JSONB;
 
--- When each person last opened a project or a thread, so both lists can lead
--- with what they were last in. `viewer` is the user's id, or '' when sign-in
--- is off (everyone is the same person then). `kind` is 'project' or 'thread',
--- `key` its slug or id. No foreign key: a deleted thread's row is harmless and
--- the two kinds key into different tables.
-CREATE TABLE IF NOT EXISTS views (
-    viewer    TEXT        NOT NULL,
-    kind      TEXT        NOT NULL,
-    key       TEXT        NOT NULL,
-    viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (viewer, kind, key)
-);
+-- When a project or a thread was last opened in the UI: both lists lead with
+-- the last opened. NULL until first opened. One date for everyone,
+-- not one per user.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS last_viewed_at TIMESTAMPTZ;
+ALTER TABLE threads  ADD COLUMN IF NOT EXISTS last_viewed_at TIMESTAMPTZ;
+-- These dates were first kept per user in a `views` table; take its latest
+-- and drop it.
+DO $$
+BEGIN
+    IF to_regclass('views') IS NOT NULL THEN
+        UPDATE projects p SET last_viewed_at = v.at
+          FROM (SELECT key, max(viewed_at) AS at FROM views WHERE kind = 'project' GROUP BY key) v
+         WHERE p.slug = v.key AND p.last_viewed_at IS NULL;
+        UPDATE threads t SET last_viewed_at = v.at
+          FROM (SELECT key, max(viewed_at) AS at FROM views WHERE kind = 'thread' GROUP BY key) v
+         WHERE t.id = v.key AND t.last_viewed_at IS NULL;
+        DROP TABLE views;
+    END IF;
+END $$;
