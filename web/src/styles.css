@@ -1866,8 +1866,12 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 }
 
 /* The task graph (components/TaskGraph.tsx). */
-.task-graph .viewer-body { display: flex; flex-direction: column; gap: 10px; }
-.task-graph-canvas { overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+/* A main view, like the Library: it fills the column and scrolls inside it. */
+.task-graph { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.task-graph-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; }
+.task-graph-body > p { margin: 0; }
+.task-graph-canvas { display: flex; flex-direction: column; gap: 14px; }
+.task-graph-canvas g.node.open rect { stroke: #fbbf24 !important; stroke-width: 3px !important; }
 .task-graph-group { flex: none; overflow-x: auto; padding-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
 .task-graph-group:last-child { border-bottom: none; }
 .task-graph-group.alone p { margin: 0 0 4px; }

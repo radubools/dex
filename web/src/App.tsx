@@ -25,7 +25,7 @@ const SkillAdmin = lazy(() =>
 )
 import { TaskPanel } from './components/TaskPanel'
 import type { ViewerTarget } from './components/Viewer'
-import { canGoBack, navState, record, type Overlay, type Place } from './navigation'
+import { canGoBack, navState, record, type Overlay, type Place, type View } from './navigation'
 
 // highlight.js (and, for markdown, mermaid) only load when something is opened.
 const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })))
@@ -49,13 +49,15 @@ const VIEWS = [
   { key: 'chat' as const, icon: '💬', label: 'Chat' },
   { key: 'feed' as const, icon: '📺', label: 'Review feed' },
   { key: 'library' as const, icon: '📚', label: 'Library' },
+  // The live task graph: what runs, what waits, and on what (design/18).
+  { key: 'graph' as const, icon: '🕸', label: 'Task graph' },
 ]
 
 /** The place the URL is pointing at: project, thread, and which tab. */
 function urlState(): {
   project: string | null
   thread: string | null
-  view: 'chat' | 'feed' | 'library'
+  view: View
 } {
   const params = new URLSearchParams(window.location.search)
   const view = params.get('view')
@@ -63,7 +65,7 @@ function urlState(): {
     project: params.get('project'),
     thread: params.get('thread'),
     view:
-      view === 'feed' || view === 'library' ? view : 'chat',
+      view === 'feed' || view === 'library' || view === 'graph' ? view : 'chat',
   }
 }
 
@@ -97,7 +99,6 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [threadError, setThreadError] = useState<string | null>(null)
   const [showCosts, setShowCosts] = useState(restored?.overlay === 'costs')
-  const [showGraph, setShowGraph] = useState(restored?.overlay === 'graph')
   const [showGuide, setShowGuide] = useState(restored?.overlay === 'guide')
   /** The thread a hide has been asked for but not yet confirmed. */
   const [confirmHide, setConfirmHide] = useState<ThreadSummary | null>(null)
@@ -107,7 +108,7 @@ export default function App() {
   // these three, which also makes a view shareable.
   const [project, setProject] = useState<string | null>(urlState().project)
   /** The main column shows either the conversation or the review feed. */
-  const [view, setView] = useState<'chat' | 'feed' | 'library'>(urlState().view)
+  const [view, setView] = useState<View>(urlState().view)
   /** Whether this project has a pose library worth offering a tab for. */
   const [hasPackages, setHasPackages] = useState(false)
   const loaded = useRef<Set<string>>(new Set())
@@ -185,7 +186,7 @@ export default function App() {
   const go = useCallback(() => {
     pushUntil.current = Date.now() + 1000
   }, [])
-  const overlay: Overlay = showGraph ? 'graph' : showCosts ? 'costs' : showGuide ? 'guide' : showUsers ? 'users' : showSkills ? 'skills' : null
+  const overlay: Overlay = showCosts ? 'costs' : showGuide ? 'guide' : showUsers ? 'users' : showSkills ? 'skills' : null
   useEffect(() => {
     if (!project) return
     record({ project, thread: threadId, view, task: activeTaskId, viewing, overlay }, Date.now() < pushUntil.current)
@@ -206,7 +207,6 @@ export default function App() {
       setView(place.view)
       setActiveTaskId(place.task)
       setViewing(place.viewing)
-      setShowGraph(place.overlay === 'graph')
       setShowCosts(place.overlay === 'costs')
       setShowGuide(place.overlay === 'guide')
       setShowUsers(place.overlay === 'users')
@@ -228,7 +228,6 @@ export default function App() {
   /** Opens one full pane (they share a column, so the others close), as a step. */
   const openPane = useCallback((pane: Overlay) => {
     go()
-    setShowGraph(pane === 'graph')
     setShowCosts(pane === 'costs')
     setShowGuide(pane === 'guide')
     setShowUsers(pane === 'users')
@@ -467,7 +466,7 @@ export default function App() {
   return (
     <div
       className={`app ${activeTask ? 'with-panel' : ''} ${
-        viewing || showCosts || showGraph || showGuide || showUsers || showSkills ? 'with-viewer' : ''
+        viewing || showCosts || showGuide || showUsers || showSkills ? 'with-viewer' : ''
       }`}
     >
       <IconTips />
@@ -594,17 +593,6 @@ export default function App() {
               threads.find((t) => t.id === threadId)?.title ??
               'dex'}
           </span>
-          {/* The live task graph: what runs, what waits, and on what (design/18). */}
-          <button
-            className={`ghost-btn small icon-only ${showGraph ? 'on' : ''}`}
-            onClick={() => openPane(showGraph ? null : 'graph')}
-            disabled={!project}
-            title="Task graph — the active tasks and what waits on what"
-            aria-label="Task graph — the active tasks and what waits on what"
-            aria-pressed={showGraph}
-          >
-            <span aria-hidden="true">🕸</span>
-          </button>
           <button
             className="ghost-btn small icon-only"
             onClick={() => openPane('guide')}
@@ -642,6 +630,22 @@ export default function App() {
               liveTags={state.tags[project]}
               onOpen={openViewer}
               openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
+            />
+          </Suspense>
+        ) : view === 'graph' && project ? (
+          <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading task graph…</p>}>
+            <TaskGraph
+              project={project}
+              changes={graphChanges}
+              activeTaskId={activeTaskId}
+              onOpenTask={(node) => {
+                // The task's run opens beside the graph, which stays; its
+                // thread becomes the current one, for when the chat is next shown.
+                go()
+                setViewing(null)
+                if (node.threadId) setThreadId(node.threadId)
+                setActiveTaskId(node.id)
+              }}
             />
           </Suspense>
         ) : view === 'feed' ? (
@@ -734,7 +738,7 @@ export default function App() {
         />
       )}
 
-      {viewing && !showCosts && !showGraph && !showGuide && !showUsers && !showSkills && (
+      {viewing && !showCosts && !showGuide && !showUsers && !showSkills && (
         <Suspense fallback={null}>
           <Viewer
             target={viewing}
@@ -801,28 +805,6 @@ export default function App() {
               setShowCosts(false)
             }}
             onBack={() => back(() => setShowCosts(false))}
-          />
-        </Suspense>
-      )}
-      {showGraph && project && (
-        <Suspense fallback={null}>
-          <TaskGraph
-            project={project}
-            changes={graphChanges}
-            onClose={() => {
-              go()
-              setShowGraph(false)
-            }}
-            onBack={() => back(() => setShowGraph(false))}
-            onOpenTask={(node) => {
-              // Into the task's own thread, with its run open beside it.
-              go()
-              setShowGraph(false)
-              setViewing(null)
-              setView('chat')
-              if (node.threadId) setThreadId(node.threadId)
-              setActiveTaskId(node.id)
-            }}
           />
         </Suspense>
       )}

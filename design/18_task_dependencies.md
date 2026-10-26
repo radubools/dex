@@ -15,7 +15,7 @@ task meanwhile either worked round the gap or finished without it.
 
 Now a task can start or continue the work it needs, in the thread where that
 work belongs, and wait for it. Every such link is an edge in a DAG of tasks,
-and the top bar's **Task graph** button shows the live part of it.
+and the **Task graph** view shows the live part of it.
 
 ## The tools
 
@@ -166,7 +166,11 @@ updates that chat's options for what it starts from then on.
 - finished chains joined by an edge to an active one;
 - finished chains that took part in an edge and ended in the last 6 hours.
 
-The top bar's 🕸 button opens it. It refetches when the event stream reports
+It is one of the main views, beside Chat, Review feed and Library (🕸 in the
+header's view toggle, `?view=graph` in the URL): it fills the main column, and
+clicking a task opens its run in the task panel beside it, as a step back
+returns from, with the graph still on screen, the open task outlined and the
+drawing refitted to the narrower column. It refetches when the event stream reports
 a change to the graph (`task_created`, `task_state`, `task_dependency`,
 `task_message_delivered`; several close together make one fetch), and every
 half minute in case the stream is down. A drawing counts as done only once it
@@ -184,7 +188,7 @@ rows a little and orders each column itself. Groups stack newest first, by when 
 last started, so they keep their place while their tasks move. Tasks with no
 dependencies share one column at the end, newest at the top. Every diagram
 is drawn at one scale, the one that fits the widest. Nodes are coloured by
-state, and each names its thread. Clicking a node opens the task.
+state, and each names its thread. Clicking a node opens the task beside the graph.
 
 ## Improvement opportunities
 

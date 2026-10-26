@@ -125,24 +125,45 @@ function chart(g: Graph, group: Group): string {
   return lines.join('\n')
 }
 
+/**
+ * One scale for every diagram (the one that fits the widest in the column),
+ * so a small group is not blown up to the full width.
+ */
+function fit(host: HTMLElement) {
+  const svgs = [...host.querySelectorAll<SVGSVGElement>('.task-graph-group svg')]
+  const widths = svgs.map((el) => Number(el.getAttribute('viewBox')?.split(/\s+/)[2]) || 0)
+  const room = host.clientWidth - 4
+  const scale = room > 0 ? Math.min(1, room / Math.max(1, ...widths)) : 1
+  svgs.forEach((el, k) => {
+    el.removeAttribute('style')
+    el.setAttribute('width', String(Math.round(widths[k] * scale)))
+  })
+}
+
+/** Outlines the node of the task open in the side panel (none: `id` null). */
+function mark(host: HTMLElement, id: string | null) {
+  host.querySelectorAll('g.node.open').forEach((g) => g.classList.remove('open'))
+  if (id) host.querySelector(`g.node[data-task="${CSS.escape(id)}"]`)?.classList.add('open')
+}
+
 export function TaskGraph({
   project,
   changes = 0,
+  activeTaskId = null,
   onOpenTask,
-  onClose,
-  onBack,
 }: {
   project: string
   /** Bumped by the app when the event stream reports a task change: refetch soon. */
   changes?: number
+  /** The task open in the side panel: its node is outlined. */
+  activeTaskId?: string | null
   onOpenTask: (node: TaskGraphNode) => void
-  onClose: () => void
-  /** The ‹: a step back through what led here (else it closes). */
-  onBack?: () => void
 }) {
   const [graph, setGraph] = useState<Graph | null>(null)
   const [error, setError] = useState<string | null>(null)
   const host = useRef<HTMLDivElement>(null)
+  const activeRef = useRef(activeTaskId)
+  activeRef.current = activeTaskId
   // What is on screen now: set only once a drawing has landed, so a drawing
   // that was interrupted is tried again rather than taken as done.
   const drawn = useRef('')
@@ -204,45 +225,50 @@ export function TaskGraph({
           .map((svg, k) => `<div class="task-graph-group${p.parts[k].alone ? ' alone' : ''}">${p.parts[k].alone ? '<p class="muted small">On their own</p>' : ''}${svg}</div>`)
           .join('')
         drawn.current = p.all
-        // One scale for every diagram (the one that fits the widest), so a
-        // small group is not blown up to the full width.
-        const drawnSvgs = [...host.current.querySelectorAll<SVGSVGElement>('.task-graph-group svg')]
-        const widths = drawnSvgs.map((el) => Number(el.getAttribute('viewBox')?.split(/\s+/)[2]) || 0)
-        const room = host.current.clientWidth - 4
-        const scale = room > 0 ? Math.min(1, room / Math.max(1, ...widths)) : 1
-        drawnSvgs.forEach((el, k) => {
-          el.removeAttribute('style')
-          el.setAttribute('width', String(Math.round(widths[k] * scale)))
-        })
+        fit(host.current)
         // Clicks by node, without Mermaid's own click hooks (they need a loose
         // security level): its node groups carry the id we gave them.
         p.graph.nodes.forEach((n, i) => {
           const g = host.current?.querySelector<SVGGElement>(`g.node[id*="-n${i}-"]`)
           if (!g) return
           g.style.cursor = 'pointer'
+          g.dataset.task = n.id
           g.addEventListener('click', () => openTask.current(n))
         })
+        mark(host.current, activeRef.current)
       })
       .catch((e: Error) => live && setError(`could not draw the graph: ${e.message}`))
     return () => { live = false }
   }, [plan?.all])
 
+  // The open task's node outlined, as the side panel changes.
+  useEffect(() => {
+    if (host.current) mark(host.current, activeTaskId)
+  }, [activeTaskId])
+
+  // Refit when the column's width changes (the side panel opening or closing).
+  useEffect(() => {
+    const el = host.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let width = el.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === width) return
+      width = el.clientWidth
+      fit(el)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const edges = graph?.edges.length ?? 0
   return (
-    <section className="viewer task-graph" role="dialog" aria-label="Task graph">
-      <header className="viewer-bar">
-        <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
-        <span className="viewer-path">
-          Task graph
-          {graph && (
-            <span className="muted">
-              {' '}· {graph.nodes.length} task{graph.nodes.length === 1 ? '' : 's'}, {edges} dependenc{edges === 1 ? 'y' : 'ies'}
-            </span>
-          )}
-        </span>
-        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
-      </header>
-      <div className="viewer-body">
+    <section className="task-graph" aria-label="Task graph">
+      <div className="task-graph-body">
+        {graph && (
+          <p className="muted small">
+            {graph.nodes.length} task{graph.nodes.length === 1 ? '' : 's'}, {edges} dependenc{edges === 1 ? 'y' : 'ies'}. Click a task to open it beside the graph.
+          </p>
+        )}
         {error && <p className="error-note">{error}</p>}
         {graph && !graph.nodes.length && (
           <p className="muted">Nothing is running or waiting in this project.</p>

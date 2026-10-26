@@ -28,6 +28,9 @@ const messages: Record<string, unknown[]> = {
   t3: [{ id: 'm3', role: 'user', kind: 'text', text: 'Hello beta', data: {}, ts: now }],
 }
 
+/** The task graph's nodes (none unless a test sets them). */
+let dag: unknown[] = []
+
 function answer(url: URL): unknown {
   const p = url.pathname
   const q = url.searchParams
@@ -47,7 +50,7 @@ function answer(url: URL): unknown {
   }
   if (p === '/api/packages') return { packages: [] }
   if (p === '/api/feed') return { project: 'alpha', projects: ['alpha'], topics: [] }
-  if (p === '/api/dag') return { project: 'alpha', nodes: [], edges: [] }
+  if (p === '/api/dag') return { project: 'alpha', nodes: dag, edges: [] }
   if (/^\/api\/projects\/[^/]+\/skills$/.test(p)) return { skills: [] }
   if (/\/guide$/.test(p)) return { project: project('alpha', 'Alpha'), path: 'AGENTS.md', text: '# Alpha guide' }
   if (p === '/api/assets') {
@@ -108,8 +111,8 @@ test('back walks through every pane that led here, in order, and forward again',
   await step(() => page.locator('.asset-row', { hasText: 'notes.md' }).click(), { task: 'Build the widget', pane: 'notes.md' })
   await step(() => page.locator('section.viewer [aria-label="Close"]').click(), { task: 'Build the widget', pane: null })
   await step(() => page.locator('.asset-row', { hasText: 'readme.md' }).click(), { task: 'Build the widget', pane: 'readme.md' })
-  await step(() => page.getByRole('button', { name: /Task graph/ }).click(), { pane: 'Task graph' })
-  await step(() => page.locator('section.task-graph [aria-label="Close"]').click(), { task: 'Build the widget', pane: 'readme.md' })
+  await step(() => page.getByRole('tab', { name: 'Task graph' }).click(), { view: 'Task graph', task: 'Build the widget', pane: 'readme.md' })
+  await step(() => page.getByRole('tab', { name: 'Chat' }).click(), { view: 'Chat', task: 'Build the widget', pane: 'readme.md' })
   await step(() => page.getByRole('button', { name: /^Guide/ }).click(), { pane: 'Project instructions' })
 
   // Back, one step at a time: the browser's button.
@@ -131,15 +134,16 @@ test("on a wide screen too, each pane's ‹ steps back through what led to it", 
   await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
   await page.getByRole('button', { name: /^Files/ }).click()
   await page.locator('.asset-row', { hasText: 'notes.md' }).click()
-  await page.getByRole('button', { name: /Task graph/ }).click()
+  await page.getByRole('tab', { name: 'Task graph' }).click()
   await page.getByRole('button', { name: /^Guide/ }).click()
   await at(page, { pane: 'Project instructions' })
   const backIn = (pane: string) => page.locator(`section[aria-label="${pane}"] .back-btn, section[aria-label$="${pane}"] .back-btn`).first()
   await expect(backIn('Project instructions')).toBeVisible()
   await backIn('Project instructions').click()
-  await at(page, { pane: 'Task graph' })
-  await backIn('Task graph').click()
-  await at(page, { task: 'Build the widget', pane: 'notes.md' })
+  await at(page, { view: 'Task graph', pane: 'notes.md' })
+  // The graph is a view, not a pane: the browser's back leaves it.
+  await page.goBack()
+  await at(page, { view: 'Chat', task: 'Build the widget', pane: 'notes.md' })
   await backIn('notes.md').click()
   await at(page, { task: 'Build the widget', pane: null })
   await expect(page.locator('.task-panel .back-btn')).toBeVisible()
@@ -148,6 +152,24 @@ test("on a wide screen too, each pane's ‹ steps back through what led to it", 
   // The browser's back carries on from there: the thread before.
   await page.goBack()
   await at(page, { thread: 'Ideas' })
+})
+
+test('the task graph is a main view; a task clicked in it opens beside it', async ({ page }) => {
+  dag = [{ id: 'task-a', title: 'Build the widget', state: 'succeeded', attempt: 1, threadId: 't1', threadTitle: 'Widgets', createdAt: now, finishedAt: now }]
+  try {
+    await open(page)
+    await page.locator('.thread-open', { hasText: 'Ideas' }).click()
+    await page.getByRole('tab', { name: 'Task graph' }).click()
+    await expect(page).toHaveURL(/view=graph/)
+    await page.locator('.task-graph-group g.node').first().click()
+    await at(page, { view: 'Task graph', thread: 'Widgets', task: 'Build the widget', pane: null })
+    await expect(page.locator('section.task-graph')).toBeVisible()
+    await expect(page.locator('.task-graph-group g.node.open')).toHaveCount(1)
+    await page.goBack()
+    await at(page, { view: 'Task graph', thread: 'Ideas', task: null })
+  } finally {
+    dag = []
+  }
 })
 
 // On a phone the panes stack, and ‹ is the way out of each.

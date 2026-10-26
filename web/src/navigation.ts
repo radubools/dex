@@ -6,16 +6,16 @@ import type { ViewerTarget } from './components/Viewer'
  *
  * A *place* is everything that says what is on screen: the project, thread
  * and tab (also in the URL, so a link or a reload lands there), the task
- * panel, the viewer, and which full-screen pane (graph, costs, guide, users,
- * skills) is over them. Each place a reader navigates to is pushed onto the
+ * panel, the viewer, and which full-screen pane (costs, guide, users, skills)
+ * is over them. Each place a reader navigates to is pushed onto the
  * browser's history with the place in `history.state`; going back restores
  * the place before it. Changes the app makes by itself (picking a default
  * project or thread, following a task's follow-up) replace the current entry
  * instead, so back never stops on a place the reader did not choose.
  */
 
-export type View = 'chat' | 'feed' | 'library'
-export type Overlay = 'graph' | 'costs' | 'guide' | 'users' | 'skills' | null
+export type View = 'chat' | 'feed' | 'library' | 'graph'
+export type Overlay = 'costs' | 'guide' | 'users' | 'skills' | null
 
 export interface Place {
   project: string | null
