@@ -1264,8 +1264,37 @@ def e2e_tests_problems(package: str | Path) -> list[str]:
     return out
 
 
-def done(package: str | Path, game_root: str | Path, *, known: Iterable[str] | None = None) -> dict:
-    """The definition of done for a story package: {ok, errors, warnings}.
+SCREENSHOT_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def clear_screenshots(package: str | Path) -> dict:
+    """Delete a package's end-to-end screenshots, keeping the reports: {files, bytes}.
+
+    Removes every image under e2e/ (the runs' and segments' shots, the small
+    review copies) and the review sheets made from them (.review/), then the
+    folders that leaves empty. report.json, e2e.done, the logs and review.md
+    stay: the game's pull gate needs only report.json. `done` calls this once
+    a story passes, so screenshots never pile up (a few hundred MB a story).
+    """
+    pkg = Path(package)
+    files = size = 0
+    for base in (pkg / E2E_DIR, pkg / ".review"):
+        if not base.is_dir():
+            continue
+        for f in base.rglob("*"):
+            if f.is_file() and f.suffix.lower() in SCREENSHOT_SUFFIXES:
+                size += f.stat().st_size
+                f.unlink()
+                files += 1
+        for d in sorted((d for d in base.rglob("*") if d.is_dir()), key=lambda d: -len(d.parts)) + [base]:
+            if d != pkg / E2E_DIR and not any(d.iterdir()):
+                d.rmdir()
+    return {"files": files, "bytes": size}
+
+
+def done(package: str | Path, game_root: str | Path, *, known: Iterable[str] | None = None,
+         keep_screenshots: bool = False) -> dict:
+    """The definition of done for a story package: {ok, errors, warnings, cleared}.
 
     1. `validate_story(pkg, known=…, lab=game_root)` is ok (format, the
        game's engine, its lab machines, every route);
@@ -1274,6 +1303,10 @@ def done(package: str | Path, game_root: str | Path, *, known: Iterable[str] | N
        (`e2e_problem`, the game's pull gate);
     4. the visual review is recorded: e2e/review.md ends with
        "reviewed: desktop, phone".
+
+    Once all four hold, the screenshots are deleted (`clear_screenshots`;
+    `cleared` says how many): they were only for the review, which is done.
+    `keep_screenshots=True` keeps them.
     """
     pkg = Path(package)
     known_set = set(known) if known is not None else known_assets(game_root)
@@ -1291,7 +1324,9 @@ def done(package: str | Path, game_root: str | Path, *, known: Iterable[str] | N
     review = pkg / E2E_DIR / "review.md"
     if not review.is_file() or REVIEWED not in review.read_text():
         errors.append(f"no visual review: look at every screenshot (both sizes) and write e2e/review.md ending with {REVIEWED!r}")
-    return {"ok": not errors, "errors": errors, "warnings": rep["warnings"]}
+    ok = not errors
+    cleared = clear_screenshots(pkg) if ok and not keep_screenshots else {"files": 0, "bytes": 0}
+    return {"ok": ok, "errors": errors, "warnings": rep["warnings"], "cleared": cleared}
 
 
 def outline(package_or_dict: str | Path | dict, *, more: bool = False) -> str:

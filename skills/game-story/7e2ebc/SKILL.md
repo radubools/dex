@@ -512,6 +512,12 @@ what you changed), ending with the line `reviewed: desktop, phone`.
 3. the end-to-end run passed for exactly this `story.json` and `e2e.json`;
 4. `e2e/review.md` records the visual review.
 
+When all four hold, `story.done` deletes the story's screenshots
+(`story.clear_screenshots`: every image under `e2e/` and the `.review/`
+sheets; `report.json`, the logs and `review.md` stay). They exist only for
+the review, and each story's run leaves a few hundred MB of them. A later
+change to the story runs the end-to-end test again, which makes new ones.
+
 `validate_story` alone warns "not done" while the run is missing or stale.
 
 ## When the story needs an asset the game does not have
@@ -582,7 +588,8 @@ story the catalog does not list cannot be reached in the game.
    there is a reason.
 4. Write `e2e.json` (above), run `story.e2e(pkg, game_root)`, fix the story
    until it passes, review every screenshot at both sizes and write
-   `e2e/review.md`; `story.done(pkg, game_root)` must be `ok`.
+   `e2e/review.md`; `story.done(pkg, game_root)` must be `ok` (it then
+   deletes the screenshots: review them before calling it).
 5. Write `story.outline(pkg)` to `previews/outline.md` and **read it end to
    end** as a learner would. That is this skill's preview: is each beat one
    idea, does every choice follow from what was just shown, is every wrong

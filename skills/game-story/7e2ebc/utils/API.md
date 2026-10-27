@@ -204,7 +204,9 @@ Stories: lesson scripts the game's story runner plays, packaged as kind "story".
 - `e2e_problem(package: str | Path) -> str | None` — Why a package has no passing end-to-end run for its current content, or None (the game's pull gate, exactly).
 - `e2e_skeleton(package_or_dict: str | Path | dict) -> dict` — A starting e2e.json for a story: every beat that needs an assertion or a player move, with what to fill in.
 - `e2e_tests_problems(package: str | Path) -> list[str]` — What is missing from a package's e2e.json for the definition of done (empty when it is complete).
-- `done(package: str | Path, game_root: str | Path, *, known: Iterable[str] | None=None) -> dict` — The definition of done for a story package: {ok, errors, warnings}.
+- `SCREENSHOT_SUFFIXES` — constant
+- `clear_screenshots(package: str | Path) -> dict` — Delete a package's end-to-end screenshots, keeping the reports: {files, bytes}.
+- `done(package: str | Path, game_root: str | Path, *, known: Iterable[str] | None=None, keep_screenshots: bool=False) -> dict` — The definition of done for a story package: {ok, errors, warnings, cleared}.
 - `outline(package_or_dict: str | Path | dict, *, more: bool=False) -> str` — The story as a readable playthrough (Markdown): the review a model's previews give; more=True lists each beat's `more` paragraphs (" - ? …") under its header.
 
 ## `svm_geometry`

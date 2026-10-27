@@ -517,3 +517,24 @@ def test_board_lines_camera_frames_line_ids() -> None:
     assert "target" not in cam
     with pytest.raises(ValueError):
         board_lines_camera(src, 4, 9)
+
+
+def test_clear_screenshots_keeps_the_reports(tmp_path):
+    """done() deletes a passed story's screenshots; the pull gate's report stays."""
+    pkg = tmp_path / "story-demo"
+    shots = pkg / "e2e" / "desktop" / "shots"
+    shots.mkdir(parents=True)
+    (shots / "r0-001-intro.png").write_bytes(b"\x89PNG" + b"0" * 100)
+    (pkg / "e2e" / "small").mkdir()
+    (pkg / "e2e" / "small" / "r0-001-intro.jpg").write_bytes(b"jpg")
+    (pkg / ".review").mkdir()
+    (pkg / ".review" / "r0-001-intro.jpg").write_bytes(b"jpg")
+    for keep in ("report.json", "review.md", "e2e.log", "e2e.done"):
+        (pkg / "e2e" / keep).write_text("{}")
+    (pkg / "e2e" / "desktop" / "report.json").write_text("{}")
+    out = S.clear_screenshots(pkg)
+    assert out["files"] == 3 and out["bytes"] > 100
+    left = sorted(str(p.relative_to(pkg)) for p in pkg.rglob("*") if p.is_file())
+    assert left == ["e2e/desktop/report.json", "e2e/e2e.done", "e2e/e2e.log", "e2e/report.json", "e2e/review.md"]
+    assert not (pkg / ".review").exists() and not (pkg / "e2e" / "small").exists()
+    assert S.clear_screenshots(pkg) == {"files": 0, "bytes": 0}  # twice is harmless
