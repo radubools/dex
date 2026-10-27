@@ -42,6 +42,10 @@ export type Task = {
   canRerun: boolean
   canRestart: boolean
   canPause: boolean
+  /** Claim order among queued work: 1 woken, 2 prioritized by the operator (design/18). */
+  priority?: number
+  /** Queued, paused or waiting, and not prioritized yet. */
+  canPrioritize?: boolean
   /** Stopped short — paused, failed or cancelled — so it can go again. */
   canContinue: boolean
   canArchive: boolean
@@ -171,7 +175,7 @@ export type DexEvent = Base &
     | { type: 'task_message_delivered'; count: number; startedTaskId: string }
     | { type: 'thread_message'; threadId: string; message: ThreadMessage }
     | { type: 'task_created'; task: Task }
-    | { type: 'task_state'; state: TaskState; activity: string | null; error?: string }
+    | { type: 'task_state'; state: TaskState; activity: string | null; error?: string; priority?: number }
     | { type: 'text'; text: string }
     | { type: 'text_delta'; id: string; delta: string }
     | { type: 'thinking'; text: string }

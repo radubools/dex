@@ -1,4 +1,4 @@
-import type { DexEvent, Task, TaskMessage, ThreadMessage } from './types'
+import type { DexEvent, Task, TaskMessage, TaskState, ThreadMessage } from './types'
 
 /** One entry in a task's activity feed. */
 export type FeedItem =
@@ -54,6 +54,12 @@ export type Action =
   | { type: 'queued'; taskId: string; messages: TaskMessage[] }
   /** A task's stored history, read when it is opened. */
   | { type: 'taskEvents'; events: DexEvent[] }
+
+/** A task's priority, and whether ⇡ Prioritize is offered for it in this state. */
+const prioritized = (state: TaskState, priority: number) => ({
+  priority,
+  canPrioritize: priority < 2 && (['queued', 'paused', 'blocked'] as TaskState[]).includes(state),
+})
 
 export function reduce(state: State, action: Action): State {
   switch (action.type) {
@@ -154,6 +160,9 @@ function applyEvent(state: State, event: DexEvent): State {
           state: event.state,
           activity: event.activity,
           error: event.error ?? view.task.error,
+          // Raised by a prioritize; a claim starts it again from 0. Worked out
+          // on every change, so a task that ran and was paused offers it again.
+          ...prioritized(event.state, event.priority ?? (event.state === 'running' ? 0 : view.task.priority ?? 0)),
         },
       })
 

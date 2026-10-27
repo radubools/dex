@@ -305,3 +305,21 @@ def test_concurrency_set_on_its_own_does_not_disturb_the_flag(config, db, monkey
         body = client.put("/api/settings", json={"task_concurrency": 5}).json()["settings"]
         assert body["task_concurrency"] == 5
         assert body["utility_proposals"] is True
+
+
+async def test_fable_is_offered_and_the_model_setting_picks_it(db):
+    """For when Opus's limits run out: Fable 5.1 in the picker, and new work runs on it."""
+    from dex.api import MODEL_CHOICES
+    from dex.pricing import PRICES, price_for
+
+    assert "claude-fable-5-1" in [m["id"] for m in MODEL_CHOICES]
+    # The running estimate prices it as Fable, not as the unknown-model default.
+    assert price_for("claude-fable-5-1") == PRICES["claude-fable-5"]
+
+    settings = SettingsStore(db)
+    assert await settings.model_for("ml", "claude-opus-5-5") == "claude-opus-5-5"
+    await settings.set(SettingsStore.MODEL, "claude-fable-5-1")
+    assert await settings.model_for("ml", "claude-opus-5-5") == "claude-fable-5-1"
+    # Back to the default: an empty choice is "Default" in the menu.
+    await settings.set(SettingsStore.MODEL, "")
+    assert await settings.model_for("ml", "claude-opus-5-5") == "claude-opus-5-5"

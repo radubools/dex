@@ -195,6 +195,10 @@ class Task:
     inbox: asyncio.Queue[str] | None = field(default=None, repr=False)
     #: Human-readable note about what the agent is doing right now.
     activity: str | None = None
+    #: Claim order among queued work: higher first (deps.py). 1 is a task
+    #: woken because what it waited on is done; 2 one the operator prioritized
+    #: (with everything it waits on). Claiming resets it to 0.
+    priority: int = 0
     #: What this task is allowed to touch. `package` is one package directory,
     #: which is nearly everything. `project` widens it to the project as a
     #: whole, for a small uniform edit across packages that already exist —
@@ -386,6 +390,10 @@ class Task:
             # does nothing is worse than no button.
             "canRestart": self.state is not TaskState.ARCHIVED,
             "canPause": self.state.pausable,
+            "priority": self.priority,
+            # Queued, paused or waiting work can be moved to the front.
+            "canPrioritize": self.state in (TaskState.QUEUED, TaskState.PAUSED, TaskState.BLOCKED)
+            and self.priority < 2,
             "canContinue": self.state.continuable,
             # Anything can be archived except what is already archived; a
             # running task is stopped first.

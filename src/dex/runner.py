@@ -947,7 +947,8 @@ class TaskRunner:
             # not left to the operator's eye, because an empty package looks
             # exactly like a full one in a list of green rows.
             elif (self.task.builds_package and not self.task.is_chat and not self._wrote_anything(before)
-                  and not (woken and await self._woken_wrote())):
+                  and not (woken and await self._woken_wrote())
+                  and not (self.task.resumed_from and self._wrote_since_created())):
                 # A chat turn that only answers wrote nothing, and is still done.
                 self._fail(EMPTY_PACKAGE)
             else:
@@ -1347,6 +1348,18 @@ class TaskRunner:
             except OSError:  # vanished mid-walk; it is not output either way
                 continue
         return found
+
+    def _wrote_since_created(self) -> bool:
+        """Whether an earlier run of this very task wrote into its package.
+
+        A paused task (preempted, or the server stopped under it) resumes its
+        own session in the same row; a resumed run that finds the work done
+        and only confirms it is the second half of a run that wrote it. A new
+        attempt is a new row, created after its parent's files, so it still
+        cannot coast on them.
+        """
+        since = int(self.task.created_at * 1e9)
+        return any(written >= since for written in self._artifacts().values())
 
     def _wrote_anything(self, before: dict[Path, int]) -> bool:
         """Whether this run put a file worth showing into its package.

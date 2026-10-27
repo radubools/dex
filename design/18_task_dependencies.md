@@ -142,6 +142,30 @@ stateDiagram-v2
   blocked --> cancelled: Stop
 ```
 
+## Prioritize: to the front, with everything under it
+
+A task waiting to run (queued, paused or blocked) can be moved to the front:
+the task panel's **⇡ Prioritize** (`POST /api/tasks/{id}/prioritize`,
+`Dependencies.prioritize`). It raises the task, and **every task under it in
+the graph** (what it started, continued or waits on, and theirs, all the way
+down; an edge held by any attempt of a package counts, and the package's
+latest attempt is the one raised), to priority 2. The claim order is
+`priority`, then work that has run before, then `seq`, so the next free slot
+takes them before everything else; paused work is put back in the same order.
+Nothing running is stopped.
+
+| priority | means |
+|---|---|
+| 0 | ordinary queued work |
+| 1 | woken: what it waited on is done (above) |
+| 2 | prioritized by the operator, with everything under it |
+
+A claim resets it to 0. A prioritized task that blocks keeps its 2 when it
+wakes, so it goes before other woken work. The panel shows ⇡ next on a
+prioritized task until it starts. Only the order changes: creation times and
+`seq` stay as they were, so the threads still read in the order things were
+asked.
+
 ## Run options pass down
 
 A task carries `options`, set by whoever started it; today one, `e2e`. A game

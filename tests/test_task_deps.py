@@ -395,3 +395,48 @@ async def test_a_chat_may_not_make_packages_itself(tmp_path):
     # Other tasks are not chats: nothing changes for them.
     plain = PermissionPolicy(workspace=tmp_path, task_dir=task_dir, escalate=auto_deny)
     assert plain._refuse_reason("Write", {"file_path": str(task_dir / "story.json")}) is None
+
+
+async def test_prioritize_moves_a_task_and_everything_under_it_to_the_front(manager, db):
+    await threads(db)
+    old = await manager.submit("older queued work", title="Older")
+    parent = await manager.submit("story", title="Story")
+    child = await manager.graph.spawn(parent, thread="Backgrounds", title="Prop", brief="prop")
+    grand = await manager.graph.spawn(child, thread="Backgrounds", title="Prop texture", brief="texture")
+    # A finished dependency continued by a note: its newest attempt is the one under the story.
+    bowl = await manager.submit("make a bowl", title="Bowl", slug="dataviz-bowl")
+    await finish(manager, bowl)
+    again = (await manager.graph.follow_up(parent, "dataviz-bowl", "Thinner rim."))["task"]
+    done = await manager.graph.spawn(parent, thread="Backgrounds", title="Done prop", brief="done")
+    await finish(manager, done)
+    await manager.tasks.set_state(parent.id, TaskState.BLOCKED, waiting_on=json.dumps([child.id]))
+    unrelated = await manager.submit("other work", title="Other")
+
+    raised = await manager.graph.prioritize(parent.id)
+    assert {t.id for t in raised} == {parent.id, child.id, grand.id, again.id}
+    assert (await manager.tasks.get(done.id)).priority == 0  # finished: nothing to move
+    assert (await manager.tasks.get(unrelated.id)).priority == 0
+    assert all(t.to_json(manager.config.assets_dir)["canPrioritize"] is False for t in raised)
+    # The next free slots take what is under the story, before older work.
+    first = {(await manager.tasks.claim("w")).id for _ in range(3)}
+    assert first == {child.id, grand.id, again.id}
+    assert (await manager.tasks.claim("w")).id == old.id
+    # Woken, the story keeps its place ahead of other woken work.
+    for t in (child, grand, again):
+        await finish(manager, t)
+    assert await manager.graph.wake_ready() == 1
+    assert (await manager.tasks.get(parent.id)).priority == deps_mod.PRIORITIZED
+    # Prioritizing again changes nothing.
+    assert [t.id for t in await manager.graph.prioritize(parent.id)] == []
+
+
+async def test_a_free_slot_takes_a_prioritized_paused_task_before_queued_work(manager, db):
+    """Paused work used to wait for the next rebalance, which queued work beat to every freed slot."""
+    queued = await manager.submit("queued work", title="Queued")
+    paused = await manager.submit("captions", title="Captions")
+    await manager.tasks.set_state(paused.id, TaskState.PAUSED, started_at=1.0, session_id="sess-9", finished_at=2.0)
+    await manager.tasks.prioritize([paused.id], deps_mod.PRIORITIZED)
+    claimed = await manager.tasks.claim("w")
+    assert claimed.id == paused.id
+    assert claimed.resumed_from == "sess-9" and claimed.finished_at is None
+    assert (await manager.tasks.claim("w")).id == queued.id

@@ -724,6 +724,7 @@ export default function App() {
           openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
           onBack={() => back(() => setActiveTaskId(null))}
           onQueued={(taskId, messages) => dispatch({ type: 'queued', taskId, messages })}
+          onTasks={(tasks) => dispatch({ type: 'tasks', tasks })}
           onStarted={(task) => {
             dispatch({ type: 'tasks', tasks: [task] })
             go()

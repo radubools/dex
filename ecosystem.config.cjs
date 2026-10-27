@@ -12,7 +12,6 @@ const path = require('path')
 const fs = require('fs')
 
 const root = __dirname
-const python = path.join(root, '.venv', 'bin', 'dex')
 
 /**
  * Secrets from a gitignored file rather than from this one, which is committed.
@@ -48,28 +47,21 @@ const google = secrets('.env.google')
 const localAuth = secrets('.env.auth')
 
 /**
- * How dex's agents sign in to Claude: the one-year token (`claude
- * setup-token`), from `.env.claude` or else the shell running `pm2 start`.
- * Everything else Claude-related is blanked: pm2 merges the starting shell's
- * environment in and `--update-env` never removes a key, so a stray
- * ANTHROPIC_API_KEY (which wins over the token) or a Claude app session's own
- * CLAUDE_CODE_* settings would otherwise reach every task.
+ * How dex's agents sign in to Claude: dex-api runs through scripts/run_api.py,
+ * which starts the server with only DEX_* and a few basics (HOME, PATH, the
+ * locale) and the CLAUDE_CODE_OAUTH_TOKEN from ~/.zshrc (else .env.claude).
+ * Nothing else from the shell that ran `pm2 start` or `pm2 restart
+ * --update-env` reaches dex or its tasks: a Claude app session's own
+ * ANTHROPIC_BASE_URL and CLAUDE_CODE_* settings once failed every task with
+ * "Invalid API key". pm2's own `filter_env` does not hold (pm2 7 ignores it).
  */
-function claudeEnv() {
-  const blank = Object.fromEntries(
-    Object.keys(process.env)
-      .filter((key) => key === 'CLAUDECODE' || key.startsWith('CLAUDE_') || key.startsWith('ANTHROPIC_'))
-      .map((key) => [key, '']),
-  )
-  const token = secrets('.env.claude').CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_CODE_OAUTH_TOKEN || ''
-  return { ...blank, ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: token }
-}
+const venvPython = path.join(root, '.venv', 'bin', 'python')
 
 module.exports = {
   apps: [
     {
       name: 'dex-api',
-      script: python,
+      script: venvPython,
       // Restart the server when src/dex changes. uvicorn's own reloader, not
       // pm2's: it watches only `src/dex` and rebuilds the app in a child
       // process, so an edit to assets/ or web/ does not bounce the server.
@@ -79,11 +71,10 @@ module.exports = {
       // killed task as `failed` rather than `paused`, editing backend code
       // while tasks run will leave failures behind. Pause work first, or drop
       // this argument while a long run matters.
-      args: '--reload',
+      args: [path.join(root, 'scripts', 'run_api.py'), '--reload'],
       cwd: root,
       interpreter: 'none', // it is a console-script shebang, not a JS file
       env: {
-        ...claudeEnv(),
         ...google,
         ...localAuth,
         DEX_DATABASE_URL: 'postgresql://127.0.0.1/dex',

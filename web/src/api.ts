@@ -312,6 +312,10 @@ export const importSkill = async (
 
 export const cancelTask = (id: string) => post<{ ok: boolean }>(`/api/tasks/${id}/cancel`)
 
+/** Move a task, and every task under it in the graph, to the front of the queue. Returns those moved. */
+export const prioritizeTask = (id: string) =>
+  post<{ tasks: Task[] }>(`/api/tasks/${id}/prioritize`).then((r) => r.tasks)
+
 /** Continue a task that stopped before finishing, in the same output directory. */
 export const resumeTask = (id: string) =>
   post<{ task: Task }>(`/api/tasks/${id}/resume`).then((r) => r.task)

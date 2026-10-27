@@ -36,6 +36,11 @@ log = logging.getLogger(__name__)
 MAX_DEPS = 50
 #: How deep the graph may go: a task this many levels below a waiter may not start more.
 MAX_DEPTH = 3
+#: Claim order (tasks.priority, highest first): a task woken because what it
+#: waited on is done goes before untouched work; one the operator prioritized
+#: (`prioritize`) before that.
+WOKEN = 1
+PRIORITIZED = 2
 #: How often blocked tasks are checked.
 WAKE_EVERY_S = 3.0
 
@@ -273,6 +278,39 @@ class Dependencies:
             "In a conversation (a chat), tell the person how it went and what changed."
         )
 
+    async def prioritize(self, task_id: str) -> list[Task]:
+        """Put a task, and every task under it in the graph, at the front of the queue.
+
+        The tasks under it are the ones it started, continued or waits on, and
+        theirs, all the way down (any attempt of each package's chain may hold
+        the edge; the package's latest attempt is the one that runs). Those
+        still waiting to run (queued, paused or blocked) get PRIORITIZED, so the
+        next free slot takes them before anything else, the ones it waits on
+        first by being older; nothing running is stopped. A blocked one keeps
+        it when it wakes. Returns the tasks raised.
+        """
+        seen: set[str] = set()
+        targets: list[str] = []
+        todo = [task_id]
+        while todo:
+            ref = todo.pop()
+            latest = await self.store.latest(ref)
+            if latest is None or latest.id in seen:
+                continue
+            chain = await self.store.chain(latest.id)
+            seen.update(chain)
+            targets.append(latest.id)
+            for attempt in chain:
+                todo.extend(await self.store.of(attempt))
+        raised = await self.m.tasks.prioritize(targets, PRIORITIZED)
+        for t in raised:
+            self.m.bus.publish(Event(type="task_state", task_id=t.id, project=t.project,
+                                     data={"state": t.state.value, "activity": t.activity, "priority": t.priority}))
+        if raised:
+            self.m._wake_workers()
+            log.info("prioritized %s and %d task(s) under it", task_id, len(raised) - 1)
+        return raised
+
     async def wake_ready(self) -> int:
         """Queue every blocked task whose dependencies are all done. Returns how many."""
         woken = 0
@@ -283,7 +321,8 @@ class Dependencies:
                 continue
             note = self.wake_note(statuses)
             landed = await self.m.tasks.set_state(
-                task.id, TaskState.QUEUED, waiting_on=None, wake_note=note, priority=1,
+                task.id, TaskState.QUEUED, waiting_on=None, wake_note=note,
+                priority=max(WOKEN, task.priority),  # a prioritized task stays ahead of woken ones
                 resumed_from=task.resumed_from or task.session_id, finished_at=None,
                 activity="its tasks are done; resuming first",
             )

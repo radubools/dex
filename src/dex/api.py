@@ -64,6 +64,9 @@ PING_INTERVAL_S = 20.0
 #: models worth running an agent on.
 MODEL_CHOICES = [
     {"id": "claude-opus-5-5", "label": "Opus 5.5", "note": "most capable"},
+    #: Where to switch when Opus's usage limits run out. Its running cost
+    #: estimate is Fable 5's (pricing.py matches the id by prefix).
+    {"id": "claude-fable-5-1", "label": "Fable 5.1", "note": "when Opus limits run out"},
     {"id": "claude-opus-5", "label": "Opus 5", "note": "previous Opus"},
     {"id": "claude-sonnet-5", "label": "Sonnet 5", "note": "faster, cheaper"},
     {"id": "claude-haiku-4-5", "label": "Haiku 4.5", "note": "cheapest"},
@@ -1242,6 +1245,12 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         if message is None:
             raise HTTPException(404, "no such task")
         return {"message": message}
+
+    @app.post("/api/tasks/{task_id}/prioritize", dependencies=task_run_guard)
+    async def prioritize(task_id: str) -> dict[str, Any]:
+        """Move a task, and every task under it in the graph, to the front of the queue (deps.py)."""
+        raised = await tasks.graph.prioritize(task_id)
+        return {"tasks": [t.to_json(config.assets_dir) for t in raised]}
 
     @app.post("/api/tasks/{task_id}/cancel", dependencies=task_run_guard)
     async def cancel(task_id: str) -> dict[str, bool]:

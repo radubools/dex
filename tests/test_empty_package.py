@@ -183,6 +183,40 @@ async def test_rewriting_an_inherited_file_counts_as_work(run_task, config):
     assert task.state is TaskState.SUCCEEDED
 
 
+async def test_a_paused_task_resumed_to_find_its_work_done_succeeds(run_task, config):
+    """Paused mid-run (preempted, or the server stopped under it), the task
+    resumes its own session in the same row. Finding its work finished, it only
+    confirms it: that is the second half of the run that wrote it."""
+    task = package_task()
+    task.created_at -= 600  # made, and run, ten minutes ago
+    task.resumed_from = "sess-1"
+    package = package_of(config)
+    package.mkdir(parents=True)
+    (package / "story.json").write_text("{}", encoding="utf-8")  # written by its first half
+
+    task = await run_task(task)
+
+    assert task.state is TaskState.SUCCEEDED
+
+
+async def test_a_new_attempt_resuming_a_session_does_not_coast_on_its_parent(run_task, config):
+    """A follow-up attempt also resumes a session, but in a new row made after
+    its parent's files: those are not its work."""
+    package = package_of(config, "history-ro")
+    package.mkdir(parents=True)
+    old = package / "skeleton.json"
+    old.write_text("{}", encoding="utf-8")
+    stamp = old.stat().st_mtime_ns - 600_000_000_000
+    os.utime(old, ns=(stamp, stamp))
+
+    task = package_task(slug="section-two")
+    task.output_slug = "history-ro"
+    task.resumed_from = "sess-1"
+    task = await run_task(task)
+
+    assert task.state is TaskState.FAILED
+
+
 # ------------------------------------------------------------------- telling
 # The check above is only half of it: an agent that is never told how its turn
 # ends cannot be blamed for parking itself. The brief has to say so, and say

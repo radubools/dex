@@ -27,7 +27,7 @@ TASK_COLUMNS = """
     extract(epoch from started_at)::float8 AS started_at,
     extract(epoch from finished_at)::float8 AS finished_at,
     error, cost_usd, turns, session_id, attempt, parent_id, resumed_from, output_slug,
-    model, cost_is_estimate, project, scope, held, anchor, waiting_on, wake_note, options
+    model, cost_is_estimate, project, scope, held, anchor, waiting_on, wake_note, options, priority
 """
 
 
@@ -71,6 +71,7 @@ def task_from_row(row: asyncpg.Record) -> Task:
     raw_waiting = row["waiting_on"]
     task.waiting_on = json.loads(raw_waiting) if isinstance(raw_waiting, str) else raw_waiting
     task.wake_note = row["wake_note"]
+    task.priority = row["priority"] or 0
     raw_options = row["options"]
     task.options = (json.loads(raw_options) if isinstance(raw_options, str) else raw_options) or {}
     return task
@@ -407,7 +408,13 @@ class TaskStore:
                 # because parked tasks usually happen to be the older ones.
                 # A woken task (priority) goes before both: what it waited on
                 # is done, and it holds the session that asked for it.
-                f"""SELECT id FROM tasks WHERE state = 'queued' {scope_filter}
+                # A paused task is claimable too once a worker has a free slot
+                # (the fleet held or at capacity claims nothing): waiting for
+                # `resume_paused` let queued work take every freed slot first,
+                # so a prioritized paused task never got one.
+                f"""SELECT id FROM tasks
+                   WHERE (state = 'queued' OR (state = 'paused' AND started_at IS NOT NULL AND NOT held))
+                     {scope_filter}
                    ORDER BY priority DESC, (started_at IS NOT NULL) DESC, seq
                    FOR UPDATE SKIP LOCKED LIMIT 1""",
                 *scopes,
@@ -417,7 +424,11 @@ class TaskStore:
             claimed = await conn.fetchrow(
                 f"""UPDATE tasks
                     SET state = 'running', claimed_by = $2, claimed_at = now(),
-                        started_at = now(), activity = 'starting', priority = 0
+                        started_at = now(), activity = 'starting', priority = 0,
+                        -- a paused one continues its own session, as resume_paused puts it back
+                        resumed_from = CASE WHEN state = 'paused' THEN COALESCE(resumed_from, session_id)
+                                            ELSE resumed_from END,
+                        finished_at = NULL
                     WHERE id = $1
                     RETURNING {TASK_COLUMNS}""",
                 row["id"], worker,
@@ -435,6 +446,18 @@ class TaskStore:
             "UPDATE tasks SET claimed_at = now(), activity = COALESCE($2, activity) WHERE id = $1",
             task_id, activity,
         )
+
+    async def prioritize(self, ids: list[str], level: int) -> list[Task]:
+        """Raise these tasks' claim order to `level` (never lower it), if they are
+        still waiting to run: queued, paused or blocked. Returns those raised."""
+        rows = await self.db.pool.fetch(
+            f"""UPDATE tasks SET priority = $2
+                WHERE id = ANY($1::text[]) AND priority < $2
+                  AND state IN ('queued', 'paused', 'blocked')
+                RETURNING {TASK_COLUMNS}""",
+            ids, level,
+        )
+        return [task_from_row(r) for r in rows]
 
     async def paused(self, limit: int = 10, interactive: bool | None = None) -> list[Task]:
         """Tasks dex paused and may start again, oldest first.
@@ -458,7 +481,7 @@ class TaskStore:
             f"""SELECT {TASK_COLUMNS} FROM tasks
                 WHERE state = 'paused' AND started_at IS NOT NULL AND NOT held
                   {scope_filter}
-                ORDER BY seq LIMIT $1""",
+                ORDER BY priority DESC, seq LIMIT $1""",
             limit, *scopes,
         )
         return [task_from_row(row) for row in rows]
@@ -544,6 +567,21 @@ class DepStore:
         rows = await self.db.pool.fetch(
             "SELECT depends_on FROM task_deps WHERE task_id = $1 ORDER BY created_at", task_id)
         return [r["depends_on"] for r in rows]
+
+    async def chain(self, task_id: str) -> list[str]:
+        """Every attempt of the package `task_id` is an attempt of, first to last."""
+        rows = await self.db.pool.fetch(
+            """WITH RECURSIVE up AS (
+                    SELECT id, parent_id FROM tasks WHERE id = $1
+                    UNION SELECT t.id, t.parent_id FROM tasks t JOIN up ON t.id = up.parent_id),
+                down AS (
+                    SELECT id FROM up WHERE parent_id IS NULL
+                    UNION SELECT t.id FROM tasks t JOIN down d ON t.parent_id = d.id)
+                SELECT id FROM tasks WHERE id IN (SELECT id FROM down) OR id = $1
+                ORDER BY attempt, created_at""",
+            task_id,
+        )
+        return [r["id"] for r in rows]
 
     async def latest(self, task_id: str) -> Task | None:
         """The newest attempt of the chain `task_id` belongs to (itself if none follow it)."""

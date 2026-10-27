@@ -1,0 +1,9 @@
+{
+  "name": "game-voice",
+  "description": "Spoken captions for the games in ~/games: every text a story's card shows (its line, question, \"more\" paragraphs and the green or red hint after an answer) spoken by a local text-to-speech model (ollama phonon, voice Preston), one Opus clip per text keyed by the text, in one kind \"voice\" package per game; runtime numbers filled in from a play-through of the story or inferred from the beat's context.",
+  "version": "091333",
+  "updated": 1793062877.80601,
+  "requires": [
+    "pytest"
+  ]
+}

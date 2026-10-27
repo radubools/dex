@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  answerQuestion, cancelTask, getTaskMessages, rerunTask,
+  answerQuestion, cancelTask, getTaskMessages, prioritizeTask, rerunTask,
   resolveApproval, resumeTask, sendTaskMessage,
 } from '../api'
 import { progressOf, type FeedItem, type TaskView } from '../store'
@@ -25,6 +25,7 @@ export function TaskPanel({
   onBack,
   onStarted,
   onQueued,
+  onTasks,
 }: {
   view: TaskView
   onOpen: (target: ViewerTarget) => void
@@ -36,6 +37,8 @@ export function TaskPanel({
   onStarted: (task: Task) => void
   /** Refreshed queue of follow-up notes for this task. */
   onQueued: (taskId: string, messages: TaskMessage[]) => void
+  /** Tasks the server changed (a prioritize moves this one and those under it). */
+  onTasks?: (tasks: Task[]) => void
 }) {
   const [tab, setTab] = useState<Tab>('activity')
   const [busy, setBusy] = useState(false)
@@ -122,6 +125,24 @@ export function TaskPanel({
         ) : null}
         {task.model && <span className="muted small">{task.model.replace('claude-', '')}</span>}
         {task.attempt > 1 && <span className="muted small">attempt {task.attempt}</span>}
+        {(task.priority ?? 0) >= 2 && ['queued', 'paused', 'blocked'].includes(task.state) && (
+          <span className="badge prioritized" title="Starts at the next free slot, before other queued work">⇡ next</span>
+        )}
+        {/* To the front of the queue, with every task under it in the graph
+            (what it started, continued or waits on), so they run first. */}
+        {task.canPrioritize && (
+          <button
+            className="ghost-btn small"
+            disabled={busy}
+            title="Run this next, and the tasks it waits on before it"
+            onClick={() => {
+              setBusy(true)
+              prioritizeTask(task.id).then((tasks) => onTasks?.(tasks)).finally(() => setBusy(false))
+            }}
+          >
+            ⇡ Prioritize
+          </button>
+        )}
         {live && (
           <button className="ghost-btn small" onClick={() => void cancelTask(task.id)}>Stop</button>
         )}

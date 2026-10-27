@@ -14,6 +14,14 @@ The user runs dex themselves, persistently:
 processes belong to the user; stopping one interrupts whatever they are doing
 and, because the queue is shared through Postgres, can strand a task mid-run.
 
+**dex-api's environment is clean by construction.** pm2 runs it through
+`scripts/run_api.py`, which keeps only `DEX_*` and a few basics and takes
+`CLAUDE_CODE_OAUTH_TOKEN` from `~/.zshrc`: nothing from the shell that runs
+`pm2` (a Claude app session's `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_*` once
+failed every task with "Invalid API key") reaches dex or its tasks. Any
+restart, and any edit under `src/dex` (the server reloads itself), stops what
+is running; dex then marks it paused, or sometimes failed.
+
 To exercise the server yourself, start your own on a different port and against
 a different database:
 

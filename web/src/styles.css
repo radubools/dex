@@ -497,6 +497,7 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   color: #e5e7eb; font-size: 16px; line-height: 1; cursor: pointer;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px);
 }
+.badge.prioritized { color: #fbbf24; border-color: rgba(251, 191, 36, 0.45); }
 .scroll-jumps button:hover { background: rgba(40, 48, 60, 0.95); }
 .task-panel > .panel-body.with-jumps { padding-bottom: calc(52px + env(safe-area-inset-bottom)); }
 .viewer { grid-template-rows: auto minmax(0, 1fr); }

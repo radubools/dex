@@ -1,0 +1,1232 @@
+{
+  "schema": 1,
+  "actions": {
+    "guide.clip": {
+      "algorithm": "general",
+      "summary": "Play a clip on the robot mentor.",
+      "args": {
+        "clip": "idle|talk|point|cheer|think|walk",
+        "loop": "bool, default false"
+      }
+    },
+    "guide.moveTo": {
+      "algorithm": "general",
+      "summary": "Walk the mentor to a spot beside the station.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "guide.pointAt": {
+      "algorithm": "general",
+      "summary": "Mentor turns and points at an entity.",
+      "args": {
+        "entity": "spawned id"
+      }
+    },
+    "ui.formula": {
+      "algorithm": "general",
+      "summary": "Show a short formula on the station plaque.",
+      "args": {
+        "text": "plain-text formula, e.g. 'y = w·x + b'"
+      }
+    },
+    "ui.slider": {
+      "algorithm": "general",
+      "summary": "Give the player a slider bound to a parameter.",
+      "args": {
+        "param": "parameter name, e.g. 'k', 'lr', 'C'",
+        "min": "number",
+        "max": "number",
+        "step": "number",
+        "value": "number"
+      }
+    },
+    "ui.tool": {
+      "algorithm": "general",
+      "summary": "Enable a player tool.",
+      "args": {
+        "tool": "place-point|place-query|drag-line|drag-centroid|pick-split|erase"
+      }
+    },
+    "ui.hide": {
+      "algorithm": "general",
+      "summary": "Remove a slider, tool, the formula plaque or a bench panel.",
+      "args": {
+        "id": "slider param, tool name, 'formula', or a panel key: 'steps:<id>', 'table:<id>', 'chart:<id>', 'note', 'explain', 'values' (a list hides several)"
+      }
+    },
+    "sandbox.open": {
+      "algorithm": "general",
+      "summary": "Hand the station over to free play.",
+      "args": {
+        "algorithm": "algorithm id",
+        "tools": "list of ui.tool names",
+        "sliders": "list of params"
+      }
+    },
+    "data.scatter": {
+      "algorithm": "data",
+      "summary": "Spawn a dataset as class markers on the grid.",
+      "args": {
+        "dataset": "blobs|moons|circles|line|xor|spiral|grid|iris2d|anisotropic|uneven|nested|checker|diagonal|quadratic|heteroscedastic|correlated|sparse|custom",
+        "n": "points, default 40",
+        "classes": "1-4, default 2",
+        "noise": "0-1",
+        "seed": "int",
+        "points": "custom only: rows of [x, z, class, y] (class defaults to 0; y, the height for regression, optional); the game names them p0, p1, … in this order"
+      }
+    },
+    "data.label": {
+      "algorithm": "data",
+      "summary": "Reveal or hide class colours/shapes on points.",
+      "args": {
+        "show": "bool",
+        "ids": "optional list, default all"
+      }
+    },
+    "data.add": {
+      "algorithm": "data",
+      "summary": "Add one point.",
+      "args": {
+        "at": "[x,z]",
+        "cls": "class index or null",
+        "id": "optional id"
+      }
+    },
+    "data.highlight": {
+      "algorithm": "data",
+      "summary": "Pulse a subset of points.",
+      "args": {
+        "ids": "list",
+        "cls": "class index",
+        "where": "misclassified|support|outliers"
+      }
+    },
+    "data.feature": {
+      "algorithm": "data",
+      "summary": "Name an axis after a feature.",
+      "args": {
+        "axis": "x|z|y",
+        "name": "feature name, e.g. 'size'"
+      }
+    },
+    "data.normalize": {
+      "algorithm": "data",
+      "summary": "Animate rescaling features to zero mean, unit spread.",
+      "args": {}
+    },
+    "data.noise": {
+      "algorithm": "data",
+      "summary": "Jitter the points.",
+      "args": {
+        "amount": "0-1"
+      }
+    },
+    "data.height": {
+      "algorithm": "data",
+      "summary": "Lift each point to its target value (regression view).",
+      "args": {}
+    },
+    "data.clear": {
+      "algorithm": "data",
+      "summary": "Remove all points.",
+      "args": {}
+    },
+    "axes.show": {
+      "algorithm": "data",
+      "summary": "Show axes, grid and ticks.",
+      "args": {
+        "x": "label",
+        "z": "label",
+        "y": "optional label",
+        "range": "[min,max], default [-5,5]"
+      }
+    },
+    "axes.hide": {
+      "algorithm": "data",
+      "summary": "Hide the axes.",
+      "args": {}
+    },
+    "loss.show": {
+      "algorithm": "foundations",
+      "summary": "Show the loss meter for the current model.",
+      "args": {
+        "kind": "mse|mae|logloss|hinge|zeroone|gini"
+      }
+    },
+    "loss.surface": {
+      "algorithm": "gradient-descent",
+      "summary": "Show the loss landscape as a surface over two parameters.",
+      "args": {
+        "params": "[name1,name2]",
+        "shape": "bowl|ravine|saddle|bumpy"
+      }
+    },
+    "gd.ball": {
+      "algorithm": "gradient-descent",
+      "summary": "Drop the parameter marker on the loss surface.",
+      "args": {
+        "at": "[p1,p2]"
+      }
+    },
+    "gd.gradient": {
+      "algorithm": "gradient-descent",
+      "summary": "Draw the gradient arrow at the marker.",
+      "args": {}
+    },
+    "gd.step": {
+      "algorithm": "gradient-descent",
+      "summary": "Take gradient steps; the marker rolls downhill.",
+      "args": {
+        "lr": "learning rate",
+        "steps": "int, default 1"
+      }
+    },
+    "gd.setRate": {
+      "algorithm": "gradient-descent",
+      "summary": "Change the learning rate.",
+      "args": {
+        "lr": "number"
+      }
+    },
+    "gd.momentum": {
+      "algorithm": "gradient-descent",
+      "summary": "Turn momentum on.",
+      "args": {
+        "beta": "0-1"
+      }
+    },
+    "gd.stochastic": {
+      "algorithm": "gradient-descent",
+      "summary": "Use mini-batches: noisy steps.",
+      "args": {
+        "batch": "int"
+      }
+    },
+    "regression.line": {
+      "algorithm": "linear-regression",
+      "summary": "Place a line with a given slope and intercept.",
+      "args": {
+        "slope": "number",
+        "intercept": "number"
+      }
+    },
+    "regression.showResiduals": {
+      "algorithm": "linear-regression",
+      "summary": "Draw residual segments from points to the line.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "regression.squareResiduals": {
+      "algorithm": "linear-regression",
+      "summary": "Grow each residual into a square (squared error).",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "regression.fitStep": {
+      "algorithm": "linear-regression",
+      "summary": "Gradient step(s) on the line.",
+      "args": {
+        "lr": "number",
+        "steps": "int"
+      }
+    },
+    "regression.solve": {
+      "algorithm": "linear-regression",
+      "summary": "Jump to the least-squares line.",
+      "args": {}
+    },
+    "regression.poly": {
+      "algorithm": "linear-regression",
+      "summary": "Fit a polynomial curve.",
+      "args": {
+        "degree": "int"
+      }
+    },
+    "regression.plane": {
+      "algorithm": "linear-regression",
+      "summary": "Fit a plane over two features.",
+      "args": {}
+    },
+    "logistic.sigmoid": {
+      "algorithm": "logistic-regression",
+      "summary": "Show the sigmoid squashing scores to 0–1.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "logistic.setParams": {
+      "algorithm": "logistic-regression",
+      "summary": "Sets the model to a chosen guess without fitting; later logistic actions and fitStep work from it",
+      "args": {
+        "w": "number (or w1), default the current value or 0",
+        "w1": "first weight (two features)",
+        "w2": "number, floor only",
+        "b": "number, default the current value or 0"
+      }
+    },
+    "logistic.probability": {
+      "algorithm": "logistic-regression",
+      "summary": "Colour points by predicted probability.",
+      "args": {}
+    },
+    "logistic.fitStep": {
+      "algorithm": "logistic-regression",
+      "summary": "Gradient step(s) on log-loss.",
+      "args": {
+        "lr": "number",
+        "steps": "int"
+      }
+    },
+    "logistic.threshold": {
+      "algorithm": "logistic-regression",
+      "summary": "Move the decision threshold.",
+      "args": {
+        "value": "0-1"
+      }
+    },
+    "logistic.boundary": {
+      "algorithm": "logistic-regression",
+      "summary": "Show the decision boundary.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "knn.query": {
+      "algorithm": "knn",
+      "summary": "Place the query star.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "knn.distances": {
+      "algorithm": "knn",
+      "summary": "Draw distance lines and rings from the query (circles for Euclidean, a diamond for Manhattan, a square for Chebyshev).",
+      "args": {
+        "metric": "euclidean|manhattan|chebyshev"
+      }
+    },
+    "knn.neighbors": {
+      "algorithm": "knn",
+      "summary": "Highlight the k nearest points.",
+      "args": {
+        "k": "int"
+      }
+    },
+    "knn.vote": {
+      "algorithm": "knn",
+      "summary": "The k nearest vote; the star takes the winner's colour. With weighted: true each neighbour's weight 1/d^power floats over it, the bench shows the weight per class as bars and a table, and the model votes this way until a plain knn.vote.",
+      "args": {
+        "weighted": "boolean, default false; false (or omitted) is the plain majority vote and turns weighting off",
+        "power": "number 0–8, default 1; w = 1/d^power (0 makes every weight 1, i.e. the plain majority)"
+      }
+    },
+    "knn.setK": {
+      "algorithm": "knn",
+      "summary": "Change k.",
+      "args": {
+        "k": "int"
+      }
+    },
+    "knn.regions": {
+      "algorithm": "knn",
+      "summary": "Paint decision regions over the grid.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "kmeans.init": {
+      "algorithm": "kmeans",
+      "summary": "Drop k centroids.",
+      "args": {
+        "k": "int",
+        "method": "random|kmeans++|manual",
+        "centroids": "optional [[x, z], ...]: exact starting centroids (overrides method)"
+      }
+    },
+    "kmeans.assign": {
+      "algorithm": "kmeans",
+      "summary": "Each point joins its nearest centroid.",
+      "args": {}
+    },
+    "kmeans.update": {
+      "algorithm": "kmeans",
+      "summary": "Each centroid moves to the mean of its points.",
+      "args": {}
+    },
+    "kmeans.iterate": {
+      "algorithm": "kmeans",
+      "summary": "Repeat assign and update.",
+      "args": {
+        "steps": "int or 'converge'"
+      }
+    },
+    "kmeans.inertia": {
+      "algorithm": "kmeans",
+      "summary": "Show total within-cluster distance.",
+      "args": {}
+    },
+    "kmeans.elbow": {
+      "algorithm": "kmeans",
+      "summary": "Plot inertia against k.",
+      "args": {
+        "kmax": "int"
+      }
+    },
+    "cluster.distances": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Show distances between clusters.",
+      "args": {
+        "linkage": "single|complete|average|ward"
+      }
+    },
+    "cluster.merge": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Merge the two closest clusters; the dendrogram grows a link.",
+      "args": {
+        "steps": "int, default 1",
+        "linkage": "optional"
+      }
+    },
+    "cluster.dendrogram": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Show the dendrogram beside the data.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "cluster.cut": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "Cut the dendrogram at a height.",
+      "args": {
+        "height": "number"
+      }
+    },
+    "tree.root": {
+      "algorithm": "decision-tree",
+      "summary": "Start a tree: every point in one node.",
+      "args": {}
+    },
+    "tree.impurity": {
+      "algorithm": "decision-tree",
+      "summary": "Show a node's impurity bar.",
+      "args": {
+        "node": "node id",
+        "measure": "gini|entropy"
+      }
+    },
+    "tree.split": {
+      "algorithm": "decision-tree",
+      "summary": "Split a node with a plane on one feature.",
+      "args": {
+        "node": "node id",
+        "feature": "x|z",
+        "threshold": "number"
+      }
+    },
+    "tree.bestSplit": {
+      "algorithm": "decision-tree",
+      "summary": "Sweep thresholds and keep the purest split.",
+      "args": {
+        "node": "node id"
+      }
+    },
+    "tree.grow": {
+      "algorithm": "decision-tree",
+      "summary": "Grow greedily to a depth.",
+      "args": {
+        "depth": "int"
+      }
+    },
+    "tree.leaf": {
+      "algorithm": "decision-tree",
+      "summary": "Close a node as a leaf with its majority class.",
+      "args": {
+        "node": "node id"
+      }
+    },
+    "tree.prune": {
+      "algorithm": "decision-tree",
+      "summary": "Prune back to a depth.",
+      "args": {
+        "depth": "int"
+      }
+    },
+    "tree.predict": {
+      "algorithm": "decision-tree",
+      "summary": "Drop a query down the tree.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "forest.bag": {
+      "algorithm": "random-forest",
+      "summary": "Draw a bootstrap sample (with replacement).",
+      "args": {
+        "tree": "tree index",
+        "seed": "int"
+      }
+    },
+    "forest.featureSubset": {
+      "algorithm": "random-forest",
+      "summary": "Restrict a tree to a random subset of features.",
+      "args": {
+        "m": "int"
+      }
+    },
+    "forest.grow": {
+      "algorithm": "random-forest",
+      "summary": "Grow several trees side by side.",
+      "args": {
+        "trees": "int",
+        "depth": "int"
+      }
+    },
+    "forest.vote": {
+      "algorithm": "random-forest",
+      "summary": "The trees vote on a query.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "forest.regions": {
+      "algorithm": "random-forest",
+      "summary": "Show the averaged decision regions.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "boost.init": {
+      "algorithm": "gradient-boosting",
+      "summary": "Start from a constant prediction.",
+      "args": {}
+    },
+    "boost.residuals": {
+      "algorithm": "gradient-boosting",
+      "summary": "Show the residuals of the current ensemble.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "boost.addStump": {
+      "algorithm": "gradient-boosting",
+      "summary": "Fit a stump to the residuals and add it.",
+      "args": {
+        "lr": "shrinkage",
+        "steps": "int"
+      }
+    },
+    "boost.weights": {
+      "algorithm": "gradient-boosting",
+      "summary": "AdaBoost: each seed's marker grows with its weight. With round: the weights after that round, a weight tag on each seed, and the round's reweighting on the bench: the stump, the seeds it gets wrong, ε, α = ½ln((1−ε)/ε), w·e^(∓α), Z and the weights after.",
+      "args": {
+        "round": "integer ≥ 0, optional; 0 = the even start 1/n. If fewer rounds are fitted, fits up to it (walls appear). Omitted: the latest weights, unchanged behaviour"
+      }
+    },
+    "boost.shrink": {
+      "algorithm": "gradient-boosting",
+      "summary": "Change the learning rate.",
+      "args": {
+        "lr": "number"
+      }
+    },
+    "svm.line": {
+      "algorithm": "svm",
+      "summary": "Place a separating line.",
+      "args": {
+        "angle": "degrees",
+        "offset": "number"
+      }
+    },
+    "svm.margin": {
+      "algorithm": "svm",
+      "summary": "Show the margin bands.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "svm.supportVectors": {
+      "algorithm": "svm",
+      "summary": "Halo the support vectors.",
+      "args": {}
+    },
+    "svm.maximize": {
+      "algorithm": "svm",
+      "summary": "Widen the margin to its maximum.",
+      "args": {}
+    },
+    "svm.softMargin": {
+      "algorithm": "svm",
+      "summary": "Allow violations with penalty C.",
+      "args": {
+        "C": "number"
+      }
+    },
+    "svm.kernelLift": {
+      "algorithm": "svm",
+      "summary": "Lift points into 3D with a kernel feature.",
+      "args": {
+        "kernel": "poly|rbf",
+        "gamma": "number"
+      }
+    },
+    "svm.kernelProject": {
+      "algorithm": "svm",
+      "summary": "Cut the lifted data with a plane; drop the curve back to 2D.",
+      "args": {}
+    },
+    "bayes.prior": {
+      "algorithm": "naive-bayes",
+      "summary": "Show class priors as bars.",
+      "args": {}
+    },
+    "bayes.gaussian": {
+      "algorithm": "naive-bayes",
+      "summary": "Draw a class's bell curve over a feature.",
+      "args": {
+        "cls": "class index",
+        "feature": "x|z"
+      }
+    },
+    "bayes.likelihood": {
+      "algorithm": "naive-bayes",
+      "summary": "Read the likelihoods at a query.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "bayes.posterior": {
+      "algorithm": "naive-bayes",
+      "summary": "Multiply prior and likelihoods; normalise.",
+      "args": {
+        "at": "[x,z]"
+      }
+    },
+    "bayes.independence": {
+      "algorithm": "naive-bayes",
+      "summary": "Show features treated separately (the naive assumption).",
+      "args": {}
+    },
+    "bayes.regions": {
+      "algorithm": "naive-bayes",
+      "summary": "Paint the posterior's decision regions.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "pca.center": {
+      "algorithm": "pca",
+      "summary": "Move the cloud's centre to the origin.",
+      "args": {}
+    },
+    "pca.covariance": {
+      "algorithm": "pca",
+      "summary": "Show the spread ellipse.",
+      "args": {}
+    },
+    "pca.axis": {
+      "algorithm": "pca",
+      "summary": "Draw a principal axis.",
+      "args": {
+        "component": "1|2|3"
+      }
+    },
+    "pca.rotate": {
+      "algorithm": "pca",
+      "summary": "Spin a candidate axis; show the projected variance.",
+      "args": {
+        "angle": "degrees"
+      }
+    },
+    "pca.project": {
+      "algorithm": "pca",
+      "summary": "Project points onto the top components.",
+      "args": {
+        "components": "int"
+      }
+    },
+    "pca.variance": {
+      "algorithm": "pca",
+      "summary": "Show explained-variance bars.",
+      "args": {}
+    },
+    "pca.reconstruct": {
+      "algorithm": "pca",
+      "summary": "Lift projections back; show what is lost.",
+      "args": {}
+    },
+    "nn.perceptron": {
+      "algorithm": "neural-network",
+      "summary": "Build a single neuron with inputs and a bias.",
+      "args": {
+        "inputs": "int"
+      }
+    },
+    "nn.layer": {
+      "algorithm": "neural-network",
+      "summary": "Add a hidden layer (up to 6). Init 'constant' starts every weight at value and every bias at 0, so each layer's neurons are copies. A bench note, model.params and model.explain show they stay identical, with identical gradients, through training.",
+      "args": {
+        "neurons": "int",
+        "activation": "step|sigmoid|relu|tanh",
+        "init": "adds 'constant' to the existing scale names/numbers; persists for later nn.layer calls until init is set again",
+        "value": "number, default 0.5; the constant weight (used only with init: 'constant')"
+      }
+    },
+    "nn.weights": {
+      "algorithm": "neural-network",
+      "summary": "Show weights as connection thickness and colour.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "nn.forward": {
+      "algorithm": "neural-network",
+      "summary": "Send an input through; neurons glow with activation.",
+      "args": {
+        "input": "[x,z] or point id"
+      }
+    },
+    "nn.activation": {
+      "algorithm": "neural-network",
+      "summary": "Swap the activation function.",
+      "args": {
+        "fn": "step|sigmoid|relu|tanh"
+      }
+    },
+    "nn.loss": {
+      "algorithm": "neural-network",
+      "summary": "Compare the output with the target.",
+      "args": {}
+    },
+    "nn.backward": {
+      "algorithm": "neural-network",
+      "summary": "Pulse gradients backward along the connections.",
+      "args": {}
+    },
+    "nn.update": {
+      "algorithm": "neural-network",
+      "summary": "Nudge the weights by their gradients.",
+      "args": {
+        "lr": "number"
+      }
+    },
+    "nn.boundary": {
+      "algorithm": "neural-network",
+      "summary": "Show the network's decision region.",
+      "args": {
+        "show": "bool"
+      }
+    },
+    "train.step": {
+      "algorithm": "evaluation",
+      "summary": "Run training steps for the current model.",
+      "args": {
+        "steps": "int, default 1"
+      }
+    },
+    "train.run": {
+      "algorithm": "evaluation",
+      "summary": "Train for some epochs, animated.",
+      "args": {
+        "epochs": "int"
+      }
+    },
+    "train.pause": {
+      "algorithm": "evaluation",
+      "summary": "Pause training.",
+      "args": {}
+    },
+    "train.curve": {
+      "algorithm": "evaluation",
+      "summary": "Show learning curves.",
+      "args": {
+        "series": "['train','val']"
+      }
+    },
+    "eval.split": {
+      "algorithm": "evaluation",
+      "summary": "Splits the points into train / validation / test, with a coloured ring per point and a count chart. seed picks the shuffle (same seed, same split). stratify keeps each class's share in every group. Returns the ids per group and counts per class.",
+      "args": {
+        "train": "number, share for training (default 0.6)",
+        "val": "number, share for validation (default 0.2)",
+        "test": "number, share for test (default 0.2)",
+        "seed": "number, shuffle seed (default 1)",
+        "stratify": "boolean, split class by class so each keeps its share (default false)"
+      }
+    },
+    "eval.score": {
+      "algorithm": "evaluation",
+      "summary": "Show a metric.",
+      "args": {
+        "metric": "accuracy|mse|precision|recall|f1",
+        "on": "train|val|test"
+      }
+    },
+    "eval.confusion": {
+      "algorithm": "evaluation",
+      "summary": "Show the confusion matrix.",
+      "args": {}
+    },
+    "eval.crossValidate": {
+      "algorithm": "evaluation",
+      "summary": "k folds take turns as validation; a bar per fold and the mean. With keep, each fold's fitted curve (regression) or score (classification) stays on the floor in its own colour, with mean ± sd",
+      "args": {
+        "folds": "integer 2–10, default 5",
+        "seed": "integer, default 1",
+        "keep": "boolean, default false, leave each fold's curve or score visible side by side and show mean ± sd (population sd)"
+      }
+    },
+    "eval.complexity": {
+      "algorithm": "evaluation",
+      "summary": "Set model complexity (degree, depth, k).",
+      "args": {
+        "value": "number"
+      }
+    },
+    "eval.regularize": {
+      "algorithm": "evaluation",
+      "summary": "Add a penalty on large weights.",
+      "args": {
+        "strength": "number"
+      }
+    },
+    "ui.table": {
+      "algorithm": "general",
+      "summary": "Show a table of numbers on the bench (the story's own numbers).",
+      "args": {
+        "id": "optional, default 'table'",
+        "title": "text",
+        "columns": "list of column headers",
+        "rows": "list of rows, each a list of cells"
+      }
+    },
+    "ui.steps": {
+      "algorithm": "general",
+      "summary": "Show worked arithmetic, one line per step.",
+      "args": {
+        "id": "optional, default 'steps'",
+        "title": "text",
+        "lines": "list of lines, e.g. 'r1 = 3.0 - 2.2 = 0.8'",
+        "append": "bool: add to the lines already shown"
+      }
+    },
+    "ui.note": {
+      "algorithm": "general",
+      "summary": "A callout on the bench.",
+      "args": {
+        "text": "<= 140 chars",
+        "tone": "info|warn|good"
+      }
+    },
+    "ui.chart": {
+      "algorithm": "general",
+      "summary": "A chart drawn from the story's numbers.",
+      "args": {
+        "id": "chart id",
+        "title": "text",
+        "kind": "bars|line",
+        "labels": "x labels",
+        "values": "numbers (one series)",
+        "series": "or [{name, values, color}]",
+        "mark": "optional index into labels: highlight that bar or point"
+      }
+    },
+    "data.values": {
+      "algorithm": "data",
+      "summary": "Label points with their live numbers. T1, t2: each point's coordinates on PC1 and PC2, from the PCA model",
+      "args": {
+        "show": "bool, default true",
+        "fields": "adds 't1' and 't2' (read through model.components(p); '–' when the current model has none)",
+        "ids": "optional point ids",
+        "digits": "decimals, default 2"
+      }
+    },
+    "data.table": {
+      "algorithm": "data",
+      "summary": "A live table of points and their numbers on the bench. T1, t2 columns, as for data.values",
+      "args": {
+        "fields": "adds 't1' and 't2'",
+        "ids": "optional point ids",
+        "title": "text"
+      }
+    },
+    "data.outlier": {
+      "algorithm": "data",
+      "summary": "Add one outlier, marked with the warning marker.",
+      "args": {
+        "at": "[x,z]",
+        "cls": "class or null",
+        "y": "height for regression",
+        "id": "optional id"
+      }
+    },
+    "data.scale": {
+      "algorithm": "data",
+      "summary": "Stretch one feature (animated): unequal feature scales.",
+      "args": {
+        "axis": "x|z|y",
+        "factor": "number"
+      }
+    },
+    "data.shift": {
+      "algorithm": "data",
+      "summary": "Move all points, or one class: distribution shift.",
+      "args": {
+        "dx": "number",
+        "dz": "number",
+        "cls": "optional class"
+      }
+    },
+    "data.duplicate": {
+      "algorithm": "data",
+      "summary": "Add copies of points.",
+      "args": {
+        "ids": "point ids",
+        "times": "copies, default 1"
+      }
+    },
+    "data.imbalance": {
+      "algorithm": "data",
+      "summary": "Keep only some points of a class.",
+      "args": {
+        "cls": "class",
+        "keep": "how many to keep"
+      }
+    },
+    "data.flipLabels": {
+      "algorithm": "data",
+      "summary": "Flip labels (label noise); flipped points are marked.",
+      "args": {
+        "fraction": "0-1",
+        "seed": "int",
+        "ids": "or explicit ids"
+      }
+    },
+    "model.params": {
+      "algorithm": "general",
+      "summary": "Show the current model's parameters, live.",
+      "args": {
+        "title": "text"
+      }
+    },
+    "model.explain": {
+      "algorithm": "general",
+      "summary": "The current model's calculation for one point, with its numbers.",
+      "args": {
+        "at": "[x,z]",
+        "id": "or a point id"
+      }
+    },
+    "measure.distance": {
+      "algorithm": "general",
+      "summary": "A ruler or brace between two things, labelled with the distance.",
+      "args": {
+        "from": "entity/point id or [x,z]",
+        "to": "entity/point id or [x,z]",
+        "metric": "euclidean|manhattan|chebyshev",
+        "id": "optional ruler id, default 'dist' (a second id keeps two rulers)",
+        "show": "bool, default true; false removes the ruler with this id"
+      }
+    },
+    "knn.concentration": {
+      "algorithm": "knn",
+      "summary": "Show distances bunching up as dimensions grow (curse of dimensionality).",
+      "args": {
+        "dims": "list, e.g. [2, 10, 100, 1000]"
+      }
+    },
+    "nn.gradients": {
+      "algorithm": "neural-network",
+      "summary": "Gradient size per layer: vanishing or exploding gradients.",
+      "args": {}
+    },
+    "eval.roc": {
+      "algorithm": "evaluation",
+      "summary": "ROC curve and AUC of the current classifier.",
+      "args": {}
+    },
+    "eval.threshold": {
+      "algorithm": "evaluation",
+      "summary": "Move the decision threshold; confusion matrix and metrics follow. With the logistic model it also moves the model's own threshold (clamped to 0.01–0.99) and its wall or contour.",
+      "args": {
+        "value": "0-1"
+      }
+    },
+    "eval.calibration": {
+      "algorithm": "evaluation",
+      "summary": "Reliability diagram: the scores in equal-width bins, each bin's mean predicted probability against its observed share of class 1, with the diagonal of perfect calibration and the expected calibration error (ECE) on a meter; a 3D board on the back wall's left half and a bin table",
+      "args": {
+        "bins": "integer 1–20, default 5, number of equal-width probability bins [lo, hi) (the last one includes 1)",
+        "table": "boolean, default true, also show the per-bin table with the ECE working"
+      }
+    },
+    "knn.metric": {
+      "algorithm": "knn",
+      "summary": "Switches the distance without drawing new lines: halos and the ring<k> (circle, diamond or square), the vote, any distance lines and rings already shown, the regions, predict and explain all follow.",
+      "args": {
+        "metric": "'euclidean'|'manhattan'|'chebyshev', default 'euclidean'"
+      }
+    },
+    "kmeans.seedOdds": {
+      "algorithm": "kmeans",
+      "summary": "k-means++ seeding made live: the chosen centroids drop in; every point gets a tag 'D² … · P …' and a ring sized by P = D²/ΣD²; the bench table lists D² and P with the likeliest marked and ΣD² underneath.",
+      "args": {
+        "first": "point id, [x, z], or a list of them (e.g. ['p1','p4']); default: the current centroids, else one random point"
+      }
+    },
+    "kmeans.seedPick": {
+      "algorithm": "kmeans",
+      "summary": "Adds the next k-means++ centroid, either a given point or drawn with P ∝ D² exactly as the game's k-means++ draws it, then redraws the odds for the new set.",
+      "args": {
+        "id": "point id to pick; omit to draw at random",
+        "seed": "number; the draw uses a fresh generator with this seed (reproducible), else the lesson's"
+      }
+    },
+    "cluster.matrix": {
+      "algorithm": "hierarchical-clustering",
+      "summary": "A live table on the bench of the distance between every two current clusters under the linkage. The smallest entry (the next merge) is marked in both symmetric cells, and a foot line names it. It follows every cluster.merge, linkage change and point change.",
+      "args": {
+        "linkage": "'single'|'complete'|'average'|'ward', default the current linkage (changing it sets the module's linkage, as cluster.distances does)"
+      }
+    },
+    "gd.rescale": {
+      "algorithm": "gradient-descent",
+      "summary": "Rescales one input so the loss surface reshapes (e.g. the ravine rounds into a bowl), animated. The ball keeps the same model (w becomes w/s), its trail is squeezed along that axis, and a bench panel shows the coefficients, curvatures λ, κ and the lr limit 2/λmax before and after.",
+      "args": {
+        "axis": "'w' (the feature x) | 'b' (the bias input 1), default 'w'",
+        "factor": "number s > 0 (clamped 0.05–20); the curvature along that axis is multiplied by s². Omit it for the factor that makes κ = 1"
+      }
+    },
+    "gd.restarts": {
+      "algorithm": "gradient-descent",
+      "summary": "Up to 6 coloured balls rolled at once from the given starts, each with its own trail (full-batch gradient, current momentum). Each ends in the minimum its start leads to; balls that reach the lowest loss glow and are labelled 'lowest loss', the others 'stuck at loss …' or 'flew out'. A bench table lists start, end and loss.",
+      "args": {
+        "at": "[[w, b], …] starts, at most 6",
+        "lr": "number, default the current learning rate",
+        "steps": "number 1–200, default 40",
+        "clear": "true removes the restart balls, trails and table"
+      }
+    },
+    "gd.decay": {
+      "algorithm": "gradient-descent",
+      "summary": "Rolls the ball with a learning rate that decays from `from` to `to` over `steps` (momentum and mini-batches as set), with the trail and the loss chart as in gd.step, plus a bench chart of the lr per step.",
+      "args": {
+        "from": "number, default the current lr",
+        "to": "number, default from/10",
+        "steps": "number 1–200, default 20",
+        "schedule": "'linear' | 'exponential' | 'inverse', default 'exponential'"
+      }
+    },
+    "regression.robust": {
+      "algorithm": "linear-regression",
+      "summary": "Refits the line under a chosen loss: least squares, exact least absolute deviations, or Huber by reweighted least squares. The earlier line stays as a grey ghost, the line moves to the new fit, each point is labelled with its loss, and a bench bar chart shows every point's loss with the largest marked.",
+      "args": {
+        "loss": "'mse' | 'mae' | 'huber', default 'huber'",
+        "delta": "number, default 1: Huber's threshold, beyond which the loss is linear and the pull is capped at ±δ",
+        "labels": "boolean, default true: per-point loss labels"
+      }
+    },
+    "regression.weighted": {
+      "algorithm": "linear-regression",
+      "summary": "Weighted least squares. Each point gets a halo sized by its weight and a '×w' label, the earlier line stays as a grey ghost, and the line moves to the solution of the weighted normal equations, which params/explain show with their numbers.",
+      "args": {
+        "weights": "{id: w} | [w per point, in point order] | 'band' (weight 1/σ², σ = RMS least-squares residual per x band)",
+        "edges": "band boundaries for 'band', default [-2, 0, 2]",
+        "ids": "point ids that get weight `w` (when `weights` is not given)",
+        "w": "weight for `ids`, default 2",
+        "rest": "weight of the other points, default 1",
+        "labels": "boolean, default true: '×w' labels"
+      }
+    },
+    "boost.loss": {
+      "algorithm": "gradient-boosting",
+      "summary": "Refits the gradient-boosting stumps so far under squared, absolute or Huber loss. Each point gets a tag with its plain residual r and the pseudo-residual g = −∂L/∂F that the next stump fits. A bench table lists r, g and each point's loss, and the point with the biggest share is marked.",
+      "args": {
+        "kind": "'squared' | 'absolute' | 'huber' ('mae'/'l1' = absolute), default 'squared'; the loss each stump fits the negative gradient of",
+        "delta": "number, default 1; Huber's δ, where the pull is capped",
+        "show": "bool, default true; the tags, residual segments and bench table (false: refit only)"
+      }
+    },
+    "ada.candidates": {
+      "algorithm": "gradient-boosting",
+      "summary": "Every stump AdaBoost tries in one round, on the bench, best first: the wall's rule, its weighted error ε and the α it would get. The best is drawn on the floor as a highlighted wall labelled with its ε.",
+      "args": {
+        "round": "integer ≥ 1, default the next round (fitted rounds + 1); weights are those entering that round",
+        "top": "integer 1–30, default 8; rows shown"
+      }
+    },
+    "logistic.penalty": {
+      "algorithm": "logistic-regression",
+      "summary": "Adds a weight penalty to the mean log-loss (L2 ½λ‖w‖² or L1 λ‖w‖₁, b never penalised) and trains under it from the current model; the S-curve or wall slides as the weights shrink, with a ‖w‖ meter, a ‖w‖-by-step chart and a weights bar chart",
+      "args": {
+        "lambda": "number ≥ 0, default 0.01 (or params.lambda); the penalty strength",
+        "kind": "'l2' | 'l1', default 'l2'",
+        "steps": "integer 0–50000, optional; exactly this many gradient steps. Omitted: runs until the weights stop moving (λ > 0 always converges; λ = 0 then trains nothing)",
+        "lr": "number, default 0.5 (lowered automatically to a safe rate when extra features are on)"
+      }
+    },
+    "logistic.features": {
+      "algorithm": "logistic-regression",
+      "summary": "Adds polynomial features with their own weights (starting at 0) and trains, so the boundary curves; on the floor the p = threshold contour is drawn as glowing segments (labelled 'circle r = …' when it is a circle), on a row one cut wall per crossing",
+      "args": {
+        "extra": "list of 'x2' | 'z2' | 'xz' | 'r2' (x² + z²) | 'x3' | 'z3' (also accepts 'x²', 'x^2', 'x*z', 'x·z'); [] goes back to the straight boundary. Default []",
+        "steps": "integer 0–50000, default 2000; gradient steps after adding the features",
+        "lr": "number, default 0.5, capped at a safe rate 1/(¼·mean‖φ‖²) because x² and the like are large"
+      }
+    },
+    "foundations.step": {
+      "algorithm": "foundations",
+      "summary": "One (or more) real gradient steps on the line rule f = w1·x + w2·z + b under the chosen loss of y·f; the working (gradient terms, w ← w − η·∂L/∂w, loss and mistakes before → after) goes on the bench and the line slides. With 'zeroone' the gradient is 0, nothing moves, and the bench and a floor label say why",
+      "args": {
+        "lr": "number, default 0.5 (η)",
+        "loss": "'hinge' | 'logloss' | 'zeroone', default 'hinge'",
+        "steps": "integer 1–200, default 1; more than 1 adds a loss-per-step chart"
+      }
+    },
+    "bayes.logPosterior": {
+      "algorithm": "naive-bayes",
+      "summary": "The posterior at a point in log space: per class ln P(c) + ln p(x|c) + ln p(z|c) as worked steps, the largest score m, Σ e^(s − m), log-sum-exp and P(c|x) = e^(s − lse); log-score labels by the star, posterior bars that never underflow to 50/50, and a bench chart of e^(s − m)",
+      "args": {
+        "at": "[x, z], default the current star (or [0, 0]); moves or places the query star"
+      }
+    },
+    "bayes.calibrate": {
+      "algorithm": "naive-bayes",
+      "summary": "Temperature scaling P(c|x) ∝ e^(ln joint / T): a reliability table (6 confidence bins: count, mean p and share right, before and after) with log-loss, claims ≥ 0.99, boldest miss and 'calls unchanged' lines underneath; the model's prob, log-loss, posterior bars and explanation use T from then on",
+      "args": {
+        "T": "number > 0 (clamped 0.05–50); omitted or 'fit' fits the T that minimises log-loss on the labelled points"
+      }
+    },
+    "code.show": {
+      "algorithm": "algorithms",
+      "summary": "Stand Python code on the board at the back of the floor and run it under the tracer, standing before its first line. Every variable in scope then stands in front of the board as its data structure (an array of cells, a string's characters, a stack, a queue, hash buckets, linked-list nodes, a tree, a trie, a graph, a grid, a heap, a union-find forest, a record, or a box for a number), index variables (i, j, lo, hi, mid, left, right, slow, fast, …) as flags over the cells they point at, and the open calls as a tower of plates beside the board. Adds the bench's controls (Reset, Back, Step, Run, Edit code, Speed) and its Inputs, Call stack and Output panels. The camera frames the board and the scene. Returns the station's state: {step, steps, line, event, done, depth, func, vars, ret, output, error, errorLine}.",
+      "args": {
+        "source": "the Python program (a string, lines joined with \\n). Standard library only; inputs are its starting globals",
+        "inputs": "{name: value}: the program's starting variables, as JSON (lists, dicts with string keys, numbers, strings, true/false/null). The player can change them on the bench",
+        "literals": "{name: 'python literal'}: inputs written as Python (tuples, sets, dicts with int keys: '{1: [2, 3]}')",
+        "hide": "list of line numbers drawn as blank bars until code.reveal",
+        "reveal": "a number n: only lines 1..n shown, the rest blank",
+        "views": "{name: kind}: how to draw a variable when its shape or name does not say: array, chars (a string as cells), stack, queue, heap (a list drawn as array and tree), forest (a parent list), hash, graph, hide. Names inside objects are 'obj.attr' (q.inbox, self.stack)",
+        "pointers": "{arrayName: [int variable names]}: which ints flag which array (default: the usual index names over the one array in scope)",
+        "controls": "bool, default true: the bench's controls and panels",
+        "frame": "bool, default true: frame the camera on the board"
+      }
+    },
+    "code.reveal": {
+      "algorithm": "algorithms",
+      "summary": "Show code lines that were drawn blank; the board's frame follows. Returns {hidden, ...state}.",
+      "args": {
+        "lines": "list of line numbers",
+        "upTo": "every hidden line up to n",
+        "all": "bool: every line"
+      }
+    },
+    "code.hide": {
+      "algorithm": "algorithms",
+      "summary": "Draw lines blank again (a 'what goes here?' before a choice).",
+      "args": {
+        "lines": "list of line numbers"
+      }
+    },
+    "code.edit": {
+      "algorithm": "algorithms",
+      "summary": "Change the code and run it again from the start: the whole source, or one line replaced, inserted or removed. Blank lines below an insert or removal keep their place. Returns the new state (error and errorLine say if it no longer runs).",
+      "args": {
+        "source": "the whole new program",
+        "line": "a line number",
+        "text": "the line's new text (with its indent)",
+        "insert": "bool: insert text as a new line at `line`",
+        "remove": "bool: delete line `line`"
+      }
+    },
+    "code.inputs": {
+      "algorithm": "algorithms",
+      "summary": "New input values; the program runs again from the start. What the player's Inputs panel and stage edits send.",
+      "args": {
+        "values": "{name: JSON value}",
+        "literals": "{name: 'python literal'}"
+      }
+    },
+    "code.view": {
+      "algorithm": "algorithms",
+      "summary": "Change how variables are drawn (as code.show's views and pointers) at the current step.",
+      "args": {
+        "views": "{name: kind}",
+        "pointers": "{arrayName: [names]}"
+      }
+    },
+    "code.step": {
+      "algorithm": "algorithms",
+      "summary": "Run the lit line: n steps forward, each animated (values move between cells, pointers slide, new structures pop in). The player's ▶ Step. Relative to where the player is: after a wait, prefer code.runTo or code.goto.",
+      "args": {
+        "n": "steps, default 1"
+      }
+    },
+    "code.back": {
+      "algorithm": "algorithms",
+      "summary": "n steps back. The player's ◀ Back.",
+      "args": {
+        "n": "steps, default 1"
+      }
+    },
+    "code.reset": {
+      "algorithm": "algorithms",
+      "summary": "Back to the first step. The player's ⏮ Reset.",
+      "args": {}
+    },
+    "code.goto": {
+      "algorithm": "algorithms",
+      "summary": "Jump to step `step` of the run (0-based): up to 12 steps ahead are animated one by one, more in one move.",
+      "args": {
+        "step": "0-based step"
+      }
+    },
+    "code.runTo": {
+      "algorithm": "algorithms",
+      "summary": "Run until line `line` is about to run for the `hit`-th time, counted from the start of the program (so wherever the player had stepped, the beat lands on the same step), or to a return, an exception or the end. Returns the state plus found (false: no such step; nothing moved).",
+      "args": {
+        "line": "a line number",
+        "hit": "which time it runs, default 1",
+        "event": "'return' | 'exception' | 'end' (with line: that line's)"
+      }
+    },
+    "code.run": {
+      "algorithm": "algorithms",
+      "summary": "Run to the end (or `to` a step), animating every step at the bench's speed; from the end it starts over. The player's ⏩ Run; `toggle` pauses a run in progress instead.",
+      "args": {
+        "to": "0-based step, default the end",
+        "toggle": "bool: pause when running"
+      }
+    },
+    "code.pause": {
+      "algorithm": "algorithms",
+      "summary": "Stop a run where it is.",
+      "args": {}
+    },
+    "code.speed": {
+      "algorithm": "algorithms",
+      "summary": "Speed of stepping and running (the bench's Speed): 0.5, 1, 2 or 4.",
+      "args": {
+        "speed": "0.5 | 1 | 2 | 4"
+      }
+    },
+    "code.mark": {
+      "algorithm": "algorithms",
+      "summary": "Tint code lines (the loop, a base case) on the board; no lines clears.",
+      "args": {
+        "lines": "list of line numbers",
+        "color": "palette name or #hex, default highlight",
+        "marks": "{line: colour}: several colours"
+      }
+    },
+    "code.editor": {
+      "algorithm": "algorithms",
+      "summary": "Start (or end) the player typing into the code on the board (the bench's ✏️ Edit code). When typing ends the code runs again (code.edit).",
+      "args": {
+        "at": "{line, col}: where the caret starts"
+      }
+    }
+  }
+}
