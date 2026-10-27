@@ -64,8 +64,42 @@ def spent(reading: dict[str, Any]) -> float | None:
     return None
 
 
-def closest_limit(snapshot: dict[str, Any], now: float | None = None) -> tuple[str | None, float]:
+#: The windows that belong to one model, by the CLI's names for them (its
+#: labels: `seven_day_opus` "Opus limit", `seven_day_sonnet` "Sonnet limit",
+#: `seven_day_overage_included` "Fable limit"). The rest (`five_hour`, the
+#: session, and `seven_day`, the weekly one) are the limits on all models.
+MODEL_WINDOWS = {
+    "fable": "seven_day_overage_included",
+    "opus": "seven_day_opus",
+    "sonnet": "seven_day_sonnet",
+}
+
+
+def counts_for(window: str, model: str | None) -> bool:
+    """Whether a window can stop work running on `model`.
+
+    Fable has a limit of its own: while it is the model, only that one
+    decides, and the all-models limits (often nearly spent by other work) do
+    not hold it. Any other model goes by the all-models limits and its own
+    window, never another model's. With no model known, every window counts.
+    """
+    if not model:
+        return True
+    family = next((f for f in MODEL_WINDOWS if f in model.lower()), None)
+    if family == "fable":
+        return window == MODEL_WINDOWS["fable"]
+    if window in MODEL_WINDOWS.values():
+        return family is not None and window == MODEL_WINDOWS[family]
+    return True
+
+
+def closest_limit(
+    snapshot: dict[str, Any], now: float | None = None, model: str | None = None
+) -> tuple[str | None, float]:
     """The window nearest its limit, and how much of it is gone.
+
+    Only windows that `model` draws on count (`counts_for`); with no model,
+    all of them do.
 
     A reading is only about the window it was taken in: once `resetsAt` has
     passed that window has rolled over and its utilization says nothing about
@@ -74,7 +108,7 @@ def closest_limit(snapshot: dict[str, Any], now: float | None = None) -> tuple[s
     moment = time.time() if now is None else now
     nearest, worst = None, 0.0
     for window, reading in snapshot.items():
-        if not isinstance(reading, dict):
+        if not isinstance(reading, dict) or not counts_for(window, model):
             continue
         resets_at = reading.get("resetsAt")
         if isinstance(resets_at, (int, float)) and moment >= resets_at:
@@ -97,9 +131,13 @@ class UsageWatcher:
         bus: EventBus,
         on_change: Any = None,
         pending: Any = None,
+        model: Any = None,
     ) -> None:
         self.settings = settings
         self.bus = bus
+        #: Returns the default model work runs on, whose limits decide (see
+        #: `counts_for`). None: every window counts.
+        self.model = model
         #: Returns (running, waiting), so a probe is only paid for when the
         #: answer could change what happens next.
         self.pending = pending
@@ -219,7 +257,8 @@ class UsageWatcher:
         if await self._should_probe(snapshot):
             if await self.probe() is not None:
                 snapshot = await self.settings.limit_snapshot()
-        window, used = closest_limit(snapshot)
+        model = await self.model() if self.model is not None else None
+        window, used = closest_limit(snapshot, model=model)
         wanted = used >= PAUSE_AT
 
         override = await self.settings.get(SettingsStore.LIMIT_OVERRIDE)

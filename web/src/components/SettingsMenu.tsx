@@ -3,6 +3,15 @@ import { createPortal } from 'react-dom'
 import { can, getSettings, logout, putSettings, setLimitPaused, setPaused, type Me } from '../api'
 import type { SettingsResponse } from '../types'
 
+/** Claude's limit windows, named as the CLI names them. */
+const WINDOW_NAMES: Record<string, string> = {
+  five_hour: 'session',
+  seven_day: 'weekly',
+  seven_day_opus: 'Opus',
+  seven_day_sonnet: 'Sonnet',
+  seven_day_overage_included: 'Fable',
+}
+
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`)
 
 /** Token counts run to millions; the exact digit has never mattered here. */
@@ -75,7 +84,10 @@ export function SettingsMenu({
     paused: false, utilization: null, measured: false, status: null,
     window: null, resetsAt: null, pauseAt: 0.95, overridden: false, probe: null,
   }
-  const windowName = limit.window?.replace(/_/g, ' ') ?? 'the limit'
+  // The CLI's own names for its windows; anything new shows as it is spelled.
+  const limitName = limit.window
+    ? `the ${WINDOW_NAMES[limit.window] ?? limit.window.replace(/_/g, ' ')} limit`
+    : 'the limit'
   // Not every plan reports a percentage. Showing an inferred one as though it
   // were measured would be a made-up number; the status is what is actually
   // known, so that is what it says.
@@ -83,14 +95,14 @@ export function SettingsMenu({
     limit.utilization === null
       ? 'Not known yet — dex learns this while a task is running'
       : limit.measured
-        ? `${Math.round(limit.utilization * 100)}% of ${windowName} used, holding at ${Math.round(
+        ? `${Math.round(limit.utilization * 100)}% of ${limitName} used, holding at ${Math.round(
             limit.pauseAt * 100,
           )}%`
         : limit.status === 'rejected'
-          ? `${windowName} is spent`
+          ? `${limitName[0].toUpperCase()}${limitName.slice(1)} is spent`
           : limit.status === 'allowed_warning'
-            ? `Claude says you are approaching the ${windowName} limit`
-            : `Within the ${windowName} limit · no percentage reported on this plan`
+            ? `Claude says you are approaching ${limitName}`
+            : `Within ${limitName} · no percentage reported on this plan`
   const projectModelKey = data ? `model:${data.project}` : ''
 
   const menu = (

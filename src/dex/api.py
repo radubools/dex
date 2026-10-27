@@ -247,10 +247,13 @@ def _manifest_title(manifest: Path) -> str | None:
     return None
 
 
-async def _limit_status(settings: SettingsStore) -> dict[str, Any]:
-    """What the UI shows about Claude usage: how close, and who decided."""
+async def _limit_status(settings: SettingsStore, model: str | None = None) -> dict[str, Any]:
+    """What the UI shows about Claude usage: how close, and who decided.
+
+    About the limits `model` (the default one) draws on: see `counts_for`.
+    """
     snapshot = await settings.limit_snapshot()
-    window, used = closest_limit(snapshot)
+    window, used = closest_limit(snapshot, model=model)
     override = await settings.get(SettingsStore.LIMIT_OVERRIDE)
     reading = (snapshot.get(window or "") or {}) if window else {}
     return {
@@ -266,6 +269,7 @@ async def _limit_status(settings: SettingsStore) -> dict[str, Any]:
         "window": window,
         "resetsAt": reading.get("resetsAt"),
         "pauseAt": PAUSE_AT,
+        "model": model,
         "overridden": isinstance(override, dict),
         # What dex has spent finding this out, so polling is never invisible.
         "probe": await settings.get(SettingsStore.LIMIT_PROBE),
@@ -315,8 +319,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         )
         return len(tasks.live), int(waiting or 0)
 
+    # The default model's limits decide: Fable has its own (see `counts_for`).
+    async def _default_model() -> str:
+        return await SettingsStore(db).model_for(None, config.model)
+
     usage = UsageWatcher(
-        SettingsStore(db), bus, on_change=tasks.rebalance, pending=_pending_work
+        SettingsStore(db), bus, on_change=tasks.rebalance, pending=_pending_work,
+        model=_default_model,
     )
 
     @asynccontextmanager
@@ -748,7 +757,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             # Everything the chat ceiling holds: planner calls in flight and the
             # design or survey turns running as tasks.
             "planning": tasks.chat_active,
-            "limit": await _limit_status(settings),
+            "limit": await _limit_status(settings, await settings.model_for(None, config.model)),
         }
 
     @app.put("/api/settings", dependencies=can_manage_projects)
@@ -777,7 +786,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             # five minutes and would otherwise undo the operator's decision on
             # its next pass. It lasts as long as the limit window it was made
             # in, so one click cannot disable the guard permanently.
-            window, _ = closest_limit(await settings.limit_snapshot())
+            window, _ = closest_limit(
+                await settings.limit_snapshot(), model=await settings.model_for(None, config.model)
+            )
             snapshot = await settings.limit_snapshot()
             resets_at = (snapshot.get(window or "") or {}).get("resetsAt")
             await settings.set(
@@ -794,6 +805,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 await tasks.set_concurrency(key, value)
         if body.model is not None:
             await settings.set(SettingsStore.MODEL, body.model)
+            # Another model draws on other limits (Fable has its own): decide
+            # the pause again now rather than at the watcher's next pass.
+            await usage.check()
         if body.animation_speed is not None:
             await settings.set(SettingsStore.ANIMATION_SPEED, body.animation_speed)
         for project, model in (body.project_models or {}).items():
@@ -803,7 +817,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         bus.publish(Event(type="settings", data={"settings": current}))
         return {
             "settings": current,
-            "limit": await _limit_status(settings),
+            "limit": await _limit_status(settings, await settings.model_for(None, config.model)),
             "costs": await CostStore(db).totals(),
             # How many parked approvals the change immediately let through.
             "released": released,

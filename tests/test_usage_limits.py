@@ -243,3 +243,55 @@ async def test_without_a_way_to_ask_no_probe_is_attempted(db):
 
     watcher = UsageWatcher(SettingsStore(db), EventBus(db))
     assert await watcher._should_probe({}) is False
+
+
+def test_fable_goes_by_its_own_limit_alone():
+    # The CLI's names: seven_day is the weekly limit on all models,
+    # seven_day_overage_included the Fable limit.
+    snapshot = {
+        "five_hour": reading(0.38),
+        "seven_day": reading(0.97),
+        "seven_day_overage_included": reading(0.09),
+    }
+    assert closest_limit(snapshot, model="claude-fable-5-1") == ("seven_day_overage_included", 0.09)
+    spent_fable = {**snapshot, "seven_day_overage_included": reading(0.96)}
+    assert closest_limit(spent_fable, model="claude-fable-5-1") == ("seven_day_overage_included", 0.96)
+
+
+def test_other_models_go_by_the_all_models_limits_and_their_own():
+    snapshot = {
+        "five_hour": reading(0.38),
+        "seven_day": reading(0.5),
+        "seven_day_overage_included": reading(0.99),
+        "seven_day_sonnet": reading(0.98),
+        "seven_day_opus": reading(0.6),
+    }
+    # Neither Fable's limit nor Sonnet's holds Opus work.
+    assert closest_limit(snapshot, model="claude-opus-5-5") == ("seven_day_opus", 0.6)
+    assert closest_limit(snapshot, model="claude-sonnet-5-5") == ("seven_day_sonnet", 0.98)
+    # A model with no window of its own: the all-models limits only.
+    assert closest_limit(snapshot, model="claude-haiku-5-5") == ("seven_day", 0.5)
+    # No model known: every window counts, as before.
+    assert closest_limit(snapshot) == ("seven_day_overage_included", 0.99)
+
+
+async def test_the_watcher_follows_the_default_model(db):
+    bus = EventBus(db)
+    await bus.start()
+    settings = SettingsStore(db)
+    try:
+        model = {"now": "claude-fable-5-1"}
+
+        async def current() -> str:
+            return model["now"]
+
+        w = UsageWatcher(settings, bus, model=current)
+        await settings.set(SettingsStore.LIMIT_SNAPSHOT, {
+            "seven_day": reading(0.97, status="allowed_warning"),
+            "seven_day_overage_included": reading(0.09),
+        })
+        assert await w.check() is False  # Fable has limit left
+        model["now"] = "claude-opus-5-5"
+        assert await w.check() is True  # the weekly all-models limit is nearly spent
+    finally:
+        await bus.stop()
