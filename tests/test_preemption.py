@@ -161,10 +161,15 @@ async def test_a_paused_task_is_not_reported_as_finished(manager):
     await asyncio.sleep(0.4)
 
     stored = await manager.tasks.get(task.id)
-    assert stored.state is TaskState.PAUSED
-    # Nobody needs to do anything about a pause.
+    # A pause is not a finish: never terminal. A free worker may already have
+    # taken the paused task straight back up — the claim's paused clause is
+    # what makes a prioritized pause win a slot — so what has to hold is
+    # "not finished", whichever state it sits in. (The row keeps the time the
+    # run stopped; putting it back clears it.)
     assert not stored.state.terminal
-    assert stored.state.waiting
+    if stored.state is not TaskState.RUNNING:
+        assert stored.state is TaskState.PAUSED
+        assert stored.state.waiting
     BlockingRunner.release["a"].set()
 
 
