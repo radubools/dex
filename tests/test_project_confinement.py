@@ -212,7 +212,7 @@ def test_the_planner_is_shown_packages_not_task_names(client, config):
 
     captured: dict[str, list[str]] = {}
 
-    async def capture(message, cfg, existing, model=None, project=None, guide="", survey=""):
+    async def capture(message, cfg, existing, model=None, project=None, guide="", survey="", project_files=None):
         captured["existing"] = list(existing)
         return Plan(tasks=[])
 

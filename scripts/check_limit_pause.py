@@ -66,7 +66,9 @@ async def main() -> None:
     assert "limit" in (state.get("activity") or ""), "the pause should say why"
     assert not state.get("error")
 
-    held = call("/api/settings")["settings"]["limit_paused"]
+    # The hold is set by the pause's own hook, a moment behind the state
+    # event; polled rather than assumed.
+    held = await wait_for(lambda: call("/api/settings")["settings"]["limit_paused"] is True)
     print("limit_paused:", held)
     assert held is True, "the fleet should be held after a refusal"
     print("OK: refused call paused the task and held the fleet")

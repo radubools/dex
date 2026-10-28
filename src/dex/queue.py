@@ -980,6 +980,12 @@ class TaskManager:
         # enforced where work is claimed, so the surplus drains on its own, and
         # parking it would cancel a survey mid-run in the window where its own
         # planning call holds the slot.
+        #
+        # The pause flag is read fresh here. It is cached elsewhere for a
+        # second, and a rebalance that runs the instant a usage hold is set —
+        # this very call, from the watcher — would otherwise still see the old
+        # answer and resume work that was paused a moment ago.
+        self._paused_cache = None
         held = self.starting_up or await self._is_paused()
         for interactive in (False, True):
             capacity = await self._pool_capacity(interactive)
@@ -990,8 +996,13 @@ class TaskManager:
 
             if len(running) > capacity and (held or not interactive):
                 # Newest first: the least work is lost, and it is the most likely
-                # to still be cheap to redo.
-                surplus = sorted(running, key=lambda t: t.started_at or 0, reverse=True)
+                # to still be cheap to redo. A run that already stopped itself —
+                # a limit pause, say, still unwinding — has nothing to give up:
+                # cancelling it again would only overwrite why it stopped.
+                surplus = sorted(
+                    (t for t in running if t.state in (TaskState.RUNNING, TaskState.AWAITING_INPUT)),
+                    key=lambda t: t.started_at or 0, reverse=True,
+                )
                 for task in surplus[: len(running) - capacity]:
                     await self.pause(task.id)
                 continue
