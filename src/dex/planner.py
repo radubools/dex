@@ -87,6 +87,7 @@ async def plan_from_message(
     project: str | None = None,
     guide: str = "",
     survey: str = "",
+    project_files: list[tuple[str, int]] | None = None,
 ) -> Plan:
     """Ask a short agent run to split the message into independent tasks.
 
@@ -110,7 +111,9 @@ async def plan_from_message(
     )
 
     chunks: list[str] = []
-    prompt = planner_prompt(message, existing, project, guide, survey)
+    prompt = planner_prompt(
+        message, existing, project, guide, survey, project_files=project_files
+    )
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, AssistantMessage):
             chunks.extend(b.text for b in msg.content if isinstance(b, TextBlock))

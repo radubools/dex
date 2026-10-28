@@ -47,6 +47,7 @@ from .prompts import (
     DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM,
     design_prompt, generation_prompt, survey_prompt,
 )
+from .usage import is_usage_limit_error, limit_pause_note
 
 #: Largest single message the agent SDK will read from the CLI (default 1 MB).
 AGENT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
@@ -199,6 +200,10 @@ class TaskRunner:
         self.bus = bus
         self.store = store
         self.settings = settings
+        #: Set by the queue after construction: re-decide the usage hold now,
+        #: so the rest of the fleet stops being dispatched the moment the CLI
+        #: rejects work. None on a runner built directly (a test, say).
+        self.on_limit_reading: Any = None
         self.task_dir = task.output_dir(config.assets_dir, config.default_project)
         #: Set by wait_for_tasks: the ids this run ends blocked on (deps.py).
         self._park_on: list[str] | None = None
@@ -313,6 +318,32 @@ class TaskRunner:
             return None
         return options[0]
 
+    async def _reused_answer(self, question: str, options: list[str]) -> str | None:
+        """The answer this same question already got, if one applies now.
+
+        Per project and within the last half day; the store holds the details.
+        """
+        try:
+            return await self.settings.prior_answer(
+                question, options, project=self.task.project
+            )
+        except Exception:
+            # A reading from the reuse cache must never cost the run: the
+            # question stays askable on any failure.
+            log.exception("could not read the recorded answers")
+            return None
+
+    async def _remember_answer(
+        self, question: str, options: list[str], answer: str
+    ) -> None:
+        """Keep an operator's answer for the next task that asks the same."""
+        try:
+            await self.settings.remember_answer(
+                question, options, answer, project=self.task.project
+            )
+        except Exception:
+            log.exception("could not record the answer for reuse")
+
     def _ask_user_server(self) -> Any:
         import uuid
 
@@ -326,11 +357,12 @@ class TaskRunner:
         )
         async def ask_user(args: dict[str, Any]) -> dict[str, Any]:
             question_id = uuid.uuid4().hex[:12]
+            question = str(args.get("question", ""))
             options = [str(o) for o in (args.get("options") or [])]
             self.emit(
                 "question",
                 id=question_id,
-                question=str(args.get("question", "")),
+                question=question,
                 options=options,
             )
             # A utility question has one answer while sharing is on, and the
@@ -338,11 +370,26 @@ class TaskRunner:
             # decision is recorded where they can see it, but answered here
             # rather than parking the task on a doorbell nobody needs to hear.
             auto = await self._auto_answer(str(args.get("kind", "")), options)
+            # The same question, answered in this project in the last half
+            # day: answered from what was said then, so a batch whose briefs
+            # all hit the same snag does not park thirty-one times for one
+            # decision the operator has already made.
+            if auto is None:
+                reused = await self._reused_answer(question, options)
+                if reused is not None:
+                    self.emit(
+                        "question_answered",
+                        id=question_id, answer=reused, auto=True, reuse=True,
+                    )
+                    return {"content": [{"type": "text", "text": reused}]}
             if auto is not None:
                 self.emit("question_answered", id=question_id, answer=auto, auto=True)
                 return {"content": [{"type": "text", "text": auto}]}
             answer = await self._park(question_id, "waiting on a clarifying question")
             self.emit("question_answered", id=question_id, answer=answer)
+            asyncio.create_task(
+                self._remember_answer(question, options, str(answer))
+            )
             return {"content": [{"type": "text", "text": str(answer)}]}
 
         @tool(
@@ -902,7 +949,7 @@ class TaskRunner:
                 # Still nothing: that session cannot go on. Start a fresh one on
                 # the same package, told that earlier work is already there.
                 if (resume_session and self.task.turns == 0 and not self.task.is_chat
-                        and self.task.state is not TaskState.FAILED):
+                        and self.task.state not in (TaskState.FAILED, TaskState.PAUSED)):
                     self.emit("text", text="The resumed session still did not run; starting a fresh session on the same package.")
                     import dataclasses
                     async with ClaudeSDKClient(options=dataclasses.replace(options, resume=None)) as client:
@@ -924,11 +971,21 @@ class TaskRunner:
         except TimeoutError:
             self._fail(f"timed out after {self.config.task_timeout_s:.0f}s")
         except Exception as exc:  # surfaced to the operator, never swallowed
-            self._fail(f"{type(exc).__name__}: {exc}")
+            text = f"{type(exc).__name__}: {exc}"
+            # A refusal from the CLI's raw path arrives raised rather than
+            # yielded; same spent limit, same pause.
+            if is_usage_limit_error(text):
+                self._pause_for_limit(text)
+            else:
+                self._fail(text)
         else:
-            self.task.finished_at = time.time()
-            self.task.activity = None
-            if self.task.state is TaskState.FAILED:
+            # Failed or paused mid-run (a limit the CLI refused to spend
+            # against): the run said so already and its state is what shows.
+            # Neither ends the task, so neither gets a finished time.
+            if self.task.state not in (TaskState.FAILED, TaskState.PAUSED):
+                self.task.finished_at = time.time()
+                self.task.activity = None
+            if self.task.state in (TaskState.FAILED, TaskState.PAUSED):
                 pass
             # Work it started or continued is not done yet (or it asked to wait):
             # blocked, holding nothing, until dex wakes it to review and finish
@@ -1002,6 +1059,15 @@ class TaskRunner:
             await self.settings.record_limit(info)
         except Exception:
             log.exception("could not record the rate limit reading")
+            return
+        # A rejection is the CLI saying it refused this call. The watcher
+        # decides what to hold every five minutes; a rejection can strand a
+        # whole queue in those five, so it is asked to re-decide now.
+        if str(info.get("status")) == "rejected" and self.on_limit_reading is not None:
+            try:
+                await self.on_limit_reading()
+            except Exception:
+                log.exception("could not re-decide the usage hold")
 
     async def _store_cost(self, cost: float, *, estimate: bool) -> None:
         try:
@@ -1373,6 +1439,59 @@ class TaskRunner:
             for relative, written in self._artifacts().items()
         )
 
+    def _pause_for_limit(self, result: str) -> None:
+        """The CLI refused work because a Claude limit is spent.
+
+        Failing here throws away a task somebody is waiting on, and the queue
+        dispatches the next one into the same refusal — one failure per task,
+        and a batch of them fails itself to death inside a minute (fifty-five
+        tasks in seventy seconds on 27 Oct). So this is the shape of the other
+        limit paths instead: the run stops in place, keeps its agent session
+        on the row, and dex holds the fleet until the window the CLI named has
+        rolled over, whereupon rebalance puts the paused work back.
+        """
+        self.task.activity = limit_pause_note(result)
+        # Not failed, so no terminal fields: the task has not ended, it has
+        # stopped where the window caught it.
+        self.task.finished_at = None
+        self.set_state(TaskState.PAUSED)
+        asyncio.create_task(self._store_limit_pause())
+
+    async def _store_limit_pause(self) -> None:
+        """Persist the pause, with the session to resume, and hold the fleet."""
+        try:
+            await self.store.set_state(
+                self.task.id,
+                TaskState.PAUSED,
+                resumed_from=self.task.session_id,
+                activity=self.task.activity,
+                finished_at=None,
+            )
+        except Exception:
+            log.exception("could not persist the usage pause for %s", self.task.id)
+        # A rejected call does not always carry a reading: some refusals come
+        # back as the error text alone. The watcher needs one to hold on, or
+        # the fleet keeps dispatching into the same refusal; a conservative
+        # shared-weekly reading is corrected by the next probe (or the next
+        # run's own RateLimitEvent) a few minutes later.
+        try:
+            snapshot = await self.settings.limit_snapshot()
+            fresh = [
+                w for w, r in snapshot.items()
+                if isinstance(r, dict) and r.get("status") == "rejected"
+                and time.time() - r.get("seenAt", 0) < 60
+            ]
+            if not fresh:
+                await self.settings.record_limit(
+                    {"rateLimitType": "seven_day", "status": "rejected"})
+        except Exception:
+            log.exception("could not record a synthetic reading for %s", self.task.id)
+        if self.on_limit_reading is not None:
+            try:
+                await self.on_limit_reading()
+            except Exception:
+                log.exception("could not re-decide the usage hold")
+
     def _fail(self, message: str) -> None:
         if self.task.archived:
             # Archived out from under the run. The SDK reports the vanished
@@ -1546,7 +1665,11 @@ class TaskRunner:
                 summary=(message.result or "")[:4000],
             )
             if message.is_error:
-                self._fail(message.result or "agent reported an error")
+                result = message.result or "agent reported an error"
+                if is_usage_limit_error(result):
+                    self._pause_for_limit(result)
+                else:
+                    self._fail(result)
 
 
 def _flatten(content: Any) -> str:

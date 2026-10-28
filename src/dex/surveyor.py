@@ -198,10 +198,30 @@ def survey_server(project_dir: Path, attached: list[str] | None = None) -> Any:
             # modification times.
             names = [n for n in attached or [] if n in set(names)]
         if not names:
-            return _text(
+            lines = [
                 "No files were attached to this request. If the operator gave "
                 "a link, outline_url is your only source."
-            )
+            ]
+            # The operator's own material at large is not this request's to
+            # read, but an agent cannot reason about an operator saying "the
+            # files I uploaded" without knowing what actually exists. Named,
+            # read-only still: the bottom line of every other tool applies.
+            others = src.sources_in(project_dir)
+            if others:
+                lines.append("")
+                lines.append(
+                    "These files are in the project's data directory, from "
+                    "earlier requests — none of them is attached to this one, "
+                    "and no tool here reads them:"
+                )
+                lines.extend(f"- {name} ({(project_dir / name).stat().st_size:,} bytes)"
+                             for name in others)
+                lines.append(
+                    "If the operator speaks of files they uploaded, these are "
+                    "the ones that exist. Do not treat one as this request's "
+                    "source unless asked."
+                )
+            return _text("\n".join(lines))
         rows = []
         for name in names:
             size = (project_dir / name).stat().st_size

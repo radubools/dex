@@ -168,7 +168,7 @@ def test_a_planner_question_becomes_a_pre_planning_task(client, monkeypatch):  #
     """
     from dex.planner import Plan
 
-    async def asks(message, cfg, existing, model=None, project=None, guide="", survey=""):
+    async def asks(message, cfg, existing, model=None, project=None, guide="", survey="", project_files=None):
         return Plan(needs_clarification="Which target language?",
                     options=["Romanian", "English"])
 
@@ -204,7 +204,7 @@ def test_the_question_is_not_posted_to_the_chat(client, monkeypatch):  # noqa: F
     """Only the plan comes back to the chat; the asking happens in the task."""
     from dex.planner import Plan
 
-    async def asks(message, cfg, existing, model=None, project=None, guide="", survey=""):
+    async def asks(message, cfg, existing, model=None, project=None, guide="", survey="", project_files=None):
         return Plan(needs_clarification="Which target language?")
 
     monkeypatch.setattr("dex.api.plan_from_message", asks)

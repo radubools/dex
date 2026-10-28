@@ -78,16 +78,17 @@ MODEL_WINDOWS = {
 def counts_for(window: str, model: str | None) -> bool:
     """Whether a window can stop work running on `model`.
 
-    Fable has a limit of its own: while it is the model, only that one
-    decides, and the all-models limits (often nearly spent by other work) do
-    not hold it. Any other model goes by the all-models limits and its own
-    window, never another model's. With no model known, every window counts.
+    A window named for one model holds only that model: full Opus time does
+    not stop Fable work, which Fable never draws on. Every other window —
+    the five-hour, the session, the shared weekly, anything unnamed — holds
+    every model, Fable included: this account rejects a Fable call with
+    "You've hit your weekly limit" once the shared weekly window is spent,
+    however much of Fable's own is left. With no model known, every window
+    counts.
     """
     if not model:
         return True
     family = next((f for f in MODEL_WINDOWS if f in model.lower()), None)
-    if family == "fable":
-        return window == MODEL_WINDOWS["fable"]
     if window in MODEL_WINDOWS.values():
         return family is not None and window == MODEL_WINDOWS[family]
     return True
@@ -120,6 +121,42 @@ def closest_limit(
         if used >= worst:
             nearest, worst = window, float(used)
     return nearest, worst
+
+
+#: What the CLI writes when a rate limit refused a call, rather than the work
+#: failing. "You've hit your weekly limit · resets …" is the one this account
+#: sends; the rest are phrasings the CLI has used across plans.
+LIMIT_MARKERS = (
+    "hit your weekly limit",
+    "hit your 5-hour limit",
+    "hit your weekly overage limit",
+    "hit your session limit",
+    "usage limit reached",
+    "reached your usage limit",
+    "rate limit",
+)
+
+
+def is_usage_limit_error(message: str) -> bool:
+    """Whether an error is Claude refusing work for a spent limit.
+
+    Kept tight: a run that merely *mentions* a limit is not being held by one,
+    and pausing on false positives would strand work that should have failed.
+    """
+    lowered = message.lower()
+    return any(marker in lowered for marker in LIMIT_MARKERS)
+
+
+def limit_pause_note(result: str) -> str:
+    """What a task's activity says while it sits out a spent limit.
+
+    Names the window's own reset so the operator knows the resume is
+    automatic, and keeps the CLI's sentence for the exact window it named.
+    """
+    return (
+        "paused: Claude refuses work until the limit resets — "
+        f"{result} — dex resumes this task when the window clears"
+    )
 
 
 class UsageWatcher:
@@ -229,7 +266,16 @@ class UsageWatcher:
                     cost = message.total_cost_usd
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            if is_usage_limit_error(str(exc)):
+                # The probe itself was refused — which is a reading, not a
+                # failure of the probe: the limit is spent right now. Held on
+                # a reading of dex's own until a call gets through again.
+                log.info("the usage probe was itself refused by the limit")
+                with contextlib.suppress(Exception):
+                    await self.settings.record_limit(
+                        {"rateLimitType": "seven_day", "status": "rejected"})
+                return None
             # A probe is an optimisation. Failing one leaves the last reading
             # in place, which is exactly where dex would have been anyway.
             log.exception("usage probe failed")

@@ -6,7 +6,7 @@ export type FeedItem =
   | { kind: 'thinking'; id: string; text: string; streaming?: boolean }
   | { kind: 'tool'; id: string; name: string; title: string; status: 'running' | 'ok' | 'error'; output?: string }
   | { kind: 'diff'; id: string; path: string; patch: string; additions: number; deletions: number }
-  | { kind: 'question'; id: string; question: string; options: string[]; answer?: string; auto?: boolean }
+  | { kind: 'question'; id: string; question: string; options: string[]; answer?: string; auto?: boolean; reuse?: boolean }
   | { kind: 'approval'; id: string; title: string; tool: string; decision?: string; auto?: boolean }
   | { kind: 'result'; id: string; ok: boolean; turns: number; costUsd: number; summary: string }
   | { kind: 'error'; id: string; message: string }
@@ -240,7 +240,7 @@ function applyEvent(state: State, event: DexEvent): State {
       return next({
         feed: view.feed.map((item) =>
           item.kind === 'question' && item.id === event.id
-            ? { ...item, answer: event.answer, auto: event.auto }
+            ? { ...item, answer: event.answer, auto: event.auto, reuse: event.reuse }
             : item,
         ),
       })

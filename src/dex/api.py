@@ -319,7 +319,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         )
         return len(tasks.live), int(waiting or 0)
 
-    # The default model's limits decide: Fable has its own (see `counts_for`).
+    # The default model's limits decide which windows hold work (see
+    # `counts_for`): those named for one model hold only it, and every other
+    # window holds every model, Fable included.
     async def _default_model() -> str:
         return await SettingsStore(db).model_for(None, config.model)
 
@@ -327,6 +329,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         SettingsStore(db), bus, on_change=tasks.rebalance, pending=_pending_work,
         model=_default_model,
     )
+    # A run the CLI just refused asks for the hold to be re-decided now, not
+    # at the watcher's next pass.
+    tasks.usage_recheck = usage.check
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -1305,6 +1310,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                     return await plan_from_message(
                         body.message, config, existing, model,
                         project=project_slug, guide=projects.read_guide(project_slug),
+                        project_files=_project_files(config, project_slug),
                     )
 
             plan: Plan = await _with_retries("planning", attempt)
@@ -1659,6 +1665,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                         return await plan_from_message(
                             request, config, sorted(taken), model,
                             project=project_slug, guide=guide, survey=survey,
+                            project_files=_project_files(config, project_slug),
                         )
 
                 plan = await _with_retries("planning", attempt)
@@ -2133,3 +2140,23 @@ def _existing_slugs(config: Config, project: str | None = None) -> set[str]:
     if not directory.exists():
         return set()
     return {p.name for p in directory.iterdir() if p.is_dir()}
+
+
+def _project_files(config: Config, project_slug: str) -> list[tuple[str, int]]:
+    """The operator's source files, for the planner: name and size each.
+
+    The planner is tool-less, so this is its only sight of what was ever
+    uploaded to the project. Without it a batch of briefs was written around
+    "a single operator-uploaded PDF print" no upload had ever produced —
+    thirty tasks, each stopping to ask for a file that was not there, while
+    the file that WAS there sat unnoticed beside them.
+    """
+    try:
+        root = config.project_datasets(project_slug)
+        return [
+            (f.name, f.stat().st_size)
+            for f in sorted(root.iterdir())
+            if f.is_file() and not f.name.startswith(".")
+        ]
+    except OSError:
+        return []

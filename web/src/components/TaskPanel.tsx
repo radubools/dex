@@ -464,16 +464,25 @@ function QuestionRow({
 }) {
   const [draft, setDraft] = useState('')
   if (item.answer !== undefined) {
+    const fromEarlier = item.auto && item.reuse
+    const why = fromEarlier
+      ? 'Answered from your choice on this same question earlier'
+      : item.auto
+        ? 'Utility sharing is on, so dex said: '
+        : 'You said: '
     return (
       <div className="feed-card question answered">
         {/* Said by whom matters: an automatic answer is dex acting on a
-            standing setting, not a decision the operator made just now. */}
-        <div className="card-kind">{item.auto ? 'Asked — answered automatically' : 'Asked'}</div>
+            standing setting or a choice the operator made recently, not a
+            decision the operator made just now. */}
+        <div className="card-kind">
+          {fromEarlier ? 'Asked — answered from your earlier answer' : item.auto ? 'Asked — answered automatically' : 'Asked'}
+        </div>
         <div className="card-title">
           <Prose text={item.question} />
         </div>
         <div className="muted small">
-          {item.auto ? 'Utility sharing is on, so dex said: ' : 'You said: '}
+          {why}
           <Prose text={item.answer} inline />
         </div>
       </div>

@@ -6,8 +6,10 @@ are views over these rows, never the source of truth.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import uuid
 import socket  # noqa: F401  (hostname is supplied by the caller)
 import time
@@ -894,6 +896,14 @@ class SettingsStore:
     #: an operator who never touches it keeps whatever the deployment set.
     EFFORT = "effort"
     ANIMATION_SPEED = "animation_speed"
+    #: The latest answer to each task question the operator has answered, per
+    #: project. A sibling task that asks the same thing within the window is
+    #: answered from it instead of parking again.
+    ASK_ANSWERS = "ask_answers"
+
+    #: How long a recorded answer may still be used. Half a day: past that
+    #: a choice made yesterday morning is a guess, not a decision.
+    ASK_ANSWER_TTL = 12 * 3600.0
 
     #: Applied when nothing is stored yet.
     DEFAULTS: dict[str, Any] = {
@@ -1034,6 +1044,74 @@ class SettingsStore:
             if chosen:
                 return str(chosen)
         return str(await self.get(self.MODEL) or fallback)
+
+    async def ask_answers(self, project: str | None) -> dict[str, Any]:
+        """This project's recorded answers, still inside the window."""
+        raw = await self.get(self.ASK_ANSWERS, {})
+        if not isinstance(raw, dict):
+            return {}
+        now = time.time()
+        return {
+            key: entry
+            for key, entry in raw.items()
+            if isinstance(entry, dict)
+            and entry.get("project") == project
+            and now - entry.get("at", 0) <= self.ASK_ANSWER_TTL
+        }
+
+    async def remember_answer(
+        self, question: str, options: list[str], answer: str, *, project: str | None
+    ) -> None:
+        """Record the answer to one task question, latest per question.
+
+        Keyed by the question's own text, so a sibling task that asks it again
+        gets the same answer without another park. Old entries are dropped on
+        the way in, which keeps the row to roughly the last window's worth of
+        questions without any sweeping job to schedule.
+        """
+        raw = await self.get(self.ASK_ANSWERS, {})
+        raw = raw if isinstance(raw, dict) else {}
+        now = time.time()
+        raw = {
+            key: entry
+            for key, entry in raw.items()
+            if isinstance(entry, dict)
+            and isinstance(entry.get("at"), (int, float))
+            and now - entry["at"] < self.ASK_ANSWER_TTL
+        }
+        entry = {"question": question, "options": options, "answer": answer,
+                 "at": now, "project": project}
+        if not answer:
+            return
+        raw[_answer_key(question)] = entry
+        await self.set(self.ASK_ANSWERS, raw)
+
+    async def prior_answer(
+        self, question: str, options: list[str], *, project: str | None
+    ) -> str | None:
+        """The answer this question already got, if it was asked here recently.
+
+        The recorded answer must still be one of the options the question now
+        offers — a question asked again with different options is a different
+        question, and answering it from an option nobody offered would be
+        inventing a choice. A question with no options accepts the answer
+        verbatim, because its answer was free text in the first place.
+        """
+        entry = (await self.ask_answers(project)).get(_answer_key(question))
+        if not isinstance(entry, dict):
+            return None
+        answer = entry.get("answer")
+        if not isinstance(answer, str) or not answer:
+            return None
+        if options and answer not in options:
+            return None
+        return answer
+
+
+def _answer_key(question: str) -> str:
+    """One key for one question, however it was wrapped across runs."""
+    collapsed = re.sub(r"\s+", " ", question.strip().lower())
+    return hashlib.sha256(collapsed.encode("utf-8")).hexdigest()[:24]
 
 
 def canonical_tag(raw: str) -> str:

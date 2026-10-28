@@ -656,6 +656,7 @@ def planner_prompt(
     project: str | None = None,
     guide: str = "",
     survey: str = "",
+    project_files: list[tuple[str, int]] | None = None,
 ) -> str:
     known = "\n".join(f"- {slug}" for slug in existing) or "- (none yet)"
     # The guide is the project's own definition of what it produces. Without
@@ -668,10 +669,6 @@ def planner_prompt(
         if project and guide.strip()
         else f"You are planning for the **{project or 'default'}** project.\n\n"
     )
-    # A survey ran first when the message brought sources with it. It is the
-    # only account of what is inside them: the planner has no tools and never
-    # sees the documents themselves, so without this it would be splitting a
-    # filename.
     surveyed = (
         f"\nA survey of the attached material found this. **Plan from it.** Each\n"
         f"segment below is one candidate task, and the anchor on it says where in\n"
@@ -679,7 +676,27 @@ def planner_prompt(
         if survey.strip()
         else ""
     )
-    return briefing + f"""\
+    # The project's data dir (`datasets/<project>/`) holds the operator's
+    # source material. Named here because the planner has no tools and cannot
+    # check a claim: without this it once wrote "the source is a single
+    # operator-uploaded PDF print of page X, placed in inputs/" for thirty
+    # tasks in a row, on the strength of a sibling package whose input the
+    # operator had uploaded weeks before — and each task then stopped and
+    # asked for a file that never existed.
+    files = ""
+    if project_files:
+        listed = "\n".join(f"- {name} ({size:,} bytes)" for name, size in project_files)
+        files = (
+            f"\nThe operator's data directory for this project currently holds:\n"
+            f"{listed}\n\n"
+            "A task brief may claim an operator-uploaded or operator-supplied\n"
+            "input file **only if it is on this list**. If the operator speaks\n"
+            "of uploads that are not here, plan around what actually is — or\n"
+            "set needs_clarification and name the mismatch. Never write a\n"
+            "brief whose instruction is to stop when a file that is not on the\n"
+            "list is missing: that is a task designed to park.\n"
+        )
+    return briefing + files + f"""\
 The operator said:
 
 \"\"\"

@@ -107,6 +107,11 @@ class TaskManager:
         #: "the sources divide like this" to "here are the tasks" belongs to
         #: whoever owns both — which is the API.
         self.surveyed: Callable[[Task, str], Awaitable[None]] | None = None
+        #: Set by the app so a run the CLI has just refused can call for the
+        #: usage hold to be re-decided now rather than at the watcher's next
+        #: pass — the fleet stops being dispatched in a second or two instead
+        #: of failing task after task until the queue drains.
+        self.usage_recheck: Callable[[], Awaitable[bool]] | None = None
         #: Gate for planner/chat calls; its ceiling lives in the database.
         self.chat_limiter = DynamicLimiter(
             lambda: self.settings.concurrency(SettingsStore.CHAT_CONCURRENCY),
@@ -812,6 +817,7 @@ class TaskManager:
             return FakeTaskRunner(task, self.config, self.bus, self.tasks, self.settings)
         runner = TaskRunner(task, self.config, self.bus, self.tasks, self.settings)
         runner.surveyed = self.surveyed
+        runner.on_limit_reading = self.usage_recheck
         runner.graph = self.graph
         return runner
 

@@ -19,7 +19,7 @@ def client(config: Config, dsn: str, monkeypatch):
     monkeypatch.setattr("dex.queue.TaskRunner", __import__(
         "tests.conftest", fromlist=["InstantRunner"]).InstantRunner)
 
-    async def fake_plan(message, cfg, existing, model=None, project=None, guide="", survey=""):
+    async def fake_plan(message, cfg, existing, model=None, project=None, guide="", survey="", project_files=None):
         if "vague" in message:
             return Plan(needs_clarification="Which problem did you mean?")
         return Plan(

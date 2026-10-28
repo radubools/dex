@@ -198,11 +198,17 @@ async def test_only_this_request_s_files_are_listed(tmp_path):
     assert "old-novel.md" not in listed
 
 
-async def test_a_link_only_request_is_told_it_has_no_files(tmp_path):
+async def test_a_link_only_request_is_told_what_else_exists(tmp_path):
     server = _server(tmp_path, {"leftover.md": b"# Old\n"}, attached=[])
     listed = await _call(server, "list_sources")
     assert "No files were attached" in listed
-    assert "leftover.md" not in listed
+    # The rest of the project's data directory is named inside that answer,
+    # clearly not part of the request: a survey who is told "the files I
+    # uploaded" must be able to see what actually exists, or it carries a
+    # fictitious input into the plan it hands the planner (27 Oct, one EPUB
+    # naked and thirty briefs around PDFs that were never uploaded).
+    assert "leftover.md" in listed
+    assert "none of them is attached" in listed
 
 
 async def test_reading_a_file_from_another_request_is_refused(tmp_path):

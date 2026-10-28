@@ -62,6 +62,53 @@ def test_a_status_only_reading_still_names_its_window():
     assert closest_limit({"five_hour": {"status": "allowed"}}) == ("five_hour", 0.0)
 
 
+# ------------------------------------------------------------- whose windows
+
+
+def test_a_window_named_for_one_model_holds_only_it():
+    from dex.usage import counts_for
+
+    # Full Opus time does not stop Fable work: Fable calls draw nothing from
+    # Opus's window.
+    assert counts_for("seven_day_opus", "claude-fable-5-1") is False
+    assert counts_for("seven_day_sonnet", "claude-opus-4-6") is False
+
+
+def test_the_windows_every_model_draws_on_hold_every_model():
+    from dex.usage import counts_for
+
+    # The CLI gates them on all models, Fable included: on this account a
+    # Fable call comes back "You've hit your weekly limit" once the shared
+    # weekly window is spent, however much of Fable's own is left (27 Oct,
+    # fifty-five tasks failed that way).
+    assert counts_for("seven_day", "claude-fable-5-1") is True
+    assert counts_for("five_hour", "claude-fable-5-1") is True
+    assert counts_for("seven_day", "claude-opus-4-6") is True
+    # A window dex has never heard of (a session, a new plan's naming) counts:
+    # refusing an unknown limit would run work into a rejection.
+    assert counts_for("session", "claude-fable-5-1") is True
+
+
+def test_fables_own_window_holds_fable_alone():
+    from dex.usage import counts_for
+
+    assert counts_for("seven_day_overage_included", "claude-fable-5-1") is True
+    assert counts_for("seven_day_overage_included", "claude-opus-4-6") is False
+
+
+def test_the_closest_limit_for_a_fable_run_still_sees_the_shared_weekly():
+    # What the CLI actually enforced on 27 Oct: shared weekly spent, Fable's
+    # own at 17%. The hold has to come from the shared window, or the queue
+    # keeps handing Fable work to be rejected.
+    snapshot = {
+        "five_hour": reading(0.58),
+        "seven_day": reading(1.0, status="rejected"),
+        "seven_day_overage_included": reading(0.17),
+    }
+    window, used = closest_limit(snapshot, model="claude-fable-5-1")
+    assert (window, used) == ("seven_day", 1.0)
+
+
 async def test_work_is_held_at_the_threshold_and_released_below_it(watcher):
     await watcher.settings.record_limit(
         {"rateLimitType": "five_hour", "utilization": PAUSE_AT, "status": "allowed_warning",
@@ -245,7 +292,7 @@ async def test_without_a_way_to_ask_no_probe_is_attempted(db):
     assert await watcher._should_probe({}) is False
 
 
-def test_fable_goes_by_its_own_limit_alone():
+def test_the_closest_limit_for_a_fable_run_counts_every_window_it_draws_on():
     # The CLI's names: seven_day is the weekly limit on all models,
     # seven_day_overage_included the Fable limit.
     snapshot = {
@@ -253,9 +300,13 @@ def test_fable_goes_by_its_own_limit_alone():
         "seven_day": reading(0.97),
         "seven_day_overage_included": reading(0.09),
     }
-    assert closest_limit(snapshot, model="claude-fable-5-1") == ("seven_day_overage_included", 0.09)
-    spent_fable = {**snapshot, "seven_day_overage_included": reading(0.96)}
-    assert closest_limit(spent_fable, model="claude-fable-5-1") == ("seven_day_overage_included", 0.96)
+    # The shared weekly is the binding one: the CLI rejects a Fable call
+    # once it is spent, whatever Fable's own window still has (27 Oct).
+    assert closest_limit(snapshot, model="claude-fable-5-1") == ("seven_day", 0.97)
+    spent_fable = {**snapshot, "seven_day": reading(0.5),
+                   "seven_day_overage_included": reading(0.96)}
+    assert closest_limit(spent_fable, model="claude-fable-5-1") == (
+        "seven_day_overage_included", 0.96)
 
 
 def test_other_models_go_by_the_all_models_limits_and_their_own():
@@ -287,11 +338,22 @@ async def test_the_watcher_follows_the_default_model(db):
 
         w = UsageWatcher(settings, bus, model=current)
         await settings.set(SettingsStore.LIMIT_SNAPSHOT, {
+            "seven_day": reading(0.5),
+            "seven_day_overage_included": reading(0.96),
+        })
+        # Each model is held by its own windows: Fable by its own nearly-spent
+        # weekly, which Opus does not draw on at all.
+        assert await w.check() is True
+        model["now"] = "claude-opus-5-5"
+        assert await w.check() is False
+
+        # The windows every model draws on hold every model, Fable included:
+        # the CLI rejects a Fable call once the shared weekly is spent, so a
+        # warning there holds Fable work the same as Opus's.
+        await settings.set(SettingsStore.LIMIT_SNAPSHOT, {
             "seven_day": reading(0.97, status="allowed_warning"),
             "seven_day_overage_included": reading(0.09),
         })
-        assert await w.check() is False  # Fable has limit left
-        model["now"] = "claude-opus-5-5"
-        assert await w.check() is True  # the weekly all-models limit is nearly spent
+        assert await w.check() is True
     finally:
         await bus.stop()

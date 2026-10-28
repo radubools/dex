@@ -150,7 +150,10 @@ async def test_a_thread_reports_a_call_that_is_still_in_flight(client, monkeypat
 
     turn = asyncio.create_task(ask())
     try:
-        await asyncio.wait_for(started.wait(), 5)
+        # Generous rather than tight: the point is the mid-call read, not how
+        # fast the call starts, and a run over a remote database easily takes
+        # seconds to reach the planner.
+        await asyncio.wait_for(started.wait(), 20)
         # Mid-call: a fresh page load must see that dex is working.
         body = client.get(f"/api/threads/{thread['id']}").json()
         assert body["thread"]["planning"] is True
