@@ -192,7 +192,12 @@ export function PackageLibrary({
               key={entry.slug}
               className={`asset-row ${openPath === entry.path ? 'open' : ''}`}
               onClick={() =>
-                onOpen({ kind: 'package', path: entry.path, title: entry.displayName })
+                onOpen({
+                  kind: 'package',
+                  path: entry.path,
+                  title: entry.displayName,
+                  taskId: entry.taskId ?? undefined,
+                })
               }
             >
               <span className="asset-icon">📦</span>

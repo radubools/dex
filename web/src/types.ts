@@ -376,6 +376,8 @@ export type PackageEntry = {
   path: string
   /** From the package's manifest. Empty for one written before it had tags. */
   tags: string[]
+  /** The newest task that wrote this package: what its Activity tab shows and continues. */
+  taskId?: string | null
 }
 
 /** A tag and how many packages carry it, for the Library's filter pills. */

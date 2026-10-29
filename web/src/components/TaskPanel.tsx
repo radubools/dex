@@ -26,6 +26,7 @@ export function TaskPanel({
   onStarted,
   onQueued,
   onTasks,
+  embedded = false,
 }: {
   view: TaskView
   onOpen: (target: ViewerTarget) => void
@@ -39,8 +40,15 @@ export function TaskPanel({
   onQueued: (taskId: string, messages: TaskMessage[]) => void
   /** Tasks the server changed (a prioritize moves this one and those under it). */
   onTasks?: (tasks: Task[]) => void
+  /**
+   * Inside a Library package's Activity tab: the activity and its note box
+   * only. The package view above it already names the package and lists its
+   * files, so the header and the Files tab would repeat it.
+   */
+  embedded?: boolean
 }) {
-  const [tab, setTab] = useState<Tab>('activity')
+  const [chosenTab, setTab] = useState<Tab>('activity')
+  const tab: Tab = embedded ? 'activity' : chosenTab
   const [busy, setBusy] = useState(false)
   const body = useRef<HTMLDivElement>(null)
   const feedBox = useRef<HTMLDivElement>(null)
@@ -100,7 +108,8 @@ export function TaskPanel({
   }
 
   return (
-    <section className="task-panel">
+    <section className={`task-panel${embedded ? ' embedded' : ''}`}>
+      {!embedded && (
       <header className="panel-head">
         <button className="back-btn" onClick={onBack} aria-label="Back">‹</button>
         <div className="panel-title">
@@ -109,11 +118,14 @@ export function TaskPanel({
         </div>
         <button className="icon-btn" onClick={onClose} aria-label="Close task">✕</button>
       </header>
+      )}
 
       <div className="progress" role="progressbar" aria-valuenow={Math.round(pct)}>
         <div className={`progress-fill ${task.state}`} style={{ width: `${pct}%` }} />
       </div>
       <div className="panel-meta">
+        {/* Which run this is, since the package's name heads the pane. */}
+        {embedded && <span className="embedded-title" title={task.title}>{task.title}</span>}
         <span className={`badge ${task.state}`}>{task.state.replace('_', ' ')}</span>
         <span className="muted small">{label}</span>
         {task.turns != null && <span className="muted small">{task.turns} turns</span>}
@@ -181,6 +193,7 @@ export function TaskPanel({
         </p>
       )}
 
+      {!embedded && (
       <nav className="tabs">
         <button className={tab === 'activity' ? 'on' : ''} onClick={() => setTab('activity')}>
           Activity
@@ -189,6 +202,7 @@ export function TaskPanel({
           Files{view.assets.length ? ` (${view.assets.length})` : ''}
         </button>
       </nav>
+      )}
 
       <div className={`panel-body${tab === 'activity' && scrollable ? ' with-jumps' : ''}`} ref={body} onScroll={tab === 'activity' ? onScroll : undefined}>
         {tab === 'files' ? (

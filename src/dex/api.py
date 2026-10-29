@@ -1898,13 +1898,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         if not root.is_dir():
             return {"packages": [], "tags": []}
 
-        # Titles come from the tasks that produced the packages; a package with
-        # no surviving task still lists under its slug.
-        titles: dict[str, str] = {}
-        # Newest first, so a re-run's title wins over the attempt it replaced.
-        for task in await tasks.tasks.list(limit=1000):
-            if task.project == chosen:
-                titles.setdefault(task.output_slug or task.slug, task.title)
+        # The newest task behind each package: its title names a package whose
+        # manifest does not, and its id is what the Library's Activity tab
+        # opens and continues. A package with no surviving task still lists
+        # under its slug, with no activity to show.
+        made_by = await tasks.tasks.latest_by_package(chosen)
 
         # Tags come from the index the watcher maintains, not from opening a
         # hundred and thirty manifests on every load.
@@ -1933,11 +1931,12 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 # the Library wants the subject, which is what the package
                 # calls itself.
                 "displayName": _manifest_title(directory / "manifest.json")
-                or titles.get(directory.name)
+                or (made_by[directory.name][1] if directory.name in made_by else None)
                 or directory.name.replace("-", " ").replace("_", " ").title(),
                 "files": len(files),
                 "path": f"{chosen}/{directory.name}",
                 "tags": tags,
+                "taskId": made_by[directory.name][0] if directory.name in made_by else None,
             })
 
         packages.sort(key=lambda p: p["displayName"].lower())

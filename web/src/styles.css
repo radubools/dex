@@ -501,6 +501,19 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 .scroll-jumps button:hover { background: rgba(40, 48, 60, 0.95); }
 .task-panel > .panel-body.with-jumps { padding-bottom: calc(52px + env(safe-area-inset-bottom)); }
 .viewer { grid-template-rows: auto minmax(0, 1fr); }
+/* A Library package with a task behind it: bar, Files | Activity, then one of
+   the two. */
+.viewer.with-tabs { grid-template-rows: auto auto minmax(0, 1fr); }
+.viewer-activity {
+  min-height: 0; display: grid;
+  grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
+}
+/* The task panel's own grid, in the viewer's body row rather than over the
+   whole screen: no fixed position, no slide-in of its own. */
+.task-panel.embedded {
+  position: static; inset: auto; z-index: auto; animation: none; min-height: 0;
+}
+.embedded-title { font-weight: 600; font-size: 13px; min-width: 0; overflow-wrap: anywhere; flex-basis: 100%; }
 
 .panel-head, .viewer-bar {
   display: flex; align-items: center; gap: 8px;
@@ -794,6 +807,11 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   }
   /* With both open the viewer takes the column and the panel steps aside. */
   .app.with-panel.with-viewer .task-panel { display: none; }
+  /* Except the one inside a Library package's Activity tab, which is the
+     viewer's own content: it fills the viewer's body row, not the screen. */
+  .app .viewer .task-panel.embedded {
+    display: grid; height: auto; border-left: none; background: transparent;
+  }
   .chat { padding: 24px max(24px, calc(50% - 420px)); }
   .app.with-panel .chat, .app.with-viewer .chat { padding: 24px 28px; }
 }

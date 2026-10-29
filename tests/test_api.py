@@ -323,6 +323,32 @@ def test_packages_carry_the_tags_from_their_manifests(client):
     assert [t["name"] for t in body["tags"]][0] in {"arrays", "easy", "hash-map", "medium", "strings"}
 
 
+def test_a_package_names_the_newest_task_that_made_it(client):
+    """The Library's Activity tab opens, and continues, the run behind a package.
+
+    That is the newest task writing into it: a later change to the package is
+    its own task with `updates` set, and a follow-up should continue that one,
+    not the first attempt.
+    """
+    project = client.config.assets_dir / "algorithms"
+    (project / "two-sum").mkdir(parents=True, exist_ok=True)
+    (project / "orphan").mkdir(parents=True, exist_ok=True)
+    first = client.post(
+        "/api/tasks", json={"problem": "Two Sum", "slug": "two-sum", "project": "algorithms"}
+    ).json()["task"]
+    change = client.post(
+        "/api/tasks",
+        json={"problem": "Faster Two Sum", "updates": "two-sum", "project": "algorithms"},
+    ).json()["task"]
+
+    listed = {p["slug"]: p for p in client.get("/api/packages?project=algorithms").json()["packages"]}
+
+    assert first["id"] != change["id"]
+    assert listed["two-sum"]["taskId"] == change["id"]
+    # Nothing made it that dex still knows of: listed, with no activity.
+    assert listed["orphan"]["taskId"] is None
+
+
 def test_a_package_without_a_usable_manifest_still_lists(client):
     project = client.config.assets_dir / "algorithms"
     (project / "no-manifest").mkdir(parents=True, exist_ok=True)

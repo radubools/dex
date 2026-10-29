@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
 import { assetUrl, readAsset } from '../api'
@@ -23,7 +23,13 @@ export type ViewerTarget =
   | { kind: 'asset'; path: string }
   | { kind: 'diff'; path: string; patch: string }
   /** A whole generated package: its assets, then its explanation inline. */
-  | { kind: 'package'; path: string; title: string }
+  | {
+      kind: 'package'
+      path: string
+      title: string
+      /** The newest task that wrote it, whose activity the Activity tab shows. */
+      taskId?: string
+    }
   /**
    * A file the operator attached, in `datasets/<project>/`. Addressed by
    * project and name because it is not in the assets tree and has no path.
@@ -43,6 +49,7 @@ export function Viewer({
   onClose,
   onBack,
   onOpen,
+  activity,
 }: {
   target: ViewerTarget
   onClose: () => void
@@ -50,15 +57,41 @@ export function Viewer({
   onBack?: () => void
   /** Opens something from inside the current view, e.g. a package's animation. */
   onOpen?: (target: ViewerTarget) => void
+  /**
+   * A package's Activity tab: the thread of the task that last wrote it, with
+   * its note box, so the package can be talked about where it is being
+   * looked at. Drawn by the app, which owns the tasks and their event stream.
+   */
+  activity?: (taskId: string) => ReactNode
 }) {
   const label = labelOf(target)
+  const taskId = target.kind === 'package' && activity ? target.taskId : undefined
+  // Files first, every time a different package opens: the Library is browsed
+  // for what things look like, and the conversation is the second question.
+  const [tab, setTab] = useState<'files' | 'activity'>('files')
+  const opened = target.kind === 'package' ? target.path : null
+  useEffect(() => setTab('files'), [opened])
+  const showActivity = Boolean(taskId) && tab === 'activity'
   return (
-    <section className="viewer" role="dialog" aria-label={label}>
+    <section className={`viewer${taskId ? ' with-tabs' : ''}`} role="dialog" aria-label={label}>
       <header className="viewer-bar">
         <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
         <span className="viewer-path" title={label}>{label}</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>
+      {taskId && (
+        <nav className="tabs">
+          <button className={tab === 'files' ? 'on' : ''} onClick={() => setTab('files')}>
+            Files
+          </button>
+          <button className={tab === 'activity' ? 'on' : ''} onClick={() => setTab('activity')}>
+            Activity
+          </button>
+        </nav>
+      )}
+      {showActivity ? (
+        <div className="viewer-activity">{activity!(taskId!)}</div>
+      ) : (
       <div className="viewer-body">
         {target.kind === 'diff' ? (
           <Diff patch={target.patch} />
@@ -74,6 +107,7 @@ export function Viewer({
           <AssetView path={target.path} />
         )}
       </div>
+      )}
     </section>
   )
 }

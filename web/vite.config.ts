@@ -16,13 +16,15 @@ export default defineConfig({
     // an error, not a quiet move to 4319 that the bookmarks never find.
     port: Number(env.DEX_WEB_PORT ?? 4318),
     strictPort: true,
+    // DEX_API_ORIGIN points a second dev server at a test API (AGENTS.md: a
+    // dex on 4417 against dex_test), as it already does for `vite preview`.
     proxy: {
-      '/api': 'http://localhost:4317',
+      '/api': env.DEX_API_ORIGIN ?? 'http://localhost:4317',
       // Built widget bundles are served by the Python server, not by Vite.
       // Without this the dev server answers with its SPA fallback, the frame
       // imports index.html, and the widget dies on `Unexpected token '<'` --
       // which looks like a bug in the widget and is not.
-      '/widgets': 'http://localhost:4317',
+      '/widgets': env.DEX_API_ORIGIN ?? 'http://localhost:4317',
     },
     // Vite rejects requests whose Host header it does not recognise (a
     // DNS-rebinding guard). Reaching the dev server over Tailscale or by

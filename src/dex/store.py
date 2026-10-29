@@ -297,6 +297,24 @@ class TaskStore:
             )
         return [task_from_row(row) for row in rows]
 
+    async def latest_by_package(self, project: str) -> dict[str, tuple[str, str]]:
+        """The newest task behind each of a project's packages: id and title.
+
+        A package is written by every attempt at it (a resume or a follow-up
+        writes into its parent's `output_slug`), so the newest one is the run
+        that last changed it, and the one a follow-up message should continue.
+        An archived task counts only when nothing else made the package.
+        """
+        rows = await self.db.pool.fetch(
+            """SELECT DISTINCT ON (coalesce(output_slug, slug))
+                      coalesce(output_slug, slug) AS package, id, title
+                 FROM tasks
+                WHERE project = $1
+                ORDER BY coalesce(output_slug, slug), (state = 'archived'), created_at DESC""",
+            project,
+        )
+        return {row["package"]: (row["id"], row["title"]) for row in rows}
+
     async def taken_slugs(self, project: str | None = None) -> set[str]:
         """Slugs already in use.
 

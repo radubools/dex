@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
   can, confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTask, getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads,
@@ -9,7 +9,7 @@ import {
   setAutoApprove,
   type Me,
 } from './api'
-import { initialState, reduce } from './store'
+import { initialState, reduce, type TaskView } from './store'
 import { notifyAssetChanged } from './assetChanges'
 import type { Health, PlannedTask, Project, ThreadSummary } from './types'
 import { Chat } from './components/Chat'
@@ -136,6 +136,13 @@ export default function App() {
         // the reply would appear on a task the reader is not looking at.
         if (event.type === 'task_message_delivered') {
           setActiveTaskId((current) => (current === event.taskId ? event.startedTaskId : current))
+          // The same in a Library package's Activity tab: the note started the
+          // package's next run, which is now the one that last wrote it.
+          setViewing((current) =>
+            current?.kind === 'package' && current.taskId === event.taskId
+              ? { ...current, taskId: event.startedTaskId }
+              : current,
+          )
         }
         // Planning is server-side state: another tab, or this one before a
         // reload, may have started it. Follow it rather than only tracking the
@@ -312,17 +319,23 @@ export default function App() {
   // replays only the most recent events across every task, so a task from an
   // earlier session — or one restarted from one — arrives with nothing to
   // show until this asks for it.
+  //
+  // The same for the task a Library package's Activity tab shows, once that
+  // tab is opened: a package viewed for its files costs no event history.
   const historyLoaded = useRef<Set<string>>(new Set())
+  const [packageTaskId, setPackageTaskId] = useState<string | null>(null)
   useEffect(() => {
-    if (!activeTaskId || historyLoaded.current.has(activeTaskId)) return
-    historyLoaded.current.add(activeTaskId)
-    getTaskEvents(activeTaskId)
-      .then((events) => dispatch({ type: 'taskEvents', events }))
-      .catch(() => {
-        // Nothing to show is the state it was already in; let it be retried.
-        historyLoaded.current.delete(activeTaskId)
-      })
-  }, [activeTaskId])
+    for (const id of [activeTaskId, packageTaskId]) {
+      if (!id || historyLoaded.current.has(id)) continue
+      historyLoaded.current.add(id)
+      getTaskEvents(id)
+        .then((events) => dispatch({ type: 'taskEvents', events }))
+        .catch(() => {
+          // Nothing to show is the state it was already in; let it be retried.
+          historyLoaded.current.delete(id)
+        })
+    }
+  }, [activeTaskId, packageTaskId])
 
   // The task itself, when the listing did not carry it.
   //
@@ -347,6 +360,14 @@ export default function App() {
         setActiveTaskId((current) => (current === wanted ? null : current))
       })
   }, [activeTaskId, state.tasks])
+  useEffect(() => {
+    if (!packageTaskId || state.tasks[packageTaskId] || taskLoaded.current.has(packageTaskId)) return
+    taskLoaded.current.add(packageTaskId)
+    const wanted = packageTaskId
+    getTask(wanted)
+      .then((task) => dispatch({ type: 'tasks', tasks: [task] }))
+      .catch(() => taskLoaded.current.delete(wanted))
+  }, [packageTaskId, state.tasks])
 
   // Load a thread's stored history the first time it is opened.
   useEffect(() => {
@@ -786,6 +807,33 @@ export default function App() {
             // then out of the viewer.
             onBack={() => back(() => setViewing(null))}
             onOpen={openViewer}
+            activity={(id) => (
+              <PackageActivity
+                taskId={id}
+                view={state.tasks[id]}
+                onShow={setPackageTaskId}
+              >
+                {(view) => (
+                  <TaskPanel
+                    embedded
+                    view={view}
+                    onOpen={openViewer}
+                    onBack={() => {}}
+                    onClose={() => {}}
+                    onQueued={(taskId, messages) => dispatch({ type: 'queued', taskId, messages })}
+                    onTasks={(tasks) => dispatch({ type: 'tasks', tasks })}
+                    // A resume or re-run is the package's newest run now, so
+                    // the tab follows it rather than the attempt it replaced.
+                    onStarted={(task) => {
+                      dispatch({ type: 'tasks', tasks: [task] })
+                      setViewing((current) =>
+                        current?.kind === 'package' ? { ...current, taskId: task.id } : current,
+                      )
+                    }}
+                  />
+                )}
+              </PackageActivity>
+            )}
           />
         </Suspense>
       )}
@@ -884,4 +932,26 @@ export default function App() {
       )}
     </div>
   )
+}
+
+/**
+ * A Library package's Activity tab: says which task it shows, so the app loads
+ * that task and its history, and stops saying so when the tab closes.
+ */
+function PackageActivity({
+  taskId,
+  view,
+  onShow,
+  children,
+}: {
+  taskId: string
+  view: TaskView | undefined
+  onShow: (taskId: string | null) => void
+  children: (view: TaskView) => ReactNode
+}) {
+  useEffect(() => {
+    onShow(taskId)
+    return () => onShow(null)
+  }, [taskId, onShow])
+  return view ? <>{children(view)}</> : <p className="muted small" style={{ padding: 16 }}>Loading activity…</p>
 }
