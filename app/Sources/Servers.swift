@@ -11,13 +11,12 @@ struct DexServer: Codable, Hashable, Identifiable {
 /// so the app reopens where it was.
 @MainActor
 final class Servers: ObservableObject {
-    /// The dex servers on the tailnet, by the page each serves. The MacBook
-    /// Pro and the dex server are opened on the API's own port, 4317, which
-    /// serves the built UI and the API from one origin; the Air's dex has its
-    /// dev UI on 4318, which relays the API to 4317. Any other is added from
-    /// the server sheet.
+    /// The dex servers on the tailnet, by the page each serves. A Mac's dex
+    /// serves its UI on 4318, which relays the API to 4317 (and whose Settings
+    /// → dex server can point it at another API); the dex server serves both
+    /// from 4317. Any other is added from the server sheet.
     static let presets: [DexServer] = [
-        DexServer(name: "MacBook Pro 4", url: URL(string: "http://macbook-pro-4:4317/")!),
+        DexServer(name: "MacBook Pro 4", url: URL(string: "http://macbook-pro-4:4318/")!),
         DexServer(name: "Adrian's MacBook Air", url: URL(string: "http://adrians-macbook-air-m5.tailf2ae8.ts.net:4318/")!),
         DexServer(name: "dex (tailnet server)", url: URL(string: "http://dex.tailf2ae8.ts.net:4317/")!),
     ]
@@ -35,8 +34,9 @@ final class Servers: ObservableObject {
     /// Addresses a preset used to have, and what it is now. A saved list and
     /// the open server follow the move, keeping the name the reader sees.
     private static let moved: [String: String] = [
-        "http://macbook-pro-4.tail4c49c.ts.net:4318/": "http://macbook-pro-4:4317/",
-        "http://macbook-pro-4.tail4c49c.ts.net:4317/": "http://macbook-pro-4:4317/",
+        "http://macbook-pro-4.tail4c49c.ts.net:4318/": "http://macbook-pro-4:4318/",
+        "http://macbook-pro-4.tail4c49c.ts.net:4317/": "http://macbook-pro-4:4318/",
+        "http://macbook-pro-4:4317/": "http://macbook-pro-4:4318/",
     ]
 
     init() {
