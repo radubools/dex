@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import {
   can, confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTask, getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads,
@@ -26,6 +27,7 @@ const SkillAdmin = lazy(() =>
 import { TaskPanel } from './components/TaskPanel'
 import type { ViewerTarget } from './components/Viewer'
 import { canGoBack, navState, record, type Overlay, type Place, type View } from './navigation'
+import { useSplit, useViewport } from './split'
 
 // highlight.js (and, for markdown, mermaid) only load when something is opened.
 const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })))
@@ -78,6 +80,12 @@ function toFront<T>(items: T[], match: (item: T) => boolean): T[] {
   if (at <= 0) return items
   return [items[at], ...items.slice(0, at), ...items.slice(at + 1)]
 }
+
+/** Panes sit side by side from this width (styles.css, desktop). */
+const WIDE_FROM = 1000
+/** The narrowest the chat column may be squeezed to by either divider. */
+const MAIN_MIN = 360
+const SIDE_MIN = 320
 
 export default function App() {
   // A reload keeps the history entry: its panes come back too (navigation.ts).
@@ -416,6 +424,21 @@ export default function App() {
     if (threadId === id) setThreadId(remaining[0]?.id ?? (await createThread(project ?? undefined)).id)
   }
 
+  // Pane widths on a wide screen (styles.css, desktop): threads | main |
+  // side column, both dividers draggable. The chat keeps at least MAIN_MIN,
+  // so neither column can push it off the screen.
+  const viewport = useViewport(WIDE_FROM)
+  const sideOpen = Boolean((activeTaskId && state.tasks[activeTaskId]) || viewing || showCosts || showGuide || showUsers || showSkills)
+  const threadsSplit = useSplit({
+    key: 'threads', label: 'Threads width', defaultSize: 280, min: 200,
+    max: Math.min(480, viewport.width - MAIN_MIN - (sideOpen ? SIDE_MIN : 0)),
+  })
+  const sideSplit = useSplit({
+    key: 'side', label: 'Side pane width', after: true, min: SIDE_MIN,
+    defaultSize: Math.max(360, Math.round(viewport.width * 0.34)),
+    max: viewport.width - threadsSplit.size - MAIN_MIN,
+  })
+
   // Resolved before anything else renders. `state` distinguishes the three
   // cases a 401 alone could not: nobody signed in, signed in without a role,
   // and an install with no sign-in configured at all.
@@ -468,8 +491,20 @@ export default function App() {
       className={`app ${activeTask ? 'with-panel' : ''} ${
         viewing || showCosts || showGuide || showUsers || showSkills ? 'with-viewer' : ''
       }`}
+      style={
+        viewport.wide
+          ? ({ '--threads-w': `${threadsSplit.size}px`, '--side-w': `${sideSplit.size}px` } as CSSProperties)
+          : undefined
+      }
     >
       <IconTips />
+      {/* Phones stack the panes, so there is nothing to divide there. */}
+      {viewport.wide && (
+        <div className="split-handle" style={{ left: threadsSplit.size }} {...threadsSplit.handle} />
+      )}
+      {viewport.wide && sideOpen && (
+        <div className="split-handle end" style={{ right: sideSplit.size }} {...sideSplit.handle} />
+      )}
       <aside className={`threads ${drawerOpen ? 'open' : ''}`}>
         <div className="threads-head">
           <span className="brand">dex</span>

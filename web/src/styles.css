@@ -775,8 +775,12 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 /* ---------------- desktop ---------------- */
 
 @media (min-width: 1000px) {
-  .app { grid-template-columns: 280px minmax(0, 1fr); }
-  .app.with-panel, .app.with-viewer { grid-template-columns: 280px minmax(0, 1fr) minmax(360px, 34vw); }
+  /* The widths come from the dividers (split.ts), set on `.app` as
+     variables; the fallbacks are their defaults before any script runs. */
+  .app { grid-template-columns: var(--threads-w, 280px) minmax(0, 1fr); }
+  .app.with-panel, .app.with-viewer {
+    grid-template-columns: var(--threads-w, 280px) minmax(0, 1fr) var(--side-w, minmax(360px, 34vw));
+  }
 
   .threads { position: static; transform: none; width: auto; }
   .scrim, .icon-btn.menu { display: none; }
@@ -797,6 +801,30 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* A divider between two panes (split.ts): a strip wider than the 1px border
+   it sits on, so it is easy to grab, that shows the line only when hovered,
+   focused or dragged. Only rendered on a wide screen. */
+.split-handle {
+  /* Above the task panel and viewer (20, 21): they are grid items, which
+     honour z-index without being positioned. Below sheets and modals. */
+  position: fixed; top: 0; bottom: 0; z-index: 22;
+  width: 10px; transform: translateX(-50%);
+  cursor: col-resize; touch-action: none;
+  outline: none;
+}
+.split-handle.end { transform: translateX(50%); }
+.split-handle::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px;
+  transform: translateX(-50%); background: transparent; transition: background 0.12s;
+}
+.split-handle:hover::after, .split-handle:focus-visible::after, body.resizing .split-handle:active::after {
+  background: var(--accent);
+}
+/* While dragging: the cursor stays the resize one over any pane, and text
+   does not get selected as the pointer crosses it. */
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing iframe { pointer-events: none; }
 
 /* ---------------- settings menu ---------------- */
 
