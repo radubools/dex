@@ -227,6 +227,19 @@ class TaskRunner:
         #: Running list-price estimate, so a task shows spend while it works
         #: instead of nothing until it finishes.
         self._estimated_cost = 0.0
+        #: State writes still in flight (`set_state` persists in the background).
+        self._writes: set[asyncio.Task[None]] = set()
+
+    async def settled(self) -> None:
+        """Wait until every state change so far is in the database.
+
+        The queue delivers notes typed during a run once it ends, and reads the
+        task's state from the database to see that it has; without this wait
+        it read the row before the final write landed, saw it still running,
+        and left the notes undelivered for good.
+        """
+        while self._writes:
+            await asyncio.gather(*list(self._writes), return_exceptions=True)
 
     # ---------------------------------------------------------------- events
 
@@ -242,7 +255,9 @@ class TaskRunner:
         self.emit("task_state", state=state.value, activity=self.task.activity, **extra)
         # Persisted in the background: a state change must not block the agent
         # loop, but it must survive the process.
-        asyncio.create_task(self._persist_state(state, extra))
+        write = asyncio.create_task(self._persist_state(state, extra))
+        self._writes.add(write)
+        write.add_done_callback(self._writes.discard)
 
     async def _correct_state(self) -> None:
         """Tell the UI what the database actually holds.

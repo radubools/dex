@@ -41,6 +41,8 @@ MAX_DEPTH = 3
 #: (`prioritize`) before that.
 WOKEN = 1
 PRIORITIZED = 2
+#: Ended runs whose stranded notes the waker starts (an archived one stays put).
+TERMINAL = {s.value for s in TaskState if s.terminal and s is not TaskState.ARCHIVED}
 #: How often blocked tasks are checked.
 WAKE_EVERY_S = 3.0
 
@@ -317,7 +319,13 @@ class Dependencies:
         for task in await self.store.blocked():
             ids = task.waiting_on or await self.store.of(task.id)
             statuses = await self.statuses(ids)
-            if any(not s.get("done", True) for s in statuses):
+            # A finished task still holding notes is waited on until they run,
+            # but nothing else delivers them once its worker has moved on (a
+            # note that missed its run's end, a restart): start them here.
+            stranded = [s for s in statuses if s.get("queuedNotes") and s.get("state") in TERMINAL]
+            for s in stranded:
+                await self.m.deliver_messages(s["id"])
+            if stranded or any(not s.get("done", True) for s in statuses):
                 continue
             note = self.wake_note(statuses)
             landed = await self.m.tasks.set_state(

@@ -82,6 +82,34 @@ async def test_a_note_queued_on_a_running_task_keeps_it_not_done(manager):
     assert not (await manager.graph.store.status(asset.id))["done"]
 
 
+
+async def test_the_waker_starts_notes_that_missed_their_runs_end(manager, db):
+    # Notes queued while a run is under way are delivered as it ends; one that
+    # missed that moment (the run's final write landed late, a restart) left
+    # its waiters blocked for good. The waker now starts it.
+    await threads(db)
+    voice = await manager.submit("caption the stories", title="Captions")
+    await manager.tasks.set_state(voice.id, TaskState.RUNNING)
+    story = await manager.submit("story", title="Story")
+    await manager.graph.follow_up(story, voice.slug, "Caption the new story.")
+    await manager.graph.park(story, [voice.id])
+    await finish(manager, voice)  # ended without delivering the note
+    assert await manager.graph.wake_ready() == 0  # it started the note instead of waking
+    st = await manager.graph.store.status(voice.id)
+    assert st["task"].attempt == 2 and st["task"].state is TaskState.QUEUED and not st["done"]
+    assert "Caption the new story." in st["task"].problem
+    assert (await manager.tasks.get(story.id)).state is TaskState.BLOCKED
+    await finish(manager, st["task"])
+    assert await manager.graph.wake_ready() == 1
+
+
+async def test_a_worker_delivers_notes_only_after_the_runs_final_state_is_stored(manager, config):
+    task = await manager.submit("make a bowl", title="Bowl")
+    runner = TaskRunner(task, config, manager.bus, manager.tasks, manager.settings)
+    runner.set_state(TaskState.SUCCEEDED)  # written in the background
+    await runner.settled()
+    assert (await manager.tasks.get(task.id)).state is TaskState.SUCCEEDED
+
 async def test_cycles_depth_and_fan_out_are_refused(manager, monkeypatch):
     a = await manager.submit("a", title="A")
     ids = await threads(manager.db)

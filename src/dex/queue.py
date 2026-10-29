@@ -805,8 +805,10 @@ class TaskManager:
                         raise
                 task.runtime = None
                 self.live.pop(task.id, None)
-                # A note typed while this was running becomes the next attempt.
+                # A note typed while this was running becomes the next attempt,
+                # once the run's final state is written (deliver_messages reads it).
                 with contextlib.suppress(Exception):
+                    await runner.settled()
                     await self.deliver_messages(task.id)
 
     def _runner_for(self, task: Task) -> TaskRunner:
