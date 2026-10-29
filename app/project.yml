@@ -1,0 +1,61 @@
+# The dex web UI as one universal app for macOS, iOS and iPadOS: a web view
+# that opens a dex server's own page over Tailscale. Nothing is bundled: the
+# server serves the UI and its API from one origin, so sign-in cookies, the
+# event stream and uploads work exactly as in a browser.
+#
+#   cd app && xcodegen generate && open Dex.xcodeproj
+name: Dex
+options:
+  bundleIdPrefix: dex
+  deploymentTarget:
+    iOS: "16.4"
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    # Local builds need no team: macOS and the simulator run ad-hoc signed.
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    # A phone or iPad refuses unsigned apps: sign iphoneos builds with the
+    # team from Xcode's account (the same one ~/games/native uses).
+    CODE_SIGNING_ALLOWED[sdk=iphoneos*]: YES
+    CODE_SIGNING_REQUIRED[sdk=iphoneos*]: YES
+    CODE_SIGN_IDENTITY[sdk=iphoneos*]: "Apple Development"
+    CODE_SIGN_STYLE[sdk=iphoneos*]: Automatic
+    DEVELOPMENT_TEAM[sdk=iphoneos*]: 78UFLEV8N5
+targets:
+  Dex:
+    type: application
+    supportedDestinations: [macOS, iOS]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dex.app
+        # A multi-platform target gets no synthesized entry point otherwise.
+        OTHER_SWIFT_FLAGS: -parse-as-library
+    sources:
+      - path: Sources
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Dex
+        CFBundleName: Dex
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # dex servers on the tailnet speak plain HTTP (Tailscale encrypts the
+        # link itself), which App Transport Security refuses by default.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Dex connects to your dex server over your network.
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationCategoryType: public.app-category.productivity
