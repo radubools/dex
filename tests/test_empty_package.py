@@ -217,6 +217,78 @@ async def test_a_new_attempt_resuming_a_session_does_not_coast_on_its_parent(run
     assert task.state is TaskState.FAILED
 
 
+async def _parent_with_notes(db, delivered: bool) -> Task:
+    """A finished attempt someone typed into, and whether its notes went out."""
+    from dex.store import TaskMessageStore
+
+    parent = package_task(slug="boss")
+    parent.state = TaskState.SUCCEEDED
+    await TaskStore(db).create(parent)
+    messages = TaskMessageStore(db)
+    await messages.add(parent.id, "How many flat sides does this character have?")
+    if delivered:
+        await messages.take(parent.id)
+    return parent
+
+
+def _old_package(config, name: str) -> Path:
+    package = package_of(config, name)
+    package.mkdir(parents=True)
+    model = package / "boss.glb"
+    model.write_bytes(b"glTF")
+    stamp = model.stat().st_mtime_ns - 600_000_000_000
+    os.utime(model, ns=(stamp, stamp))
+    return package
+
+
+async def test_a_follow_up_that_only_answers_a_question_succeeds(run_task, config, db):
+    """A note to a finished task is as often a question as a change.
+
+    "How many flat sides does this character have?" was answered in full and
+    came out red, as if asking had broken something.
+    """
+    _old_package(config, "boss")
+    parent = await _parent_with_notes(db, delivered=True)
+
+    task = package_task(slug="boss-2")
+    task.output_slug = "boss"
+    task.parent_id = parent.id
+    task.attempt = 2
+    task.resumed_from = "sess-1"
+    task = await run_task(task)
+
+    assert task.state is TaskState.SUCCEEDED
+    assert task.error is None
+
+
+async def test_a_resume_that_no_note_started_is_still_checked(run_task, config, db):
+    """A Resume of a run that ended empty has no notes behind it: it still has
+    to do the work it stopped before doing."""
+    _old_package(config, "boss")
+    parent = await _parent_with_notes(db, delivered=False)
+
+    task = package_task(slug="boss-2")
+    task.output_slug = "boss"
+    task.parent_id = parent.id
+    task.resumed_from = "sess-1"
+    task = await run_task(task)
+
+    assert task.state is TaskState.FAILED
+    assert task.error == EMPTY_PACKAGE
+
+
+async def test_a_note_cannot_stand_in_for_a_package_nobody_made(run_task, db):
+    parent = await _parent_with_notes(db, delivered=True)
+
+    task = package_task(slug="boss-2")
+    task.output_slug = "boss"
+    task.parent_id = parent.id
+    task.resumed_from = "sess-1"
+    task = await run_task(task)
+
+    assert task.state is TaskState.FAILED
+
+
 # ------------------------------------------------------------------- telling
 # The check above is only half of it: an agent that is never told how its turn
 # ends cannot be blamed for parking itself. The brief has to say so, and say

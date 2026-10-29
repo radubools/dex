@@ -476,6 +476,29 @@ class TaskRunner:
             return False
         return bool(wrote)
 
+    async def _answered_notes(self) -> bool:
+        """Whether this run answered the operator's notes on a finished package.
+
+        A note typed into a finished task starts the next attempt
+        (`deliver_messages`), and a note is as often a question about the
+        package ("how many flat sides does this character have?") as a change
+        to it. Answered without touching a file, that run did what it was
+        asked; failing it as an empty package read as if the question broke
+        something. Two things have to hold: the attempt came from notes (its
+        parent has delivered ones; a plain Resume of a failed run has none, and
+        stays checked), and the package already holds work, so a follow-up
+        cannot stand in for a package nobody ever made.
+        """
+        if not self.task.parent_id or not self._artifacts():
+            return False
+        try:
+            return bool(await self.store.db.pool.fetchval(
+                """SELECT EXISTS (SELECT 1 FROM task_messages
+                    WHERE task_id = $1 AND delivered_at IS NOT NULL)""", self.task.parent_id))
+        except Exception:
+            log.exception("could not read the notes behind %s", self.task.id)
+            return False
+
     async def _unfinished_dependencies(self) -> list[str]:
         """The tasks this one depends on that are not done, plus any it asked to wait on."""
         if self.graph is None:
@@ -1005,7 +1028,8 @@ class TaskRunner:
             # exactly like a full one in a list of green rows.
             elif (self.task.builds_package and not self.task.is_chat and not self._wrote_anything(before)
                   and not (woken and await self._woken_wrote())
-                  and not (self.task.resumed_from and self._wrote_since_created())):
+                  and not (self.task.resumed_from and self._wrote_since_created())
+                  and not await self._answered_notes()):
                 # A chat turn that only answers wrote nothing, and is still done.
                 self._fail(EMPTY_PACKAGE)
             else:
