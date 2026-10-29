@@ -12,7 +12,10 @@ export default defineConfig({
   server: {
     // Bind on 0.0.0.0 so the dev server is reachable from a phone on the LAN.
     host: true,
-    port: 4318,
+    // pm2's ecosystem.config.cjs sets DEX_WEB_PORT. strictPort: a busy port is
+    // an error, not a quiet move to 4319 that the bookmarks never find.
+    port: Number(env.DEX_WEB_PORT ?? 4318),
+    strictPort: true,
     proxy: {
       '/api': 'http://localhost:4317',
       // Built widget bundles are served by the Python server, not by Vite.

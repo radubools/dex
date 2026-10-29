@@ -101,6 +101,9 @@ module.exports = {
       cwd: root,
       interpreter: 'none',
       env: {
+        // web/vite.config.ts reads it, with strictPort, so dex-web is on this
+        // port or fails to start.
+        DEX_WEB_PORT: '4318',
         PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}`,
       },
       autorestart: true,
