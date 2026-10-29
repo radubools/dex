@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { can, getSettings, logout, putSettings, setLimitPaused, setPaused, type Me } from '../api'
 import type { SettingsResponse } from '../types'
+import { ServerPicker } from './ServerPicker'
 
 /** Claude's limit windows, named as the CLI names them. */
 const WINDOW_NAMES: Record<string, string> = {
@@ -311,6 +312,14 @@ export function SettingsMenu({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="menu-row column">
+            <span>
+              dex server
+              <small>Where this page sends its requests; each server has its own sign-in</small>
+            </span>
+            <ServerPicker />
           </div>
 
           <div className="menu-costs">

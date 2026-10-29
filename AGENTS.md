@@ -36,7 +36,16 @@ and stop only that one, by the PID you started:
 kill "$MY_PID"        # never a pattern that could match the user's process
 ```
 
-For the web UI, `npm run dev:ui -- --port 4418`. Ports **4400-4499** are yours;
+For the web UI, start a second dev server on your port, pointed at your API:
+
+```bash
+cd web && DEX_WEB_PORT=4418 DEX_API_ORIGIN=http://localhost:4417 npx vite
+```
+
+(`DEX_API_ORIGIN` is the dev server's default API. The page itself can pick
+another from Settings → dex server, kept in the `dex_api` cookie; see
+`web/apiServer.ts` and the list in `web/api-servers.json`.
+`/__dex/api-server/reset` forgets the choice.) Ports **4400-4499** are yours;
 4317 and 4318 are the user's.
 
 Before starting anything, check the port is actually free — a bind failure is

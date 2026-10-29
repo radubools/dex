@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { apiProxy, apiServerPlugin } from './apiServer'
 
 // This config runs in Node, but the web workspace has no `@types/node` and
 // does not need one for a handful of env reads. Reached through globalThis so
@@ -7,8 +8,13 @@ import react from '@vitejs/plugin-react'
 const env: Record<string, string | undefined> =
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {}
 
+// The API `/api` goes to unless Settings picked another (apiServer.ts).
+// DEX_API_ORIGIN points a second dev server at a test API (AGENTS.md: a dex
+// on 4417 against dex_test), and the container's `vite preview` at its own.
+const defaultApi = env.DEX_API_ORIGIN ?? 'http://localhost:4317'
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), apiServerPlugin(defaultApi)],
   server: {
     // Bind on 0.0.0.0 so the dev server is reachable from a phone on the LAN.
     host: true,
@@ -16,15 +22,13 @@ export default defineConfig({
     // an error, not a quiet move to 4319 that the bookmarks never find.
     port: Number(env.DEX_WEB_PORT ?? 4318),
     strictPort: true,
-    // DEX_API_ORIGIN points a second dev server at a test API (AGENTS.md: a
-    // dex on 4417 against dex_test), as it already does for `vite preview`.
     proxy: {
-      '/api': env.DEX_API_ORIGIN ?? 'http://localhost:4317',
+      '/api': apiProxy(defaultApi),
       // Built widget bundles are served by the Python server, not by Vite.
       // Without this the dev server answers with its SPA fallback, the frame
       // imports index.html, and the widget dies on `Unexpected token '<'` --
       // which looks like a bug in the widget and is not.
-      '/widgets': env.DEX_API_ORIGIN ?? 'http://localhost:4317',
+      '/widgets': apiProxy(defaultApi),
     },
     // Vite rejects requests whose Host header it does not recognise (a
     // DNS-rebinding guard). Reaching the dev server over Tailscale or by
@@ -48,9 +52,9 @@ export default defineConfig({
     host: true,
     port: Number(env.DEX_WEB_PORT ?? 4318),
     proxy: {
-      '/api': env.DEX_API_ORIGIN ?? 'http://127.0.0.1:4317',
+      '/api': apiProxy(defaultApi),
       // Same reason as the dev server above: widgets are the API server's.
-      '/widgets': env.DEX_API_ORIGIN ?? 'http://127.0.0.1:4317',
+      '/widgets': apiProxy(defaultApi),
     },
     // Same DNS-rebinding guard as the dev server above. `DEX_ALLOWED_HOSTS` is
     // a comma-separated list; unset means allow any Host, which is correct

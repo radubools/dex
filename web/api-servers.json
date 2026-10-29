@@ -1,0 +1,8 @@
+{
+  "servers": [
+    { "label": "This machine", "origin": "http://localhost:4317" },
+    { "label": "MacBook Pro 4", "origin": "http://macbook-pro-4.tail4c49c.ts.net:4317" },
+    { "label": "Adrian's MacBook Air", "origin": "http://adrians-macbook-air-m5.tailf2ae8.ts.net:4317" },
+    { "label": "dex (tailnet server)", "origin": "http://dex.tailf2ae8.ts.net:4317" }
+  ]
+}

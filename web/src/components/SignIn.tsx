@@ -8,6 +8,7 @@ import {
   type AuthConfig,
   type AuthUser,
 } from '../api'
+import { ServerPicker } from './ServerPicker'
 
 /** Why a sign-in attempt bounced, as the callback reports it in `?auth_error=`. */
 const REASONS: Record<string, string> = {
@@ -130,6 +131,13 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
             <code> DEX_PASSWORD_AUTH=1</code> and restart.
           </p>
         )}
+
+        {/* Settings is behind the sign-in, so a server you have no account on
+            would otherwise be a page you cannot leave. */}
+        <details className="gate-server">
+          <summary>dex server</summary>
+          <ServerPicker />
+        </details>
       </div>
     </div>
   )
