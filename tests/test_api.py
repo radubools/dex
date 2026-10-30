@@ -258,6 +258,29 @@ def test_a_widget_can_write_a_text_file_beside_what_it_opened(client):
     assert binary.status_code == 415
 
 
+def test_newlines_survive_a_widget_save_and_the_read_back(client):
+    """An editor's line breaks reach the file exactly as typed, and come back
+    the same: LF, CRLF, blank lines and a trailing newline are all kept, so a
+    round trip through the viewer rewrites nothing."""
+    root: Path = client.config.assets_dir  # type: ignore[attr-defined]
+    package = root / "traduceri" / "modu-ch01"
+    package.mkdir(parents=True, exist_ok=True)
+    text = "line one\nline two\r\n\nparagraph after a blank line\n  indented\ttab\n"
+
+    saved = client.put("/api/assets", json={"path": "traduceri/modu-ch01/x.md", "content": text})
+    assert saved.status_code == 200, saved.text
+    assert (package / "x.md").read_bytes() == text.encode("utf-8")
+
+    read = client.get("/api/assets", params={"path": "traduceri/modu-ch01/x.md"}).json()
+    assert read["content"] == text
+
+    # The same for newlines inside a JSON string, which is what the bitext
+    # widget edits: the escape is what travels, and the file keeps it.
+    body = '{"ro": "prima\\nlinie\\n"}\n'
+    client.put("/api/assets", json={"path": "traduceri/modu-ch01/x.json", "content": body})
+    assert (package / "x.json").read_bytes().decode("utf-8") == body
+
+
 def test_a_parked_task_reports_what_it_is_waiting_on(client):
     """Rows carry durable state; what the agent is parked on is in the process."""
     import asyncio

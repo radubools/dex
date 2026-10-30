@@ -1887,7 +1887,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "kind": "file",
             "path": _rel(config, target),
             "ext": target.suffix.lstrip("."),
-            "content": target.read_text(encoding="utf-8", errors="replace"),
+            # Decoded from the bytes, not `read_text`: that would turn every
+            # CRLF into LF on the way out, so a widget that saved a file back
+            # would silently rewrite its line endings, and the host could not
+            # tell a re-read of its own save from someone else's change.
+            "content": target.read_bytes().decode("utf-8", errors="replace"),
         }
 
     @app.put("/api/assets", dependencies=guard)
