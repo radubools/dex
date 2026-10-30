@@ -10,19 +10,36 @@ const PERIODS = [
 ]
 
 const GROUPS = [
+  { id: 'skill', label: 'Skill' },
   { id: 'model', label: 'Model' },
   { id: 'project', label: 'Project' },
   { id: 'state', label: 'Outcome' },
 ]
 
 /** Distinct enough at a glance, and readable on the dark background. */
-const COLORS = ['#7dd3fc', '#4ade80', '#fbbf24', '#f87171', '#c4b5fd', '#67e8f9']
+const COLORS = ['#7dd3fc', '#4ade80', '#fbbf24', '#f87171', '#c4b5fd', '#67e8f9', '#f9a8d4', '#a3e635']
+
+/** Output is split so the bars add up: reasoning is billed as part of it. */
+const TOKEN_KINDS: { name: string; of: (p: CostPoint) => number }[] = [
+  { name: 'Input', of: (p) => p.input },
+  { name: 'Cache read', of: (p) => p.cacheRead },
+  { name: 'Cache write', of: (p) => p.cacheWrite },
+  { name: 'Output', of: (p) => Math.max(0, p.output - p.thinking) },
+  { name: 'Reasoning', of: (p) => p.thinking },
+]
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`)
 
+const count = (n: number) =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(2)}B`
+  : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
+  : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
+  : String(Math.round(n))
+
 export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack?: () => void }) {
   const [period, setPeriod] = useState('week')
-  const [group, setGroup] = useState('model')
+  const [metric, setMetric] = useState<'cost' | 'tokens'>('cost')
+  const [group, setGroup] = useState('skill')
   const [granularity, setGranularity] = useState('day')
   const [data, setData] = useState<CostsResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -35,7 +52,12 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
     return () => { live = false }
   }, [period, granularity, group])
 
-  const chart = useMemo(() => buildChart(data?.series ?? []), [data])
+  const chart = useMemo(
+    () => (metric === 'cost' ? buildChart(data?.series ?? []) : buildTokenChart(data?.series ?? [])),
+    [data, metric],
+  )
+  const breakdown = useMemo(() => buildBreakdown(data?.series ?? []), [data])
+  const format = metric === 'cost' ? money : count
 
   return (
     <section className="viewer costs" role="dialog" aria-label="Cost dashboard">
@@ -47,6 +69,10 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
 
       <div className="viewer-body">
         <div className="cost-controls">
+          <div className="segmented">
+            <button className={metric === 'cost' ? 'on' : ''} onClick={() => setMetric('cost')}>Cost</button>
+            <button className={metric === 'tokens' ? 'on' : ''} onClick={() => setMetric('tokens')}>Tokens</button>
+          </div>
           <div className="segmented">
             {PERIODS.map((p) => (
               <button
@@ -94,16 +120,18 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
               <p className="muted small">No spend recorded in this period.</p>
             ) : (
               <>
-                <StackedBars chart={chart} />
+                <StackedBars chart={chart} format={format} />
                 <ul className="legend">
                   {chart.series.map((name, i) => (
                     <li key={name}>
                       <span className="swatch" style={{ background: COLORS[i % COLORS.length] }} />
                       {name}
-                      <span className="legend-value">{money(chart.totals[name] ?? 0)}</span>
+                      <span className="legend-value">{format(chart.totals[name] ?? 0)}</span>
                     </li>
                   ))}
                 </ul>
+                <Breakdown rows={breakdown} />
+                <Coverage coverage={data.coverage} />
               </>
             )}
           </>
@@ -121,7 +149,27 @@ type Chart = {
   max: number
 }
 
+/** More series than colours reads as noise, so the smallest fold into Other. */
 function buildChart(points: CostPoint[]): Chart {
+  const spent: Record<string, number> = {}
+  for (const p of points) spent[p.series] = (spent[p.series] ?? 0) + p.cost
+  const shown = Object.keys(spent).sort((a, b) => spent[b] - spent[a]).slice(0, COLORS.length - 1)
+  return collect(
+    points.map((p) => ({
+      bucket: p.bucket,
+      series: Object.keys(spent).length < COLORS.length || shown.includes(p.series) ? p.series : 'Other',
+      value: p.cost,
+    })),
+  )
+}
+
+function buildTokenChart(points: CostPoint[]): Chart {
+  return collect(
+    points.flatMap((p) => TOKEN_KINDS.map((k) => ({ bucket: p.bucket, series: k.name, value: k.of(p) }))),
+  )
+}
+
+function collect(points: { bucket: string; series: string; value: number }[]): Chart {
   const buckets: string[] = []
   const series: string[] = []
   const values: Record<string, Record<string, number>> = {}
@@ -131,8 +179,8 @@ function buildChart(points: CostPoint[]): Chart {
     if (!buckets.includes(p.bucket)) buckets.push(p.bucket)
     if (!series.includes(p.series)) series.push(p.series)
     values[p.bucket] = values[p.bucket] ?? {}
-    values[p.bucket][p.series] = (values[p.bucket][p.series] ?? 0) + p.cost
-    totals[p.series] = (totals[p.series] ?? 0) + p.cost
+    values[p.bucket][p.series] = (values[p.bucket][p.series] ?? 0) + p.value
+    totals[p.series] = (totals[p.series] ?? 0) + p.value
   }
   const max = Math.max(
     ...buckets.map((b) => Object.values(values[b]).reduce((a, c) => a + c, 0)),
@@ -141,8 +189,60 @@ function buildChart(points: CostPoint[]): Chart {
   return { buckets, series, values, totals, max }
 }
 
+type Row = { name: string; cost: number; input: number; cached: number; output: number; thinking: number }
+
+function buildBreakdown(points: CostPoint[]): Row[] {
+  const rows: Record<string, Row> = {}
+  for (const p of points) {
+    const r = (rows[p.series] ??= { name: p.series, cost: 0, input: 0, cached: 0, output: 0, thinking: 0 })
+    r.cost += p.cost
+    r.input += p.input
+    r.cached += p.cacheRead + p.cacheWrite
+    r.output += Math.max(0, p.output - p.thinking)
+    r.thinking += p.thinking
+  }
+  return Object.values(rows).sort((a, b) => b.cost - a.cost)
+}
+
+function Breakdown({ rows }: { rows: Row[] }) {
+  return (
+    <div className="chart-scroll">
+      <table className="cost-table">
+        <thead>
+          <tr><th /><th>Cost</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.name}>
+              <th scope="row">{r.name}</th>
+              <td>{money(r.cost)}</td>
+              <td>{count(r.input)}</td>
+              <td>{count(r.cached)}</td>
+              <td>{count(r.output)}</td>
+              <td>{count(r.thinking)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** Old spend has no exact record: say how much, instead of implying it does. */
+function Coverage({ coverage }: { coverage: CostsResponse['coverage'] }) {
+  const { spend, with_tokens: tokens, inferred } = coverage
+  if (spend <= 0) return null
+  const share = (n: number) => `${Math.round((n / spend) * 100)}%`
+  return (
+    <p className="muted small">
+      Tokens known for {share(tokens)} of this spend.
+      {inferred > 0 && ` ${share(inferred)} was attributed afterwards from history, so its skills are a best guess.`}
+    </p>
+  )
+}
+
 /** Plain SVG: a chart library would be a large dependency for one view. */
-function StackedBars({ chart }: { chart: Chart }) {
+function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => string }) {
   const height = 180
   const gap = 4
   const width = Math.max(chart.buckets.length * 28, 260)
@@ -175,7 +275,7 @@ function StackedBars({ chart }: { chart: Chart }) {
                     fill={COLORS[si % COLORS.length]}
                     rx="2"
                   >
-                    <title>{`${label(bucket)} · ${name}: ${money(value)}`}</title>
+                    <title>{`${label(bucket)} · ${name}: ${format(value)}`}</title>
                   </rect>
                 )
               })}

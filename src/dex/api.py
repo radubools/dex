@@ -1007,6 +1007,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         return {
             "totals": await store.totals(),
             "series": await store.series(period, granularity, group),
+            "coverage": await store.coverage(period),
             "period": period,
             "granularity": granularity,
             "group": group,

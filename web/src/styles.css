@@ -940,6 +940,10 @@ body.resizing iframe { pointer-events: none; }
 .segmented button:last-child { border-radius: 0 7px 7px 0; }
 
 .chart-scroll { overflow-x: auto; padding-bottom: 4px; }
+.cost-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cost-table th, .cost-table td { padding: 4px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.cost-table thead th { font-weight: 500; color: var(--muted); }
+.cost-table tbody th { font-weight: 400; text-align: left; }
 .cost-chart .grid { stroke: var(--line); stroke-width: 1; }
 .cost-chart .tick { fill: var(--muted); font-size: 9px; text-anchor: middle; }
 

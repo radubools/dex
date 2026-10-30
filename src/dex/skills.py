@@ -35,6 +35,7 @@ import io
 import json
 import os
 import logging
+import re
 import shutil
 import sys
 import tarfile
@@ -1198,3 +1199,50 @@ def import_archive(workspace: Path, data: bytes) -> Imported:
         shutil.rmtree(landing, ignore_errors=True)
         raise
     return Imported(skill=skill, fresh=True)
+
+
+#: Tools whose input says which file or command they touch, and the field that says so.
+_ATTRIBUTED_TOOLS = {
+    "Read": "file_path", "Write": "file_path", "Edit": "file_path",
+    "Bash": "command", "Glob": "path", "Grep": "path",
+}
+_SKILL_PATH = re.compile(r"skills/([A-Za-z0-9_-]+)/")
+_UTILS_IMPORT = re.compile(r"from\s+utils(?:\.(\w+))?\s+import\s+([\w, ]+)|utils\.(\w+)")
+
+
+@dataclass(frozen=True)
+class Attribution:
+    """Which skill a tool call is using.
+
+    dex has no "use a skill" call: a task reads a `SKILL.md` and imports helpers
+    from `utils/`, so that is what is looked for. `modules` holds only helpers
+    exactly one skill ships, because a shared name proves nothing.
+    """
+
+    names: frozenset[str]
+    modules: dict[str, str]
+
+    def find(self, tool: str, tool_input: dict[str, Any] | None) -> list[str]:
+        """The skills one tool call touches, in the order it names them."""
+        field_name = _ATTRIBUTED_TOOLS.get(tool)
+        text = (tool_input or {}).get(field_name) if field_name else None
+        if not isinstance(text, str):
+            return []
+        found = [m for m in _SKILL_PATH.findall(text) if m in self.names]
+        for match in _UTILS_IMPORT.finditer(text):
+            for word in re.split(r"[, ]+", " ".join(g for g in match.groups() if g)):
+                if word in self.modules:
+                    found.append(self.modules[word])
+        return list(dict.fromkeys(found))
+
+
+def attribution(workspace: Path) -> Attribution:
+    owners: dict[str, set[str]] = {}
+    names: set[str] = set()
+    for skill in all_skills(workspace):
+        names.add(skill.name)
+        for module in (skill.path / "utils").glob("*.py"):
+            if module.stem != "__init__":
+                owners.setdefault(module.stem, set()).add(skill.name)
+    modules = {m: next(iter(o)) for m, o in owners.items() if len(o) == 1}
+    return Attribution(frozenset(names), modules)
