@@ -220,6 +220,44 @@ def test_assets_are_confined_to_the_root(client):
         assert client.get("/api/assets", params={"path": path}).status_code in (403, 404)
 
 
+def test_a_widget_can_write_a_text_file_beside_what_it_opened(client):
+    """`PUT /api/assets` is confined exactly as the reads are: inside the root,
+    into a directory that already exists, text only."""
+    root: Path = client.config.assets_dir  # type: ignore[attr-defined]
+    package = root / "traduceri" / "modu-ch01"
+    package.mkdir(parents=True, exist_ok=True)
+
+    written = client.put(
+        "/api/assets", json={"path": "traduceri/modu-ch01/x.txt", "content": "hi ☃"}
+    )
+    assert written.status_code == 200, written.text
+    assert written.json() == {"ok": True, "bytes": len("hi ☃".encode())}
+    assert (package / "x.txt").read_text(encoding="utf-8") == "hi ☃"
+    read = client.get("/api/assets", params={"path": "traduceri/modu-ch01/x.txt"}).json()
+    assert read["content"] == "hi ☃"
+    # Nothing of the atomic write is left behind.
+    assert [p.name for p in package.iterdir()] == ["x.txt"]
+
+    # Overwriting replaces the whole file.
+    client.put("/api/assets", json={"path": "traduceri/modu-ch01/x.txt", "content": "bye"})
+    assert (package / "x.txt").read_text() == "bye"
+
+    # Escaping the root, a parent that does not exist, and the root itself.
+    for path in ["../x.txt", "traduceri/modu-ch01/../../../x.txt", "/etc/x.txt"]:
+        response = client.put("/api/assets", json={"path": path, "content": "no"})
+        assert 400 <= response.status_code < 500, (path, response.status_code)
+    missing = client.put(
+        "/api/assets", json={"path": "traduceri/no-such-package/x.txt", "content": "no"}
+    )
+    assert missing.status_code == 404
+    assert not (root / "traduceri" / "no-such-package").exists()
+    assert client.put("/api/assets", json={"path": "x.txt", "content": "no"}).status_code == 403
+    assert not (root / "x.txt").exists()
+    # Binary never goes through here.
+    binary = client.put("/api/assets", json={"path": "traduceri/modu-ch01/x.gif", "content": "no"})
+    assert binary.status_code == 415
+
+
 def test_a_parked_task_reports_what_it_is_waiting_on(client):
     """Rows carry durable state; what the agent is parked on is in the process."""
     import asyncio

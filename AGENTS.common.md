@@ -85,6 +85,7 @@ export async function mount(el: HTMLElement, ctx: Ctx): Promise<() => void> {
   // ctx.theme      'dark' | 'light'
   // ctx.fetchAsset(name)     a sibling file, as text
   // ctx.fetchAssetUrl(name)  a sibling binary, as a URL you can put in <video>
+  // ctx.saveAsset(name, text)  write a sibling text file; Promise<void>
   el.replaceChildren(/* whatever you build */)
   return () => { /* tear down: listeners, timers, GPU contexts */ }
 }
@@ -95,6 +96,17 @@ The sandbox is not a formality. The frame has an opaque origin, so `fetch`,
 tries will get `TypeError: Failed to fetch`. Ask for files through `ctx`
 instead; the host fetches them, and it will only give you files beside the one
 you were opened with.
+
+Writing follows the same rule. `ctx.saveAsset(path, content)` resolves `path`
+against the directory of the file you opened (`'notes.txt'`, `'./x.json'`, or
+the opened file's own name to edit it in place) and rejects with `outside this
+package` for anything that leaves it, `'../other/x.txt'` included. The directory
+has to exist already; the file need not. Content is UTF-8 text only — the host
+writes it whole and atomically through `PUT /api/assets`, so a reader sees the
+old file or the new one. The promise resolves once the file is on disk and
+rejects with the server's reason otherwise. Saving the file you are showing does
+not reload your frame: the host recognises the change as yours and leaves the
+editor alone. A change made by anything else — a task re-running — still does.
 
 ### Where it goes
 

@@ -367,6 +367,16 @@ export const readAsset = (path: string, match?: string): Promise<AssetResponse> 
     throw error
   })
 
+/**
+ * Write one text file inside the assets root. The server confines the path the
+ * way `readAsset` is confined, and the parent directory has to exist already.
+ */
+export const writeAsset = (path: string, content: string) =>
+  request<{ ok: boolean; bytes: number }>('/api/assets', {
+    method: 'PUT',
+    body: JSON.stringify({ path, content }),
+  })
+
 /** Binary assets (the generated GIFs) are loaded by the browser directly. */
 /**
  * Every generated package in a project, for the library list.

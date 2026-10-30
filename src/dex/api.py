@@ -7,6 +7,8 @@ import contextlib
 import json
 import logging
 import mimetypes
+import os
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -157,6 +159,13 @@ class ThreadCreateRequest(BaseModel):
 class WidgetResolveRequest(BaseModel):
     #: Asset paths, each relative to the assets root (project first).
     paths: list[str] = Field(default_factory=list, max_length=2000)
+
+
+class AssetWriteRequest(BaseModel):
+    #: Relative to the assets root (project first), like `GET /api/assets`.
+    path: str = Field(min_length=1)
+    #: UTF-8 text. Binary never goes through here.
+    content: str
 
 
 class ProjectCreateRequest(BaseModel):
@@ -1880,6 +1889,64 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "ext": target.suffix.lstrip("."),
             "content": target.read_text(encoding="utf-8", errors="replace"),
         }
+
+    @app.put("/api/assets", dependencies=guard)
+    async def write_asset(
+        body: AssetWriteRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
+        """Write one text file inside the assets root.
+
+        The one way a widget gets something onto disk: the host resolves the
+        path beside the file the widget opened, and this end confines it again
+        to the caller's projects and the assets root, the same way the reads do.
+        The parent directory has to exist already — a widget edits a package, it
+        does not lay out new ones — but the file itself may be new.
+        """
+        _check_asset_path(access, body.path)
+        if body.path.endswith("/"):
+            raise HTTPException(400, "not a file")
+        wanted = PurePosixPath(body.path.strip("/"))
+        name = wanted.name
+        if name in ("", ".", ".."):
+            raise HTTPException(400, "not a file")
+        # `_resolve` 404s on anything that does not exist yet, so the parent is
+        # what gets resolved: it must exist, and the new name is appended after.
+        parent = _resolve(config, str(wanted.parent) if wanted.parent != PurePosixPath(".") else "")
+        if not parent.is_dir():
+            raise HTTPException(404, "parent directory not found")
+        if parent == config.assets_dir.resolve():
+            # Projects are directories here; a file at the root is nobody's.
+            raise HTTPException(403, "path is outside any project")
+        target = parent / name
+        if target.suffix not in TEXT_SUFFIXES:
+            raise HTTPException(415, f"{target.suffix or 'that'} is not a text file")
+        if target.is_dir():
+            raise HTTPException(409, "a directory with that name exists")
+        data = body.content.encode("utf-8")
+        if len(data) > 2_000_000:
+            raise HTTPException(413, "file too large")
+
+        def write() -> None:
+            # A temp file beside the target, then one rename: a reader (the
+            # viewer, a running task) sees the old file or the new one, never
+            # half of either. The dot prefix keeps the listing and the watcher's
+            # artifact filter from showing it while it exists.
+            fd, tmp = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=parent)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, target)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+
+        await asyncio.to_thread(write)
+        # The asset watcher sees the rename like any other write and reports it
+        # on the event stream, so nothing is announced from here.
+        return {"ok": True, "bytes": len(data)}
 
     @app.get("/api/packages", dependencies=guard)
     async def list_packages(

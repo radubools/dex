@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { readAsset, type WidgetInfo } from '../api'
+import { readAsset, writeAsset, type WidgetInfo } from '../api'
 
 /**
  * Runs a project widget in a sandboxed iframe.
@@ -18,7 +18,9 @@ import { readAsset, type WidgetInfo } from '../api'
  * nothing for it to reach.
  *
  * Everything it needs arrives by `postMessage`, and every file it asks for is
- * fetched by the host, which is where authorisation lives.
+ * fetched by the host, which is where authorisation lives. The same goes the
+ * other way: a widget that edits its file saves through the host, which writes
+ * only beside the file the widget was opened with.
  */
 
 /** Base64 of a byte array, in chunks small enough to spread safely. */
@@ -31,12 +33,25 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+/**
+ * A widget's path, resolved against the directory of the file it opened, or
+ * null when it would leave that directory. `opened` and the result are both
+ * relative to the assets root.
+ */
+function resolveSibling(opened: string, wanted: string): string | null {
+  const base = opened.split('/').slice(0, -1).join('/')
+  const joined = `${base}/${wanted}`.replace(/\/+/g, '/')
+  const normalised = new URL(joined, 'file:///').pathname.slice(1)
+  return normalised.startsWith(`${base}/`) ? normalised : null
+}
+
 /** What the frame may ask the host for, and what the host sends back. */
 type FromWidget =
   | { type: 'ready' }
   | { type: 'error'; message: string }
   | { type: 'height'; height: number }
   | { type: 'fetch'; id: string; path: string; binary?: boolean }
+  | { type: 'save'; id: string; path: string; content: string }
 
 const BOOTSTRAP = (code: string, theme: string) => `<!doctype html>
 <html data-theme="${theme}">
@@ -82,10 +97,21 @@ const fetchAssetUrl = async (path) => {
   return URL.createObjectURL(new Blob([bytes]))
 }
 
+/**
+ * Write a text file beside the one this widget opened. Resolves once the host
+ * has written it, rejects with the host's reason otherwise -- a path outside
+ * the package, a directory that does not exist, a server error.
+ */
+const saveAsset = (path, content) => new Promise((resolve, reject) => {
+  const id = String(++counter)
+  pending.set(id, { resolve: () => resolve(), reject })
+  send({ type: 'save', id, path, content: String(content) })
+})
+
 window.addEventListener('message', (event) => {
   const msg = event.data
   if (!msg || typeof msg !== 'object') return
-  if (msg.type === 'asset') {
+  if (msg.type === 'asset' || msg.type === 'saved') {
     const waiter = pending.get(msg.id)
     if (!waiter) return
     pending.delete(msg.id)
@@ -101,7 +127,7 @@ try {
   const mod = await import('data:text/javascript;base64,' + "${code}")
   if (typeof mod.mount !== 'function') throw new Error('widget has no exported mount(el, ctx)')
   const ctx = JSON.parse(document.getElementById('ctx').textContent)
-  await mod.mount(document.getElementById('root'), { ...ctx, fetchAsset, fetchAssetUrl })
+  await mod.mount(document.getElementById('root'), { ...ctx, fetchAsset, fetchAssetUrl, saveAsset })
   send({ type: 'ready' })
   report()
 } catch (err) {
@@ -145,9 +171,31 @@ export function WidgetHost({
   fallback.current = onFallback
   const ready = useRef(onReady)
   ready.current = onReady
+  // What the widget has written to the file it is showing since the frame was
+  // last built. A save lands on disk, the watcher reports it, the viewer
+  // re-fetches and hands a new `text` down -- and rebuilding the frame on that
+  // would destroy an editor in the middle of typing, over a change it made
+  // itself. So a `text` that matches one of these is ignored. A set rather
+  // than the last save alone: the viewer throttles its refresh, so the read
+  // that arrives may be an earlier save than the latest. Anything else on disk
+  // -- a task re-running the pipeline -- still rebuilds as before.
+  const ownSaves = useRef<{ path: string; contents: Set<string> }>({ path, contents: new Set() })
+  const builtFor = useRef<{ url: string; path: string } | null>(null)
 
   // Build the document: fetch the bundle as text, inline it, hand over the file.
   useEffect(() => {
+    const built = builtFor.current
+    if (
+      built &&
+      built.url === widget.url &&
+      built.path === path &&
+      ownSaves.current.path === path &&
+      ownSaves.current.contents.has(text)
+    ) {
+      return
+    }
+    builtFor.current = { url: widget.url, path }
+    ownSaves.current = { path, contents: new Set() }
     let live = true
     setFailed(null)
     setSrcDoc(null)
@@ -203,21 +251,41 @@ export function WidgetHost({
         setFailed(msg.message)
         // A failure is as finished as it gets: lift any placeholder over it.
         ready.current?.()
+      } else if (msg.type === 'save') {
+        // Writes are confined exactly as reads are: beside the opened file,
+        // and nowhere else. The server checks the path again on its side.
+        const reply = (error?: string) =>
+          frame.current?.contentWindow?.postMessage({ type: 'saved', id: msg.id, error }, '*')
+        const normalised = resolveSibling(path, msg.path)
+        if (normalised === null) {
+          reply('outside this package')
+          return
+        }
+        try {
+          await writeAsset(normalised, msg.content)
+          // Remembered so the refresh this write provokes does not rebuild
+          // the frame (see `ownSaves`). Only the opened file matters: a
+          // sibling changing never reaches `text`.
+          if (normalised === path && ownSaves.current.path === path) {
+            ownSaves.current.contents.add(msg.content)
+          }
+          reply()
+        } catch (err) {
+          reply(err instanceof Error ? err.message : String(err))
+        }
       } else if (msg.type === 'fetch') {
         // The widget names a path; the host resolves it *relative to the file
         // it was given* and refuses to leave that directory. The frame has no
         // credentials of its own, so this is the only way it reaches anything,
         // and confining it here is what keeps a widget from reading the rest of
         // the project.
-        const base = path.split('/').slice(0, -1).join('/')
-        const wanted = `${base}/${msg.path}`.replace(/\/+/g, '/')
-        const normalised = new URL(wanted, 'file:///').pathname.slice(1)
+        const normalised = resolveSibling(path, msg.path)
         const reply = (body: string | null, error?: string) =>
           frame.current?.contentWindow?.postMessage(
             { type: 'asset', id: msg.id, body, error },
             '*',
           )
-        if (!normalised.startsWith(base)) {
+        if (normalised === null) {
           reply(null, 'outside this package')
           return
         }
