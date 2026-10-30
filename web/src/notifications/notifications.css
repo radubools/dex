@@ -61,10 +61,3 @@
   border: 1px solid var(--line); font-size: 10px; color: var(--muted);
 }
 .notif-dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
-
-/* A phone's first header row is full (styles.css): the bell joins the title's
-   row, at its right end, rather than pushing Settings onto a third. */
-@media (max-width: 560px) {
-  .topbar .notif-anchor { order: 2; }
-  .topbar:has(.notif-anchor) .topbar-title { flex-basis: calc(100% - 54px); }
-}

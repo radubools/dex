@@ -690,7 +690,7 @@ export default function App() {
               'dex'}
           </span>
           <button
-            className="ghost-btn small icon-only"
+            className="ghost-btn small icon-only guide-btn"
             onClick={() => openPane('guide')}
             // `title` is the hover description on a pointer; `aria-label` is
             // what a screen reader and a touch device get, where hover does

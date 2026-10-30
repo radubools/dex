@@ -109,7 +109,7 @@ export function ProjectPicker({
   )
 
   return (
-    <div className="menu-anchor">
+    <div className="menu-anchor project-anchor">
       <button
         ref={trigger}
         className="menu-trigger project-trigger"
@@ -118,6 +118,7 @@ export function ProjectPicker({
         onClick={() => setOpen((v) => !v)}
         title="Switch project"
       >
+        <span className="project-label">Project:</span>
         <span className="project-current">{selected?.name ?? '…'}</span>
         <span aria-hidden="true">▾</span>
       </button>

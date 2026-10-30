@@ -121,41 +121,41 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 /* The label is a lot of width on a phone; the switch alone carries the state. */
 @media (max-width: 520px) { .auto-label { display: none; } }
 
-/* Six controls do not fit across a phone. Wrapping puts the drawer button,
-   project and view toggle on the first line, and gives the title its own line
-   with the buttons that act on it — rather than crushing the title to nothing
-   and pushing Settings off-screen. */
+/* The controls and the project do not fit across a phone, and the project's
+   name is the one thing here whose width nobody controls. So on a phone the
+   fixed-size controls take the first row, navigation on the left and settings
+   on the far edge, and the second row is the project on the left with the
+   title centred in whatever it leaves. */
 @media (max-width: 560px) {
   .topbar {
     flex-wrap: wrap;
-    row-gap: 8px;
-    /* Tighter than the desktop 10px: the controls only fit one row with it.
-       At 375px they need 353px of the 359px this leaves — six to spare. */
+    /* Doubled by the empty line the break below sits on. */
+    row-gap: 4px;
     column-gap: 5px;
     padding-left: 6px;
     padding-right: 6px;
   }
+  /* Flexbox only wraps when a row overflows, and a short project name would
+     not. This is the row break, whatever the names and the screen. */
+  .topbar::before { content: ''; order: 1; flex: 0 0 100%; height: 0; }
+  .topbar .project-anchor { order: 2; flex: none; }
   .topbar-title {
-    /* `order` puts the title after every control whatever the source order,
-       and a 100% basis makes it take a row to itself — otherwise it wrapped
-       and dragged the buttons to its right down with it. */
-    order: 1;
-    flex: 1 0 100%;
+    order: 2;
+    flex: 1 1 0;
+    /* Two lines at most: a thread title can run to a paragraph, and the
+       header should not take the screen from the conversation under it. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
     white-space: normal;
-    overflow: visible;
     overflow-wrap: anywhere;
-    /* It owns the row, so it reads centred rather than hugging the left. */
     text-align: center;
   }
-  /* Settings is the last control, pushed to the far edge so the row reads as
-     navigation on the left and settings on the right. */
-  .topbar > *:last-child { margin-left: auto; }
-  /* The project name gives way before a control is pushed onto a new row, and
-     it has to be a hard cap rather than a share of the viewport: flexbox picks
-     line breaks from each item's own width before it shrinks anything, so a
-     long name like "Algorithms" pushed Settings onto a third row. The full
-     name is still in the dropdown. */
-  .topbar .project-trigger { max-width: 144px; }
+  /* The guide leads the right-hand group, so settings ends at the far edge. */
+  .topbar .guide-btn { margin-left: auto; }
+  /* Capped so a long project name leaves the title room. The full name is
+     still in the dropdown. */
+  .topbar .project-trigger { max-width: min(58vw, 240px); }
 }
 
 /* Icon-only header buttons. The label moves into `title`/`aria-label` so the
@@ -165,6 +165,19 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-width: 44px; min-height: 40px; padding: 0 10px;
   font-size: 15px; line-height: 1;
+}
+/* Four tabs and four buttons in a phone's first row: 343px at these widths,
+   so it holds down to a 355px screen. After the rule above, which it narrows. */
+@media (max-width: 560px) {
+  .topbar .icon-btn.menu, .view-toggle button, .topbar button.icon-only {
+    min-width: 40px; padding-left: 6px; padding-right: 6px;
+  }
+}
+@media (max-width: 355px) {
+  .topbar { column-gap: 3px; }
+  .topbar .icon-btn.menu, .view-toggle button, .topbar button.icon-only {
+    min-width: 34px; padding-left: 2px; padding-right: 2px;
+  }
 }
 
 /* ---------------- threads ---------------- */
@@ -1202,6 +1215,7 @@ body.resizing iframe { pointer-events: none; }
 /* ---------------- projects ---------------- */
 
 .project-trigger { gap: 6px; max-width: 40vw; }
+.project-label { flex: none; color: var(--muted); }
 .project-current {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text);
