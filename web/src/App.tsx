@@ -643,26 +643,6 @@ export default function App() {
           <button className="icon-btn menu" onClick={() => setDrawerOpen(true)} aria-label="Threads — every conversation in this project">
             ☰
           </button>
-          <ProjectPicker
-            projects={projects}
-            current={project}
-            onSelect={(slug) => {
-              go()
-              setProject(slug)
-              setActiveTaskId(null)
-              setViewing(null)
-              setShowGuide(false)
-              loaded.current.clear()
-            }}
-            onCreate={async (name) => {
-              const created = await createProject(name)
-              setProjects((all) => [...all, created])
-              go()
-              setProject(created.slug)
-            }}
-            canCreate={mayManageProjects}
-          />
-
           {/* One toggle for what the canvas shows. Icons rather than words so
               the whole header fits a phone; the name lives in `title` for a
               pointer and `aria-label` for everyone else. */}
@@ -684,11 +664,35 @@ export default function App() {
               </button>
             ))}
           </div>
-          <span className="topbar-title">
-            {VIEWS.find((v) => v.key === view && v.key !== 'chat')?.label ??
-              threads.find((t) => t.id === threadId)?.title ??
-              'dex'}
-          </span>
+          {/* Project and title. On a wide screen this box is transparent and
+              `order` keeps the project before the view toggle; on a phone it
+              is the second row (styles.css). */}
+          <div className="topbar-context">
+            <ProjectPicker
+              projects={projects}
+              current={project}
+              onSelect={(slug) => {
+                go()
+                setProject(slug)
+                setActiveTaskId(null)
+                setViewing(null)
+                setShowGuide(false)
+                loaded.current.clear()
+              }}
+              onCreate={async (name) => {
+                const created = await createProject(name)
+                setProjects((all) => [...all, created])
+                go()
+                setProject(created.slug)
+              }}
+              canCreate={mayManageProjects}
+            />
+            <span className="topbar-title">
+              {VIEWS.find((v) => v.key === view && v.key !== 'chat')?.label ??
+                threads.find((t) => t.id === threadId)?.title ??
+                'dex'}
+            </span>
+          </div>
           <button
             className="ghost-btn small icon-only guide-btn"
             onClick={() => openPane('guide')}

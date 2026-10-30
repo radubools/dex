@@ -85,6 +85,12 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   flex: 1; min-width: 0; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* One row on a wide screen: the box adds nothing, and these put the drawer
+   button and project back ahead of the view toggle that precedes them in the
+   source. */
+.topbar-context { display: contents; }
+.topbar .icon-btn.menu { order: -2; }
+.topbar .project-anchor { order: -1; }
 
 /* ---------------- auto-approve switch ---------------- */
 
@@ -129,19 +135,22 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 @media (max-width: 560px) {
   .topbar {
     flex-wrap: wrap;
-    /* Doubled by the empty line the break below sits on. */
-    row-gap: 4px;
+    row-gap: 8px;
     column-gap: 5px;
     padding-left: 6px;
     padding-right: 6px;
   }
-  /* Flexbox only wraps when a row overflows, and a short project name would
-     not. This is the row break, whatever the names and the screen. */
-  .topbar::before { content: ''; order: 1; flex: 0 0 100%; height: 0; }
-  .topbar .project-anchor { order: 2; flex: none; }
+  /* The second row. Equal outer columns keep the title centred on the page;
+     the first can't go below the project's width, so a wide project pushes
+     the title right only as far as it has to, and a long title takes the
+     room the last column would have kept. */
+  .topbar-context {
+    order: 1; flex: 0 0 100%; min-width: 0;
+    display: grid; align-items: center; column-gap: 5px;
+    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(0, 1fr);
+  }
+  .topbar .project-anchor { justify-self: start; }
   .topbar-title {
-    order: 2;
-    flex: 1 1 0;
     /* Two lines at most: a thread title can run to a paragraph, and the
        header should not take the screen from the conversation under it. */
     display: -webkit-box;
