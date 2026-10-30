@@ -229,9 +229,10 @@ function Breakdown({ rows }: { rows: Row[] }) {
 }
 
 /** Old spend has no exact record: say how much, instead of implying it does. */
-function Coverage({ coverage }: { coverage: CostsResponse['coverage'] }) {
+function Coverage({ coverage }: { coverage?: CostsResponse['coverage'] }) {
+  // An older server sends none: the page may be newer than the dex it talks to.
+  if (!coverage || coverage.spend <= 0) return null
   const { spend, with_tokens: tokens, inferred } = coverage
-  if (spend <= 0) return null
   const share = (n: number) => `${Math.round((n / spend) * 100)}%`
   return (
     <p className="muted small">

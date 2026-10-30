@@ -22,13 +22,13 @@ const fixture = {
 /** `COSTS_JSON` swaps in a dump of real responses, to look at the real thing. */
 const real = process.env.COSTS_JSON ? JSON.parse(readFileSync(process.env.COSTS_JSON, 'utf8')) : null
 
-async function open(page: Page) {
+async function open(page: Page, costs: unknown = fixture) {
   await page.route('**/api/**', (route) => {
     const url = new URL(route.request().url())
     const p = url.pathname
     const q = url.searchParams
     const body =
-      p === '/api/costs' ? (real ? real[`${q.get('period')}/${q.get('granularity')}/${q.get('group')}`] ?? fixture : fixture)
+      p === '/api/costs' ? (real ? real[`${q.get('period')}/${q.get('granularity')}/${q.get('group')}`] ?? costs : costs)
       : p === '/api/auth/me' ? { state: 'open', user: null, googleEnabled: false, passwordEnabled: false }
       : p === '/api/health' ? { ok: true, workspace: '', assetsDir: '', model: 'test', concurrency: 1 }
       : p === '/api/settings' ? { settings: { auto_approve: false }, costs: fixture.totals, tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0, visible: 0, counted: 0, with_cost: 0 }, models: [], efforts: [] }
@@ -62,4 +62,10 @@ test('spend breaks down by skill, tokens by kind', async ({ page }) => {
     await expect(panel.locator('.legend li', { hasText: kind })).toBeVisible()
   }
   if (process.env.COSTS_SHOTS) await page.screenshot({ path: `${process.env.COSTS_SHOTS}/tokens.png`, fullPage: true })
+})
+
+test('a server without the rollup still shows the panel', async ({ page }) => {
+  const { coverage: _, ...older } = fixture
+  await open(page, older)
+  await expect(page.getByRole('dialog', { name: 'Cost dashboard' }).getByRole('rowheader', { name: 'game-story' })).toBeVisible()
 })

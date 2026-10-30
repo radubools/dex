@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .config import Config
 from .models import Event, Task, TaskState
+from .store import CostStore
 from .threads import ThreadMessage
 
 PREFIX = "/api/game-chat"
@@ -380,7 +381,7 @@ def _chains(tasks: list[Task]) -> dict[str, list[Task]]:
     return chains
 
 
-def _summary(chat_id: str, members: list[Task]) -> dict[str, Any]:
+def _summary(chat_id: str, members: list[Task], costs: dict[str, float]) -> dict[str, Any]:
     first, last = members[0], members[-1]
     stamps = [x for t in members for x in (t.created_at, t.started_at, t.finished_at) if x]
     return {
@@ -391,7 +392,9 @@ def _summary(chat_id: str, members: list[Task]) -> dict[str, Any]:
         "activity": last.activity,
         "error": last.error,
         "attempts": len(members),
-        "costUsd": round(sum(t.cost_usd or 0 for t in members), 4),
+        # From the rollup: each attempt of a resumed session reports everything
+        # before it too, so `cost_usd` cannot be added up.
+        "costUsd": round(sum(costs.get(t.id, 0.0) for t in members), 4),
         "createdAt": first.created_at,
         "updatedAt": max(stamps) if stamps else first.created_at,
     }
@@ -450,7 +453,8 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
     async def list_chats(thread_id: str, entry: dict = Depends(access)) -> dict[str, Any]:
         await chats_thread(entry, thread_id)
         found = [t for t in await tasks.tasks.list(thread_id=thread_id, limit=10_000) if t.is_chat]
-        chats = [_summary(cid, m) for cid, m in _chains(found).items()]
+        costs = await CostStore(db).by_tasks([t.id for t in found])
+        chats = [_summary(cid, m, costs) for cid, m in _chains(found).items()]
         chats.sort(key=lambda c: c["updatedAt"], reverse=True)
         return {"project": entry["project"], "threadId": thread_id, "chats": chats}
 
@@ -533,7 +537,7 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         last = rows[-1]["seq"] if rows else since
         live = [tasks.merge_live(t) for t in members]
         return {
-            "chat": _summary(chat_id, live),
+            "chat": _summary(chat_id, live, await CostStore(db).by_tasks([t.id for t in live])),
             "attempts": [{"taskId": t.id, "attempt": t.attempt, "state": t.state.value} for t in live],
             "events": _merge(events),
             "last": last,
@@ -547,7 +551,8 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         if result is None or result is False:
             raise HTTPException(409, "the chat cannot do that in its current state")
         members = await chain(entry, chat_id)
-        return {"chat": _summary(chat_id, [tasks.merge_live(t) for t in members])}
+        live = [tasks.merge_live(t) for t in members]
+        return {"chat": _summary(chat_id, live, await CostStore(db).by_tasks([t.id for t in live]))}
 
     @router.post("/{project}/chats/{chat_id}/pause")
     async def pause(chat_id: str, entry: dict = Depends(access)) -> dict[str, Any]:

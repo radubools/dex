@@ -12,6 +12,7 @@ from dex.models import Task
 from dex.pricing import tokens
 from datetime import UTC, datetime
 
+from dex.game_chat import _summary
 from dex.store import CostStore, TaskStore
 
 #: The shape the agent's result actually reports, from a live probe.
@@ -132,3 +133,17 @@ async def test_naming_a_skill_merges_what_came_before_it(db):
 
     points = await CostStore(db).series("day", "hour", "skill")
     assert [(p["series"], p["cost"], p["input"]) for p in points] == [("game-story", 3.0, 7)]
+
+
+async def test_a_chat_costs_what_its_attempts_added_not_what_they_reported(db):
+    tasks = TaskStore(db)
+    first = await _task(tasks, "first")
+    second = await _task(tasks, "second")
+    # A resumed session reports everything before it too.
+    await tasks.set_cost(first.id, 3.0, estimate=False)
+    await tasks.set_cost(second.id, 5.0, estimate=False)
+    await tasks.add_usage(first.id, HOUR, "", 3.0, {})
+    await tasks.add_usage(second.id, HOUR, "", 2.0, {})
+
+    costs = await CostStore(db).by_tasks([first.id, second.id])
+    assert _summary("c", [first, second], costs)["costUsd"] == 5.0

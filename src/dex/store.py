@@ -972,6 +972,15 @@ class CostStore:
         )
         return dict(row)
 
+    async def by_tasks(self, task_ids: list[str]) -> dict[str, float]:
+        """What each task itself spent."""
+        rows = await self.db.pool.fetch(
+            """SELECT task_id, sum(cost_usd)::float8 AS cost FROM task_usage
+               WHERE task_id = ANY($1::text[]) GROUP BY task_id""",
+            task_ids,
+        )
+        return {row["task_id"]: row["cost"] for row in rows}
+
     async def by_thread(self, thread_id: str) -> float:
         """A thread costs what the tasks it started cost."""
         value = await self.db.pool.fetchval(
