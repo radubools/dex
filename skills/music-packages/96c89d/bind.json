@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "widget": "music-score",
+      "extensions": [
+        ".score.json"
+      ]
+    }
+  ]
+}
