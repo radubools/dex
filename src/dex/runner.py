@@ -44,7 +44,7 @@ from . import local_sources, skills, surveyor, widgets
 from .threads import ThreadMessage
 from .permissions import PermissionPolicy
 from .prompts import (
-    DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM,
+    DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM, power_prompt, power_system,
     design_prompt, generation_prompt, survey_prompt,
 )
 from .usage import is_usage_limit_error, limit_pause_note
@@ -610,6 +610,29 @@ class TaskRunner:
             return reply({"started": graph.describe(await graph.store.status(child.id))})
 
         @tool(
+            "start_power_task",
+            "Start a power task: a code change this task cannot make itself, to dex (its server, UI "
+            "or skills) or to any directory outside this project (a game's or engine's code, tools, "
+            "tests). It runs in the project's Power thread and may change code anywhere, and it makes "
+            "no content: no packages, stories, models or sounds. Use it only when the work needs "
+            "such a change, and say exactly what must change, where if you know, why, and how to "
+            "tell it works. Every task spends the operator's usage. This task then depends on it, "
+            "as with start_task.",
+            {"type": "object", "properties": {
+                "title": {"type": "string", "description": "A short title for the change."},
+                "brief": {"type": "string", "description": "The full brief, as the task will read it."},
+            }, "required": ["title", "brief"]},
+        )
+        async def start_power_task(args: dict[str, Any]) -> dict[str, Any]:
+            try:
+                child = await graph.spawn_power(self.task, title=str(args.get("title") or ""),
+                                                brief=str(args.get("brief") or ""))
+            except Refused as exc:
+                return reply(f"Refused. {exc}")
+            self.emit("text", text=f"Started the power task “{child.title}” ({child.slug}); this task now depends on it.")
+            return reply({"started": graph.describe(await graph.store.status(child.id))})
+
+        @tool(
             "continue_task",
             "Ask an existing task of this project for a change: a follow-up message to its latest "
             "attempt, which reruns it in the same package with the message added (once it finishes, "
@@ -684,7 +707,10 @@ class TaskRunner:
                  "your turn. " if conversation else "Parked. End your turn now, without further work. ")
                 + "dex resumes this session when they are done, with their results.")})
 
-        return [project_threads, find_tasks, start_task, continue_task, task_status, wait_for_tasks]
+        if self.task.is_power:
+            # It looks things up; it starts nothing, or it could have content made.
+            return [project_threads, find_tasks, task_status]
+        return [project_threads, find_tasks, start_task, start_power_task, continue_task, task_status, wait_for_tasks]
 
     async def _escalate(
         self, approval_id: str, tool_name: str, input_data: dict[str, Any], title: str | None
@@ -813,6 +839,8 @@ class TaskRunner:
             # game's pull installs it (design/18): it builds no packages itself.
             delegate_assets=self.task.is_chat,
             asset_dirs=tuple(root / "public" / "assets" for root in self._chat_game_roots()),
+            power=self.task.is_power,
+            assets_dir=self.config.assets_dir,
         )
         decide = self._with_diffs(policy.build())
         effort = await self.settings.effort() or self.config.effort
@@ -836,6 +864,7 @@ class TaskRunner:
                 "append": (
                     SURVEY_SYSTEM if self.task.is_survey
                     else DESIGN_SYSTEM if self.task.is_design
+                    else power_system(self.config.workspace) if self.task.is_power
                     else GENERATION_SYSTEM
                 ),
             },
@@ -926,6 +955,8 @@ class TaskRunner:
                 guide=payload["guide"],
                 history=payload["history"],
             )
+        elif self.task.is_power:
+            prompt = power_prompt(self.task.problem, self.task_dir, self.config.workspace)
         else:
             prompt = generation_prompt(
                 problem=self.task.problem,
@@ -1041,7 +1072,8 @@ class TaskRunner:
             # A clean exit is not the same thing as a result. Checked here and
             # not left to the operator's eye, because an empty package looks
             # exactly like a full one in a list of green rows.
-            elif (self.task.builds_package and not self.task.is_chat and not self._wrote_anything(before)
+            elif (self.task.builds_package and not self.task.is_chat and not self.task.is_power
+                  and not self._wrote_anything(before)
                   and not (woken and await self._woken_wrote())
                   and not (self.task.resumed_from and self._wrote_since_created())
                   and not await self._answered_notes()):

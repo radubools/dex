@@ -34,6 +34,8 @@ log = logging.getLogger(__name__)
 
 #: How many tasks one task may start or continue.
 MAX_DEPS = 50
+#: The project thread power tasks run in, made the first time one is asked for.
+POWER_THREAD = "Power"
 #: How deep the graph may go: a task this many levels below a waiter may not start more.
 MAX_DEPTH = 3
 #: Claim order (tasks.priority, highest first): a task woken because what it
@@ -197,6 +199,27 @@ class Dependencies:
         # It runs as the task that asked for it does (end-to-end tests on or off).
         child = await self.m.submit(brief, title=title, slug=slug, thread_id=th["id"], project=project,
                                     options=inherited(waiter))
+        await self.store.add(waiter.id, child.id, "started")
+        self._edge_event(waiter, child, "started")
+        await self._post(th["id"], f"Requested by the task “{waiter.title}” ({waiter.slug}), which waits for it.")
+        if self.m.announce is not None:
+            try:
+                await self.m.announce(child, "Started")
+            except Exception:
+                log.exception("could not announce %s", child.slug)
+        return child
+
+    async def spawn_power(self, waiter: Task, *, title: str, brief: str) -> Task:
+        """Start a power task in the project's Power thread; the waiter depends on it."""
+        if not (brief or "").strip():
+            raise Refused("the brief is empty")
+        if waiter.is_power:
+            raise Refused("a power task does its own code changes: it starts no tasks")
+        project = waiter.project or self.m.config.default_project
+        await self._check(waiter)
+        th = await self.resolve_thread(project, POWER_THREAD, create=True)
+        child = await self.m.submit(brief, title=title, slug=f"power-{title}"[:60], thread_id=th["id"],
+                                    project=project, scope="power", options=inherited(waiter))
         await self.store.add(waiter.id, child.id, "started")
         self._edge_event(waiter, child, "started")
         await self._post(th["id"], f"Requested by the task “{waiter.title}” ({waiter.slug}), which waits for it.")

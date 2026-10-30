@@ -321,6 +321,29 @@ file.
 """
 
 
+def power_system(workspace: Path) -> str:
+    """What a power task is told: the `power` skill's latest instructions."""
+    from . import skills  # noqa: PLC0415 -- skills imports nothing of this, but only this needs it
+
+    found = [s for s in skills.all_skills(workspace) if s.name == "power"]
+    guide = (found[-1].path / "SKILL.md").read_text() if found else ""
+    return (
+        "You are dex's power task: you make one code change, anywhere it is needed, and report "
+        "it. What other tasks are told about staying in their package does not apply to you; "
+        "the limits below do, and dex enforces them.\n\n" + guide
+    )
+
+
+def power_prompt(problem: str, task_dir: Path, workspace: Path) -> str:
+    """A power task's brief: the request, and where things are. No project guide: it makes no package."""
+    return (
+        f"{problem}\n\n---\nYour own directory, for your report and notes: `{task_dir}`\n"
+        f"dex's repository: `{workspace}`\n"
+        f"When you are done, write `{task_dir}/report.md`: what changed, where, how you tested "
+        "it, what you committed, and anything the requester must do next."
+    )
+
+
 def generation_prompt(
     *,
     problem: str,

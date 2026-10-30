@@ -6,6 +6,9 @@ auto-approves the work the task legitimately needs — reads anywhere in the
 workspace, writes confined to the task's own output directory, and a fixed set
 of build/test commands — and escalates anything else to the operator.
 
+A **power task** is the exception: it may change code anywhere and run any
+command, without asking, and it may never make content (see `_power_refusal`).
+
 One rule does not escalate: a write into **another task's package in the same
 project** is refused outright. Reading those packages is allowed and useful —
 a task matching a project's conventions should be able to look at what its
@@ -17,6 +20,7 @@ whatever that toggle says cannot be expressed as a question.
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 import uuid
 from collections.abc import Awaitable, Callable
@@ -98,6 +102,35 @@ DELEGATE = (
 ).format(puller=PULLER)
 
 
+#: What a power task may not write: besides package files, anything that is
+#: content rather than code.
+POWER_CONTENT_SUFFIXES = PACKAGE_SUFFIXES | {
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm", ".mov", ".pdf",
+}
+#: Text beside the packages in a project's directory: how its tasks work, not what they make.
+POWER_PROJECT_FILES = {"AGENTS.md", "skills.json"}
+#: What a power task may never run, however it is spelled. Its permission is
+#: for changing code: not for the operator's machine, the running dex, its
+#: database's contents or a remote's history.
+POWER_FORBIDDEN = (
+    (re.compile(r"(^|[\s;&|(])sudo\b"), "`sudo` changes the machine, not code"),
+    (re.compile(r"(^|[\s;&|(/])pm2\b"), "pm2 runs dex and the operator's other services"),
+    (re.compile(r"(^|[\s;&|(/])(kill|pkill|killall)\b"), "killing processes can take dex down"),
+    (re.compile(r"\b431[78]\b"), "ports 4317 and 4318 are the running dex's"),
+    (re.compile(r"\.venv/bin/dex\b"), "a second dex would fight the running one for its queue"),
+    (re.compile(r"\bgit\b.*\bpush\b.*(--force|\s-f\b)"), "a force-push rewrites shared history"),
+    (re.compile(r"\bgit\b.*\breset\b.*--hard"), "`git reset --hard` throws away uncommitted work"),
+    (re.compile(r"\bgit\b.*\bclean\b"), "`git clean` deletes untracked work"),
+    (re.compile(r"\brm\b.*\s(/|~|\$HOME)/?(\s|$)"), "that deletes a whole home or disk"),
+    (re.compile(r"\b(drop\s+(table|database|schema)|truncate\s+\w)", re.I), "that deletes dex's data"),
+)
+POWER_NO_CONTENT = (
+    "A power task changes code. It makes no content: no packages, stories, models, sounds, "
+    "images or captions, and nothing in a game's installed assets. Those are made by their "
+    "own tasks in their own threads; say in your report what the requester should ask them for."
+)
+
+
 class PermissionPolicy:
     """Builds the `can_use_tool` callback for one task."""
 
@@ -112,6 +145,8 @@ class PermissionPolicy:
         escalate: Callable[[str, str, dict[str, Any], str | None], Awaitable[str]],
         delegate_assets: bool = False,
         asset_dirs: tuple[Path, ...] = (),
+        power: bool = False,
+        assets_dir: Path | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.task_dir = task_dir.resolve()
@@ -136,6 +171,10 @@ class PermissionPolicy:
         #: installed assets, which only the game's pull writes).
         self.delegate_assets = delegate_assets
         self.asset_dirs = tuple(p.resolve() for p in asset_dirs)
+        #: A power task: code anywhere, no content (`_power_refusal`). Every
+        #: project's packages are under `assets_dir`.
+        self.power = power
+        self.assets_dir = assets_dir.resolve() if assets_dir else None
 
     def _within(self, raw: str | None, root: Path) -> bool:
         if not raw:
@@ -244,6 +283,8 @@ class PermissionPolicy:
         else a task might do outside its directory is a judgement call, and
         judgement calls belong to the operator.
         """
+        if self.power:
+            return self._power_refusal(tool_name, input_data)
         if self.delegate_assets:
             why = self._delegation_refusal(tool_name, input_data)
             if why is not None:
@@ -274,6 +315,41 @@ class PermissionPolicy:
             "package may be being written right now by the task that owns it."
         )
 
+    def _power_refusal(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
+        """What a power task may not do: everything else it does unasked.
+
+        Writes are checked by where they land and what they are. A shell
+        command can only be checked by what it says, so a script that writes a
+        package gets past this: the skill forbids it, this catches the plain cases.
+        """
+        if tool_name in WRITE_TOOLS:
+            target = self._resolved(_target_path(input_data))
+            if target is None:
+                return None
+            source = self.workspace / "src"
+            if target == source or source in target.parents:
+                return (f"`{target}` is the running dex: saving there reloads it, once per save, "
+                        "so the change arrives half made. Build in a worktree and merge once at the end (see your skill).")
+            if target.name in PACKAGE_FILES or target.suffix.lower() in POWER_CONTENT_SUFFIXES:
+                return f"`{target.name}` is content. {POWER_NO_CONTENT}"
+            if "public" in target.parts and "assets" in target.parts:
+                return f"`{target}` is a game's installed assets. {POWER_NO_CONTENT}"
+            inside = self.assets_dir and self.assets_dir in target.parents
+            own = target == self.task_dir or self.task_dir in target.parents
+            if inside and not own and target.name not in POWER_PROJECT_FILES:
+                return f"`{target}` is in dex's packages. {POWER_NO_CONTENT}"
+            return None
+        if tool_name == "Bash":
+            command = str(input_data.get("command", ""))
+            for pattern, why in POWER_FORBIDDEN:
+                if pattern.search(command):
+                    return f"Not this command: {why}."
+            if PULLER not in command:
+                hint = next((h for h in PACKAGE_COMMAND_HINTS if h in command), None)
+                if hint is not None:
+                    return f"This command touches packages (`{hint.strip('/(')}`). {POWER_NO_CONTENT}"
+        return None
+
     def _delegation_refusal(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
         """Why a chat may not do this itself: it is an asset task's work."""
         if tool_name in WRITE_TOOLS:
@@ -296,6 +372,8 @@ class PermissionPolicy:
 
     def _auto_reason(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
         """None means auto-approve; a string explains why a human is needed."""
+        if self.power:
+            return None
         if tool_name in READ_ONLY_TOOLS:
             return None
         if tool_name in ESCALATING_TOOLS:

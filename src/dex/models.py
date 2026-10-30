@@ -240,6 +240,16 @@ class Task:
         """
         return self.scope == "chat"
 
+    @property
+    def is_power(self) -> bool:
+        """A code change anywhere: dex itself, or any directory outside it.
+
+        The one scope not confined to its package, and the one that may never
+        make content (permissions.py). Other tasks start it as a dependency
+        (`start_power_task`) when what they need is a change to code.
+        """
+        return self.scope == "power"
+
     def design_payload(self) -> dict[str, str]:
         """The conversation a design turn carries, unpacked.
 

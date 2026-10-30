@@ -192,3 +192,77 @@ async def test_another_project_is_still_the_operator_s_call(in_project):
     result = await decide(p, "Write", {"file_path": str(other)})
     assert isinstance(result, PermissionResultAllow)  # the fixture approves
     assert len(escalations) == 1
+
+
+@pytest.fixture
+def power(tmp_path: Path):
+    assets = tmp_path / "assets"
+    task_dir = assets / "ml" / "power-fix"
+    task_dir.mkdir(parents=True)
+    (assets / "ml" / "story-x").mkdir()
+    escalations: list[str] = []
+
+    async def escalate(_id, tool, _input, title):
+        escalations.append(f"{tool}: {title}")
+        return "deny"
+
+    p = PermissionPolicy(workspace=tmp_path, task_dir=task_dir, project_dir=assets / "ml", escalate=escalate,
+                         power=True, assets_dir=assets)
+    return p, tmp_path, task_dir, escalations
+
+
+@pytest.mark.parametrize("path", ["/elsewhere/games/engine/src/story/runner.js", "/elsewhere/tool.py", "/elsewhere/AGENTS.md"])
+async def test_a_power_task_changes_code_anywhere_unasked(power, path):
+    p, _, _, escalations = power
+    assert isinstance(await decide(p, "Write", {"file_path": path}), PermissionResultAllow)
+    assert escalations == []
+
+
+@pytest.mark.parametrize("command", ["git commit -m fix", "npm test", "git push", "rm old.py", "git merge --ff-only x && npm i | tail"])
+async def test_a_power_task_runs_commands_unasked(power, command):
+    p, _, _, escalations = power
+    assert isinstance(await decide(p, "Bash", {"command": command}), PermissionResultAllow)
+    assert escalations == []
+
+
+@pytest.mark.parametrize("path", [
+    "/elsewhere/games/g/public/assets/index.json", "/elsewhere/lesson/story.json", "/elsewhere/manifest.json",
+    "/elsewhere/a.glb", "/elsewhere/a.ogg", "/elsewhere/a.png", "/elsewhere/a.mp4",
+])
+async def test_a_power_task_makes_no_content(power, path):
+    p, _, _, escalations = power
+    assert isinstance(await decide(p, "Write", {"file_path": path}), PermissionResultDeny)
+    assert escalations == []
+
+
+async def test_a_power_task_leaves_packages_alone_but_may_change_a_project_brief(power):
+    p, root, task_dir, _ = power
+    assert isinstance(await decide(p, "Write", {"file_path": str(root / "assets/ml/story-x/notes.md")}), PermissionResultDeny)
+    assert isinstance(await decide(p, "Write", {"file_path": str(root / "assets/other/thing.py")}), PermissionResultDeny)
+    assert isinstance(await decide(p, "Write", {"file_path": str(root / "assets/ml/AGENTS.md")}), PermissionResultAllow)
+    assert isinstance(await decide(p, "Write", {"file_path": str(task_dir / "report.md")}), PermissionResultAllow)
+
+
+async def test_a_power_task_does_not_save_into_the_running_dex(power):
+    p, root, _, _ = power
+    out = await decide(p, "Edit", {"file_path": str(root / "src/dex/queue.py")})
+    assert isinstance(out, PermissionResultDeny) and "worktree" in out.message
+    assert isinstance(await decide(p, "Edit", {"file_path": str(root / "skills/x/SKILL.md")}), PermissionResultAllow)
+
+
+@pytest.mark.parametrize("command", [
+    "sudo make install", "pm2 restart dex-api", "/opt/homebrew/bin/pm2 list", "kill 123", "pkill -f dex",
+    "lsof -t -i:4317", ".venv/bin/dex --port 9", "git push --force", "git push -f origin main",
+    "git reset --hard HEAD", "git clean -fd", "rm -rf ~", "rm -rf /", "psql -c 'DROP TABLE tasks'",
+    "echo hi; truncate tasks", "python -c 'write_story(p, s)'", "cp a.json x/public/assets/story/a.json",
+])
+async def test_what_a_power_task_may_never_run(power, command):
+    p, _, _, escalations = power
+    assert isinstance(await decide(p, "Bash", {"command": command}), PermissionResultDeny)
+    assert escalations == []
+
+
+async def test_the_game_pull_is_not_content(power):
+    p, *_ = power
+    out = await decide(p, "Bash", {"command": "python tools/pull_dex_assets.py game --only story-x"})
+    assert isinstance(out, PermissionResultAllow)

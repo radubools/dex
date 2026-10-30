@@ -104,3 +104,13 @@ history (`web/src/navigation.ts`): a handler the reader triggers calls `go()`
 before it changes what is shown, so the place becomes a step that back (the
 browser's, or a pane's ‹ on a phone) returns to; changes the app makes by
 itself replace the current step instead.
+
+## Power tasks
+
+A **power task** (`scope = 'power'`, the `power` skill) makes a code change
+anywhere: dex or any other directory, without asking. It never makes content
+(`_power_refusal` in `permissions.py`), and it starts no tasks. Any task starts
+one with `start_power_task` and waits for it; by hand:
+`scripts/enqueue_task.py --project ml --thread Power --create-thread --power --title … --problem …`.
+It builds and tests dex in a worktree, then merges into the main checkout as
+its last step: one safe reload, which resumes whatever is running.

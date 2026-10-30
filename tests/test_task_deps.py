@@ -513,3 +513,25 @@ async def test_a_free_slot_takes_a_prioritized_paused_task_before_queued_work(ma
     assert claimed.id == paused.id
     assert claimed.resumed_from == "sess-9" and claimed.finished_at is None
     assert (await manager.tasks.claim("w")).id == queued.id
+
+
+async def test_a_power_task_runs_in_the_power_thread_as_a_dependency(manager, db):
+    ids = await threads(db)
+    parent = await manager.submit("tell a story", title="Story", thread_id=ids["Story — lessons"])
+    child = await manager.graph.spawn_power(parent, title="Add an engine action", brief="Add it, with tests.")
+    assert child.is_power and child.scope == "power" and child.slug.startswith("power-")
+    assert child.project == parent.project
+    assert await manager.graph.store.of(parent.id) == [child.id]
+    thread = await manager.graph.resolve_thread(parent.project, "Power")
+    assert child.thread_id == thread["id"]
+    again = await manager.graph.spawn_power(parent, title="Another", brief="b")
+    assert again.thread_id == thread["id"]  # one thread
+
+
+async def test_a_power_task_starts_no_tasks(manager, db):
+    ids = await threads(db)
+    parent = await manager.submit("x", title="X", thread_id=ids["Story — lessons"])
+    power = await manager.graph.spawn_power(parent, title="Fix", brief="b")
+    with pytest.raises(deps_mod.Refused):
+        await manager.graph.spawn_power(power, title="More", brief="b")
+    assert power.builds_package  # its own directory, for the report

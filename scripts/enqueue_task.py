@@ -180,7 +180,9 @@ async def submit(args: argparse.Namespace) -> None:
         for row in rows:
             problem = (Path(row["brief"]).read_text() if row.get("brief") else row["problem"]).strip()
             title = (row.get("title") or problem.splitlines()[0])[:80]
-            task = Task(problem=problem, title=title, slug=slugify(row.get("slug") or title, taken))
+            slug = row.get("slug") or title
+            task = Task(problem=problem, title=title, slug=slugify(f"power-{slug}" if args.power else slug, taken))
+            task.scope = "power" if args.power else "package"
             taken.add(task.slug)
             task.project, task.output_slug, task.model = args.project, row.get("package") or None, model
             tasks.append(task)
@@ -201,9 +203,9 @@ async def submit(args: argparse.Namespace) -> None:
                 await conn.execute(
                     """INSERT INTO tasks (id, thread_id, title, slug, problem, state, created_at,
                                           attempt, output_slug, model, project, scope, held)
-                       VALUES ($1, $2, $3, $4, $5, 'queued', to_timestamp($6), 1, $7, $8, $9, 'package', false)""",
+                       VALUES ($1, $2, $3, $4, $5, 'queued', to_timestamp($6), 1, $7, $8, $9, $10, false)""",
                     task.id, task.thread_id, task.title, task.slug, task.problem, task.created_at,
-                    task.output_slug, task.model, task.project,
+                    task.output_slug, task.model, task.project, task.scope,
                 )
                 await add_event(conn, Event(type="task_created", task_id=task.id, project=task.project,
                                             data={"task": task.to_json(ASSETS), "threadId": thread_id}), thread_id)
@@ -260,6 +262,7 @@ async def main() -> None:
     ap.add_argument("--batch", help="JSON list of tasks to submit as one plan")
     ap.add_argument("--adopt", help="comma-separated slugs or ids of existing tasks to record a plan for")
     ap.add_argument("--message-to", help="slug or id of a finished task to continue with this message")
+    ap.add_argument("--power", action="store_true", help="a power task: a code change anywhere, no content")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     if args.request:
