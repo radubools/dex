@@ -172,8 +172,11 @@ export const reviewTopic = (slug: string, rating: 'again' | 'good' | 'easy', pro
 export const getTaskGraph = (project: string) =>
   request<TaskGraph>(`/api/dag?project=${encodeURIComponent(project)}`)
 
-export const getCosts = (period: string, granularity: string, group: string) =>
-  request<CostsResponse>(`/api/costs?period=${period}&granularity=${granularity}&group=${group}`)
+export const getCosts = (period: string, granularity: string, group: string, projects: string[] = [], offset = 0) =>
+  request<CostsResponse>(
+    `/api/costs?period=${period}&granularity=${granularity}&group=${group}&offset=${offset}` +
+      (projects.length ? `&projects=${encodeURIComponent(projects.join(','))}` : ''),
+  )
 
 /**
  * One task by id, for opening a run the listing did not carry.

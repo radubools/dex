@@ -945,6 +945,17 @@ body.resizing iframe { pointer-events: none; }
 .cost-table thead th { font-weight: 500; color: var(--muted); }
 .cost-table tbody th { font-weight: 400; text-align: left; }
 .cost-chart .grid { stroke: var(--line); stroke-width: 1; }
+.cost-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.cost-pager button:disabled { opacity: 0.3; cursor: default; }
+.cost-range { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cost-filter { position: relative; font-size: 12px; }
+.cost-filter summary { list-style: none; cursor: pointer; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.cost-filter summary::-webkit-details-marker { display: none; }
+.cost-filter summary::after { content: ' ▾'; color: var(--muted); }
+.cost-filter-menu { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; min-width: 170px; max-height: 260px; overflow: auto; padding: 6px; background: var(--panel, #12151c); border: 1px solid var(--line); border-radius: 8px; }
+.cost-filter-menu label { display: flex; align-items: center; gap: 8px; padding: 5px 6px; cursor: pointer; white-space: nowrap; }
+.cost-filter-menu .ghost-btn { width: 100%; margin-bottom: 4px; }
+.cost-chart .axis { fill: var(--muted); font-size: 9px; paint-order: stroke; stroke: var(--bg, #0b0d12); stroke-width: 3px; }
 .cost-chart .tick { fill: var(--muted); font-size: 9px; text-anchor: middle; }
 
 .legend { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

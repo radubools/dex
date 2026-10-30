@@ -926,15 +926,17 @@ class CostStore:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    async def totals(self) -> dict[str, float]:
-        """Spend over the usual windows, for the header menu."""
+    async def totals(self, projects: list[str] | None = None) -> dict[str, float]:
+        """Spend over the usual windows, for the header menu and the dashboard."""
         row = await self.db.pool.fetchrow(
             """SELECT
-                 COALESCE(sum(cost_usd) FILTER (WHERE hour > now() - interval '1 day'), 0) AS day,
-                 COALESCE(sum(cost_usd) FILTER (WHERE hour > now() - interval '7 days'), 0) AS week,
-                 COALESCE(sum(cost_usd) FILTER (WHERE hour > now() - interval '30 days'), 0) AS month,
-                 COALESCE(sum(cost_usd), 0) AS all_time
-               FROM task_usage"""
+                 COALESCE(sum(u.cost_usd) FILTER (WHERE u.hour > now() - interval '1 day'), 0) AS day,
+                 COALESCE(sum(u.cost_usd) FILTER (WHERE u.hour > now() - interval '7 days'), 0) AS week,
+                 COALESCE(sum(u.cost_usd) FILTER (WHERE u.hour > now() - interval '30 days'), 0) AS month,
+                 COALESCE(sum(u.cost_usd), 0) AS all_time
+               FROM task_usage u JOIN tasks t ON t.id = u.task_id
+               WHERE $1::text[] IS NULL OR t.project = ANY($1)""",
+            projects,
         )
         return {k: float(v) for k, v in dict(row).items()}
 
@@ -960,15 +962,37 @@ class CostStore:
         totals["visible"] = max(0, totals["output"] - totals["thinking"])
         return totals
 
-    async def coverage(self, since: str = "week") -> dict[str, float]:
+    async def earliest(self, projects: list[str] | None = None) -> str | None:
+        """The first hour with spend: how far back the dashboard can page."""
+        value = await self.db.pool.fetchval(
+            """SELECT min(u.hour) FROM task_usage u JOIN tasks t ON t.id = u.task_id
+               WHERE $1::text[] IS NULL OR t.project = ANY($1)""",
+            projects,
+        )
+        return value.astimezone().isoformat() if value else None
+
+    async def projects(self) -> list[str]:
+        """The projects that have spent anything, to filter the dashboard by."""
+        rows = await self.db.pool.fetch(
+            """SELECT DISTINCT t.project FROM task_usage u JOIN tasks t ON t.id = u.task_id
+               WHERE t.project IS NOT NULL ORDER BY 1"""
+        )
+        return [row["project"] for row in rows]
+
+    async def coverage(
+        self, since: str = "week", projects: list[str] | None = None,
+        bucket: str = "day", offset: int = 0,
+    ) -> dict[str, float]:
         """How much of a period's spend has tokens, and how much was inferred."""
-        interval = _INTERVALS.get(since, "7 days")
         row = await self.db.pool.fetchrow(
             f"""SELECT
-                  COALESCE(sum(cost_usd), 0)::float8 AS spend,
-                  COALESCE(sum(cost_usd) FILTER (WHERE output_tokens > 0), 0)::float8 AS with_tokens,
-                  COALESCE(sum(cost_usd) FILTER (WHERE inferred), 0)::float8 AS inferred
-                FROM task_usage WHERE hour > now() - interval '{interval}'"""
+                  COALESCE(sum(u.cost_usd), 0)::float8 AS spend,
+                  COALESCE(sum(u.cost_usd) FILTER (WHERE u.output_tokens > 0), 0)::float8 AS with_tokens,
+                  COALESCE(sum(u.cost_usd) FILTER (WHERE u.inferred), 0)::float8 AS inferred
+                FROM task_usage u JOIN tasks t ON t.id = u.task_id
+                WHERE {_window(since, bucket, offset)}
+                  AND ($1::text[] IS NULL OR t.project = ANY($1))""",
+            projects,
         )
         return dict(row)
 
@@ -991,7 +1015,8 @@ class CostStore:
         return float(value or 0)
 
     async def series(
-        self, since: str = "7 days", bucket: str = "day", group_by: str = "model"
+        self, since: str = "7 days", bucket: str = "day", group_by: str = "model",
+        projects: list[str] | None = None, offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Cost per time bucket, split by model or by project.
 
@@ -1004,7 +1029,6 @@ class CostStore:
             "skill": "COALESCE(NULLIF(u.skill, ''), '(no skill)')",
             "state": "t.state",
         }.get(group_by, "COALESCE(t.model, 'unknown')")
-        interval = _INTERVALS.get(since, "7 days")
         width = _BUCKETS.get(bucket, "day")
 
         rows = await self.db.pool.fetch(
@@ -1018,9 +1042,11 @@ class CostStore:
                        sum(u.output_tokens)::bigint AS output,
                        sum(u.thinking_tokens)::bigint AS thinking
                 FROM task_usage u JOIN tasks t ON t.id = u.task_id
-                WHERE u.hour > now() - interval '{interval}'
+                WHERE {_window(since, width, offset)}
+                  AND ($1::text[] IS NULL OR t.project = ANY($1))
                 GROUP BY 1, 2
                 ORDER BY 1""",
+            projects,
         )
         return [
             {
@@ -1041,6 +1067,18 @@ class CostStore:
 #: Whitelists, because these land in SQL text rather than as parameters.
 _INTERVALS = {"day": "1 day", "week": "7 days", "month": "30 days", "all": "100 years"}
 _BUCKETS = {"hour": "hour", "day": "day", "week": "week", "month": "month"}
+
+
+def _window(since: str, bucket: str, offset: int) -> str:
+    """SQL for one page of a period, `offset` pages back from now.
+
+    Cut on bucket edges, so a day is whole on the page that shows it and on no
+    other. `offset` comes from the API as a non-negative int.
+    """
+    interval = _INTERVALS.get(since, "7 days")
+    width = _BUCKETS.get(bucket, "day")
+    end = f"(date_trunc('{width}', now()) + interval '1 {width}' - interval '{interval}' * {int(offset)})"
+    return f"u.hour >= date_trunc('{width}', {end} - interval '{interval}') AND u.hour < {end}"
 
 
 class SettingsStore:

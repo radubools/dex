@@ -1011,12 +1011,18 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         period: str = Query(default="week"),
         granularity: str = Query(default="day"),
         group: str = Query(default="model"),
+        projects: str | None = Query(default=None),
+        offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
         store = CostStore(db)
+        chosen = [p for p in (projects or "").split(",") if p] or None
         return {
-            "totals": await store.totals(),
-            "series": await store.series(period, granularity, group),
-            "coverage": await store.coverage(period),
+            "totals": await store.totals(chosen),
+            "series": await store.series(period, granularity, group, chosen, offset),
+            "coverage": await store.coverage(period, chosen, granularity, offset),
+            "projects": await store.projects(),
+            "earliest": await store.earliest(chosen),
+            "offset": offset,
             "period": period,
             "granularity": granularity,
             "group": group,

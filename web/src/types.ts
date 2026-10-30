@@ -306,6 +306,11 @@ export type CostsResponse = {
   totals: CostTotals
   series: CostPoint[]
   coverage: { spend: number; with_tokens: number; inferred: number }
+  /** Every project with spend, whatever the filter: what it can choose from. */
+  projects?: string[]
+  /** The first hour with spend, in the server's time. */
+  earliest?: string | null
+  offset?: number
   period: string
   granularity: string
   group: string

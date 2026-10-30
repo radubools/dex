@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dex.models import Task
 from dex.pricing import tokens
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from dex.game_chat import _summary
 from dex.store import CostStore, TaskStore
@@ -147,3 +147,37 @@ async def test_a_chat_costs_what_its_attempts_added_not_what_they_reported(db):
 
     costs = await CostStore(db).by_tasks([first.id, second.id])
     assert _summary("c", [first, second], costs)["costUsd"] == 5.0
+
+
+async def test_the_dashboard_can_be_narrowed_to_several_projects(db):
+    await db.pool.execute(
+        "INSERT INTO projects (slug, name) VALUES ('a', 'A'), ('b', 'B'), ('c', 'C')"
+    )
+    tasks = TaskStore(db)
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    for slug, cost in (("a", 1.0), ("b", 2.0), ("c", 4.0)):
+        task = await _task(tasks, f"t{slug}")
+        await db.pool.execute("UPDATE tasks SET project = $1 WHERE id = $2", slug, task.id)
+        await tasks.add_usage(task.id, now, "", cost, {"output_tokens": 1})
+
+    store = CostStore(db)
+    points = await store.series("day", "hour", "skill", ["a", "c"])
+    assert sum(p["cost"] for p in points) == 5.0
+    assert (await store.coverage("day", ["b"]))["spend"] == 2.0
+    assert (await store.totals(["a", "b"]))["all_time"] == 3.0
+    assert (await store.totals())["all_time"] == 7.0
+    assert await store.projects() == ["a", "b", "c"]
+
+
+async def test_pages_of_a_period_meet_without_overlapping(db):
+    tasks = TaskStore(db)
+    task = await _task(tasks, "a")
+    today = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+    for days_ago, cost in ((0, 1.0), (6, 2.0), (7, 4.0), (13, 8.0), (14, 16.0)):
+        await tasks.add_usage(task.id, today - timedelta(days=days_ago), "", cost, {})
+
+    store = CostStore(db)
+    pages = [sum(p["cost"] for p in await store.series("week", "day", "skill", offset=n)) for n in range(3)]
+    assert pages == [3.0, 12.0, 16.0]
+    assert (await store.coverage("week", None, "day", 1))["spend"] == 12.0
+    assert (await store.earliest()) is not None
