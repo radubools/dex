@@ -325,8 +325,10 @@ def power_system(workspace: Path) -> str:
     """What a power task is told: the `power` skill's latest instructions."""
     from . import skills  # noqa: PLC0415 -- skills imports nothing of this, but only this needs it
 
-    found = [s for s in skills.all_skills(workspace) if s.name == "power"]
-    guide = (found[-1].path / "SKILL.md").read_text() if found else ""
+    # Newest published: versions are hashes, so their order says nothing.
+    found = [s for s in skills.all_skills(workspace) if s.name == "power" and not skills.is_draft(s)]
+    latest = max(found, key=lambda s: s.updated, default=None)
+    guide = (latest.path / "SKILL.md").read_text() if latest else ""
     return (
         "You are dex's power task: you make one code change, anywhere it is needed, and report "
         "it. What other tasks are told about staying in their package does not apply to you; "

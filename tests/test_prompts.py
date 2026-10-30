@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 
+from dex.prompts import power_system
 from dex.prompts import generation_prompt, project_instructions
 
 REPO = Path(__file__).resolve().parent.parent
@@ -357,3 +360,14 @@ def test_a_module_from_no_skill_is_still_indexed(tmp_path):
     text = render(utils, {})
     assert "## `loose`" in text
     assert "from `" not in text
+
+
+def test_a_power_task_reads_the_newest_published_skill(tmp_path):
+    for version, updated, text in (("ffffff", 1.0, "OLD"), ("000000", 2.0, "NEW")):
+        home = tmp_path / "skills" / "power" / version
+        home.mkdir(parents=True)
+        (home / "SKILL.md").write_text(text)
+        (home / "skill.json").write_text(json.dumps(
+            {"name": "power", "description": "d", "version": version, "updated": updated}))
+    system = power_system(tmp_path)
+    assert "NEW" in system and "OLD" not in system

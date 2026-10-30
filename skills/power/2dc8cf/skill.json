@@ -1,0 +1,7 @@
+{
+  "name": "power",
+  "description": "Arbitrary code changes to dex itself and to any directory outside it, run as a dependency of another task (start_power_task) or from a todo list that waits for dex to be idle. Overrides the restrictions on changing code; makes no content.",
+  "version": "2dc8cf",
+  "updated": 1793392882.135054,
+  "requires": []
+}

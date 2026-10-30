@@ -1,0 +1,8 @@
+{
+  "rules": [
+    {
+      "widget": "power-todos",
+      "paths": ["*/todos.json"]
+    }
+  ]
+}
