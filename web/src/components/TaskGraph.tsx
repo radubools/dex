@@ -6,7 +6,8 @@ import type { TaskGraph as Graph, TaskGraphNode } from '../types'
 /**
  * The live task graph of a project (design/18_task_dependencies.md): every
  * task that is queued, running, waiting or blocked, the finished ones joined
- * to them, and an arrow from each task to the ones it waits on. Each group of
+ * to them, and an arrow from each task to the ones it waits on. Each request
+ * whose plan started tasks stands at the head of them, an arrow to each. Each group of
  * connected tasks is its own diagram, drawn left to right (the task that asked
  * on the left, what it asked for to its right, in columns of at most ten); the
  * groups stack newest first, and
@@ -80,8 +81,15 @@ function chart(g: Graph, group: Group): string {
   for (const i of group.nodes) {
     const n = g.nodes[i]
     const title = esc(n.title.length > 42 ? `${n.title.slice(0, 40)}…` : n.title)
-    const meta = esc(`${STATE_LABEL[n.state] ?? n.state}${n.attempt > 1 ? ` · attempt ${n.attempt}` : ''}`)
     const thread = esc(n.threadTitle ?? 'no thread')
+    if (n.kind === 'request') {
+      // The operator's request: a rounded box, its tasks counted.
+      const meta = esc(`request · ${n.done ?? 0} of ${n.tasks ?? 0} done`)
+      lines.push(`  n${i}(["<b>${title}</b><br/><small>${meta}<br/>${thread}</small>"]):::${n.state}`)
+      lines.push(`  class n${i} request`)
+      continue
+    }
+    const meta = esc(`${STATE_LABEL[n.state] ?? n.state}${n.attempt > 1 ? ` · attempt ${n.attempt}` : ''}`)
     lines.push(`  n${i}["<b>${title}</b><br/><small>${meta}<br/>${thread}</small>"]:::${n.state}`)
   }
   const index = new Map(g.nodes.map((n, i) => [n.id, i]))
@@ -105,8 +113,9 @@ function chart(g: Graph, group: Group): string {
   for (const e of edges) {
     const from = index.get(e.from)!
     const to = index.get(e.to)!
+    const label = e.kind === 'continued' ? 'asked for a change' : e.kind === 'planned' ? 'planned' : 'waits on'
     if ((children.get(from)?.length ?? 0) > GRID_ROWS) lines.push(`  n${from} ${e.kind === 'continued' ? '-.->' : '-->'} n${to}`)
-    else lines.push(`  n${from} -->|${e.kind === 'continued' ? 'asked for a change' : 'waits on'}| n${to}`)
+    else lines.push(`  n${from} -->|${label}| n${to}`)
   }
   for (const kids of children.values()) {
     for (let k = GRID_ROWS; k < kids.length; k++) lines.push(`  n${kids[k - GRID_ROWS]} ~~~ n${kids[k]}`)
@@ -121,6 +130,8 @@ function chart(g: Graph, group: Group): string {
     '  classDef succeeded fill:#14301f,stroke:#4ade80,color:#e7fbe9',
     '  classDef failed fill:#3a1717,stroke:#f87171,color:#ffe8e8',
     '  classDef cancelled fill:#2a1f1f,stroke:#f87171,color:#ffe8e8,stroke-dasharray:4 3',
+    // A request keeps its state's border, on a fill of its own.
+    '  classDef request fill:#2b2140,color:#f1eaff,stroke-width:2px',
   )
   return lines.join('\n')
 }
@@ -151,6 +162,7 @@ export function TaskGraph({
   changes = 0,
   activeTaskId = null,
   onOpenTask,
+  onOpenRequest,
 }: {
   project: string
   /** Bumped by the app when the event stream reports a task change: refetch soon. */
@@ -158,6 +170,8 @@ export function TaskGraph({
   /** The task open in the side panel: its node is outlined. */
   activeTaskId?: string | null
   onOpenTask: (node: TaskGraphNode) => void
+  /** A request's node: its thread, where the plan and its tasks are. */
+  onOpenRequest?: (node: TaskGraphNode) => void
 }) {
   const [graph, setGraph] = useState<Graph | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -171,6 +185,8 @@ export function TaskGraph({
   // on every streamed event); read it at click time instead of redrawing for it.
   const openTask = useRef(onOpenTask)
   openTask.current = onOpenTask
+  const openRequest = useRef(onOpenRequest)
+  openRequest.current = onOpenRequest
 
   // Fetches: at once, soon after each change the stream reports (several
   // close together make one fetch), and every so often in case the stream dropped.
@@ -233,7 +249,7 @@ export function TaskGraph({
           if (!g) return
           g.style.cursor = 'pointer'
           g.dataset.task = n.id
-          g.addEventListener('click', () => openTask.current(n))
+          g.addEventListener('click', () => (n.kind === 'request' ? openRequest.current?.(n) : openTask.current(n)))
         })
         mark(host.current, activeRef.current)
       })
@@ -260,13 +276,15 @@ export function TaskGraph({
     return () => ro.disconnect()
   }, [])
 
-  const edges = graph?.edges.length ?? 0
+  const requests = graph?.nodes.filter((n) => n.kind === 'request').length ?? 0
+  const tasks = (graph?.nodes.length ?? 0) - requests
+  const edges = graph?.edges.filter((e) => e.kind !== 'planned').length ?? 0
   return (
     <section className="task-graph" aria-label="Task graph">
       <div className="task-graph-body">
         {graph && (
           <p className="muted small">
-            {graph.nodes.length} task{graph.nodes.length === 1 ? '' : 's'}, {edges} dependenc{edges === 1 ? 'y' : 'ies'}. Click a task to open it beside the graph.
+            {tasks} task{tasks === 1 ? '' : 's'}{requests ? ` from ${requests} request${requests === 1 ? '' : 's'}` : ''}, {edges} dependenc{edges === 1 ? 'y' : 'ies'}. Click a task to open it beside the graph, or a request to open its thread.
           </p>
         )}
         {error && <p className="error-note">{error}</p>}
@@ -276,9 +294,10 @@ export function TaskGraph({
         {!graph && !error && <p className="muted">Loading…</p>}
         <div ref={host} className="task-graph-canvas" hidden={!graph?.nodes.length} />
         <p className="muted small">
-          Each group of connected tasks is drawn left to right, newest group first: an
-          arrow runs right from a task to the tasks it waits on, in columns of at most
-          ten. A task waiting on others is
+          Each group of connected tasks is drawn left to right, newest group first: a
+          request (rounded) points to the tasks its plan started, and an arrow runs
+          right from a task to the tasks it waits on, in columns of at most ten. A task
+          waiting on others is
           blocked: it holds no slot, and resumes first once they are all done.
         </p>
       </div>

@@ -678,10 +678,14 @@ class DepStore:
     async def graph(self, project: str | None, recent_s: float = 6 * 3600) -> dict[str, Any]:
         """The active part of the task graph: nodes and the edges between them.
 
-        A node is a task chain, shown by its latest attempt. Active chains are
-        the ones queued, running, waiting on input, paused or blocked; finished
-        ones are kept when an edge joins them to an active one, or when they
-        ended in the last `recent_s` seconds and took part in an edge.
+        A node is a task chain, shown by its latest attempt, or a request: the
+        operator's message in a thread whose plan started tasks, with a
+        `planned` edge to each chain it started. Active chains are the ones
+        queued, running, waiting on input, paused or blocked; finished ones are
+        kept when an edge joins them to an active one, or when they ended in
+        the last `recent_s` seconds and took part in an edge. A request is kept
+        with all of its chains when any of them is kept, or when its last one
+        ended in the last `recent_s` seconds.
         """
         rows = await self.db.pool.fetch(
             f"""WITH RECURSIVE roots AS (
@@ -715,22 +719,87 @@ class DepStore:
             if a in keep or b in keep:
                 keep |= {a, b}
         keep |= {k for k in linked if (latest[k]["finished_at"] or 0) > now - recent_s}
+        requests = await self._requests(project, root_of, {b for (_, b), kind in edges.items() if kind == "started"})
+        request_nodes = []
+        for req in requests:
+            chains = [k for k in req.pop("chains") if k in latest]
+            ended = max(((latest[k]["finished_at"] or 0) for k in chains), default=0)
+            if not chains or not (any(k in keep for k in chains) or ended > now - recent_s):
+                continue
+            keep |= set(chains)
+            states = {latest[k]["state"] for k in chains}
+            req["state"] = next((s for s in ("awaiting_input", "running", "blocked", "paused", "queued") if s in states),
+                                "failed" if "failed" in states else "succeeded" if "succeeded" in states else "cancelled")
+            req["finishedAt"] = None if states & active else ended or None
+            req["tasks"] = len(chains)
+            req["done"] = sum(latest[k]["state"] == "succeeded" for k in chains)
+            req["chains"] = chains
+            request_nodes.append(req)
         nodes = []
         for k in keep:
             r = latest[k]
             nodes.append({
+                "kind": "task",
                 "id": r["id"], "chain": k, "slug": r["slug"], "package": r["output_slug"] or r["slug"],
                 "title": r["title"], "state": r["state"], "activity": r["activity"],
                 "attempt": r["attempt"], "threadId": r["thread_id"], "threadTitle": r["thread_title"],
                 "costUsd": r["cost_usd"], "createdAt": r["created_at"], "finishedAt": r["finished_at"],
             })
-        nodes.sort(key=lambda n: n["createdAt"] or 0)
         ids = {n["chain"]: n["id"] for n in nodes}
+        planned = [{"from": req["id"], "to": ids[k], "kind": "planned"}
+                   for req in request_nodes for k in req.pop("chains") if k in ids]
+        nodes += request_nodes
+        nodes.sort(key=lambda n: n["createdAt"] or 0)
         return {
             "nodes": nodes,
-            "edges": [{"from": ids[a], "to": ids[b], "kind": kind}
-                      for (a, b), kind in edges.items() if a in ids and b in ids],
+            "edges": planned + [{"from": ids[a], "to": ids[b], "kind": kind}
+                                for (a, b), kind in edges.items() if a in ids and b in ids],
         }
+
+    async def _requests(self, project: str | None, root_of: dict[str, str], started: set[str]) -> list[dict[str, Any]]:
+        """The operator's requests that started tasks, each with the chains its plan started.
+
+        A plan's tasks are announced in its thread as a `tasks` message
+        ("Started 15 tasks"), after the operator's message and the plan; a
+        resume or a re-run is announced the same way, so a chain belongs to
+        the request before the first message that names its first attempt. A
+        chain another task started (a `started` edge) is that task's, even
+        though it is announced in its own thread too.
+        """
+        rows = await self.db.pool.fetch(
+            """WITH named AS (
+                   SELECT m.thread_id, m.ts, t->>'id' AS task_id
+                     FROM messages m JOIN threads th ON th.id = m.thread_id,
+                          jsonb_array_elements(CASE WHEN jsonb_typeof(m.data->'tasks') = 'array'
+                                                    THEN m.data->'tasks' ELSE '[]'::jsonb END) t
+                    WHERE m.role = 'dex' AND m.kind = 'tasks' AND ($1::text IS NULL OR th.project = $1)),
+               first AS (SELECT DISTINCT ON (task_id) task_id, thread_id, ts FROM named ORDER BY task_id, ts)
+               SELECT f.task_id, r.id AS request_id, r.body, r.ts AS request_ts, r.thread_id, th.title AS thread_title
+                 FROM first f
+                 JOIN LATERAL (SELECT u.id, u.body, u.ts, u.thread_id FROM messages u
+                                WHERE u.thread_id = f.thread_id AND u.role = 'user' AND u.ts <= f.ts
+                                ORDER BY u.ts DESC LIMIT 1) r ON true
+                 JOIN threads th ON th.id = r.thread_id""",
+            project,
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            chain = root_of.get(r["task_id"])
+            # Only a chain's first attempt was started by the plan; later ones are its follow-ups.
+            if chain != r["task_id"] or chain in started:
+                continue
+            req = out.get(r["request_id"])
+            if req is None:
+                # Its words, on one line, without a leading list marker ("- I want…").
+                text = re.sub(r"^(?:[-*•]|\d+[.)])\s+", "", " ".join((r["body"] or "").split()))
+                req = out[r["request_id"]] = {
+                    "kind": "request", "id": f"request:{r['request_id']}", "chain": f"request:{r['request_id']}",
+                    "title": text[:140] + ("…" if len(text) > 140 else ""),
+                    "threadId": r["thread_id"], "threadTitle": r["thread_title"],
+                    "createdAt": r["request_ts"].timestamp(), "chains": [],
+                }
+            req["chains"].append(chain)
+        return list(out.values())
 
 
 class TaskMessageStore:

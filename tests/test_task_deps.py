@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -14,6 +15,7 @@ from dex.models import TaskState
 from dex.queue import TaskManager
 from dex.runner import TaskRunner
 from dex.store import SettingsStore, ThreadStore
+from dex.threads import ThreadMessage
 
 
 @pytest.fixture
@@ -187,6 +189,49 @@ async def test_the_graph_shows_active_chains_their_dependencies_and_isolated_tas
     prop = next(n for n in g["nodes"] if n["title"] == "Prop")
     assert prop["attempt"] == 2 and g["edges"][0]["to"] == prop["id"]
     assert alone
+
+
+
+async def test_the_graph_joins_a_plans_tasks_to_the_request_that_made_it(manager, db):
+    ids = await threads(db)
+    store = ThreadStore(db)
+    lessons = ids["Story — lessons"]
+    t0 = time.time()
+
+    async def say(role, kind, text="", data=None, at=0.0):
+        await store.append(lessons, ThreadMessage(role=role, kind=kind, text=text, data=data or {}, ts=t0 + at))
+
+    # The operator asks; dex plans; the plan's tasks start.
+    await say("user", "text", "- Write the extreme lessons\nfor every station", at=0)
+    a = await manager.submit("a", title="Lesson A", thread_id=lessons)
+    b = await manager.submit("b", title="Lesson B", thread_id=lessons)
+    await say("dex", "plan", "Planned 2", {"tasks": []}, at=1)
+    await say("dex", "tasks", "Started 2 tasks.", {"tasks": [{"id": a.id}, {"id": b.id}]}, at=2)
+    # A task one of them starts is that task's, not the request's, though it is announced too.
+    prop = await manager.graph.spawn(a, thread="Story", title="Prop", brief="prop")
+    await say("dex", "tasks", "Started Prop.", {"tasks": [{"id": prop.id}]}, at=3)
+    # A later request; resuming Lesson B there does not move it.
+    await say("user", "text", "Something else", at=4)
+    await say("dex", "tasks", "Resumed Lesson B.", {"tasks": [{"id": b.id}]}, at=5)
+    await finish(manager, b)
+
+    g = await manager.graph.store.graph("algorithms")
+    req = next(n for n in g["nodes"] if n["kind"] == "request")
+    assert req["title"] == "Write the extreme lessons for every station"
+    assert req["threadTitle"] == "Story — lessons" and req["tasks"] == 2 and req["done"] == 1
+    assert req["state"] == "queued"  # Lesson A is still queued
+    planned = sorted(e["to"] for e in g["edges"] if e["kind"] == "planned")
+    assert planned == sorted([a.id, b.id]) and all(e["from"] == req["id"] for e in g["edges"] if e["kind"] == "planned")
+    # The finished one is drawn with its request, and the spawned task keeps its own edge.
+    assert {n["title"] for n in g["nodes"] if n["kind"] == "task"} == {"Lesson A", "Lesson B", "Prop"}
+    assert {"from": a.id, "to": prop.id, "kind": "started"} in g["edges"]
+    assert sum(n["kind"] == "request" for n in g["nodes"]) == 1
+
+    # Every task done and long ago: the request goes with them.
+    await finish(manager, a)
+    await finish(manager, prop)
+    g = await manager.graph.store.graph("algorithms", recent_s=0)
+    assert not any(n["kind"] == "request" for n in g["nodes"])
 
 
 async def test_find_tasks_matches_words_and_returns_one_entry_per_package(manager):

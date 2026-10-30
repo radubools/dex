@@ -702,6 +702,14 @@ export default function App() {
                 if (node.threadId) setThreadId(node.threadId)
                 setActiveTaskId(node.id)
               }}
+              onOpenRequest={(node) => {
+                // A request opens its thread: the request, its plan and the tasks it started.
+                go()
+                setViewing(null)
+                setActiveTaskId(null)
+                if (node.threadId) setThreadId(node.threadId)
+                setView('chat')
+              }}
             />
           </Suspense>
         ) : view === 'feed' ? (

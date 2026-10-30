@@ -439,8 +439,13 @@ export type Skill = {
 
 export type SkillsResponse = { projects: string[]; skills: Skill[] }
 
-/** One task chain in the task graph, shown by its latest attempt (GET /api/dag). */
+/**
+ * One node of the task graph (GET /api/dag): a task chain, shown by its latest
+ * attempt, or a request, the operator's message whose plan started tasks
+ * (its state the most pressing of theirs; `tasks` and `done` count them).
+ */
 export type TaskGraphNode = {
+  kind: 'task' | 'request'
   id: string
   chain: string
   slug: string
@@ -454,11 +459,16 @@ export type TaskGraphNode = {
   costUsd: number | null
   createdAt: number | null
   finishedAt: number | null
+  tasks?: number
+  done?: number
 }
 
-/** The active part of a project's task graph: an edge runs from a task to one it waits on. */
+/**
+ * The active part of a project's task graph: an edge runs from a task to one
+ * it waits on, or from a request to a task its plan started (`planned`).
+ */
 export type TaskGraph = {
   project: string
   nodes: TaskGraphNode[]
-  edges: { from: string; to: string; kind: 'started' | 'continued' | 'waited' }[]
+  edges: { from: string; to: string; kind: 'started' | 'continued' | 'waited' | 'planned' }[]
 }
