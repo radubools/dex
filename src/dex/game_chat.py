@@ -20,10 +20,12 @@ Routes:
 
 - `GET  …/threads/<thread>/chats`: the chats in the thread, newest first (one
   per conversation; follow-up attempts fold into it).
-- `POST …/threads/<thread>/messages {text, chatId?, context?}`: without
+- `POST …/threads/<thread>/messages {text, chatId?, todo?, context?}`: without
   `chatId` starts a chat; with one it goes to that chat at once: straight
   into the running agent (it interrupts its turn), or, if the chat has
-  stopped, as the next attempt that resumes the same session.
+  stopped, as the next attempt that resumes the same session. With `todo`
+  it always starts a new chat, a `todos` run that splits the message into
+  todos for when dex is idle (design/24).
 - `GET  …/chats/<chat>/events?after=<seq>`: the chat's events after `seq`
   (none or 0: all of them), with streamed deltas merged, for polling.
 - `POST …/chats/<chat>/pause | resume | cancel`.
@@ -169,6 +171,9 @@ class ChatMessage(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
     #: The chat to continue (its first task's id, as listed); none starts a new one.
     chatId: str | None = None
+    #: Don't run this now: split it into todos, for when dex is idle (todos.py).
+    #: Always a new chat, so it leaves whatever is open running as it was.
+    todo: bool = False
     #: A short name for a new chat; defaults to the message's first line.
     title: str | None = None
     context: ChatContext = Field(default_factory=ChatContext)
@@ -438,7 +443,7 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
 
     async def chain(entry: dict[str, Any], chat_id: str) -> list[Task]:
         first = await tasks.tasks.get(chat_id)
-        if first is None or first.project != entry["project"] or not first.is_chat:
+        if first is None or first.project != entry["project"] or not (first.is_chat or first.is_todos):
             raise HTTPException(404, "no such chat")
         members = _chains(await tasks.tasks.list(thread_id=first.thread_id, limit=10_000, include_archived=True)).get(chat_id)
         if not members:
@@ -452,7 +457,8 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
     @router.get("/{project}/threads/{thread_id}/chats")
     async def list_chats(thread_id: str, entry: dict = Depends(access)) -> dict[str, Any]:
         await chats_thread(entry, thread_id)
-        found = [t for t in await tasks.tasks.list(thread_id=thread_id, limit=10_000) if t.is_chat]
+        found = [t for t in await tasks.tasks.list(thread_id=thread_id, limit=10_000)
+                 if t.is_chat or t.is_todos]
         costs = await CostStore(db).by_tasks([t.id for t in found])
         chats = [_summary(cid, m, costs) for cid, m in _chains(found).items()]
         chats.sort(key=lambda c: c["updatedAt"], reverse=True)
@@ -466,11 +472,16 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         rel = context_file() if story else None
         # The chat runs as the switch says, and so does every task it starts.
         options = {"e2e": body.context.e2e}
-        if not body.chatId:
+        if not body.chatId or body.todo:
             title = (body.title or text.splitlines()[0])[:80]
-            task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"chat-{title}"[:60],
-                                      thread_id=thread_id, project=entry["project"], scope="chat",
-                                      options=options)
+            if body.todo:
+                task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"todos-{title}"[:60],
+                                          thread_id=thread_id, project=entry["project"], scope="todos",
+                                          options={**options, "todo": True})
+            else:
+                task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"chat-{title}"[:60],
+                                          thread_id=thread_id, project=entry["project"], scope="chat",
+                                          options=options)
             if story:
                 save_context(task.output_dir(config.assets_dir, config.default_project), rel, story)
             # The thread records what the player typed; the snapshot is for the agent.

@@ -61,8 +61,10 @@ class TaskManager:
         self.messages = TaskMessageStore(db)
         # Tasks that start, continue and wait for other tasks (deps.py).
         from .deps import Dependencies
+        from .todos import Todos
 
         self.graph = Dependencies(self)
+        self.todos = Todos(self)
         #: Posts a message into a thread (the API's publish_message), set by the API.
         self.post: Callable[..., Awaitable[None]] | None = None
         #: Only the tasks this process is running: their cancel handles and the
@@ -157,6 +159,7 @@ class TaskManager:
         self._sweeper = asyncio.create_task(self._sweep(), name="dex-orphan-sweep")
         # Blocked tasks go back in the queue when what they wait for is done.
         self.graph.start()
+        self.todos.start()
         log.info(
             "started %d task workers and %d chat workers as %s "
             "(limits %d and %d, adjustable from the UI); "
@@ -176,6 +179,7 @@ class TaskManager:
         # polling the database. So the supervisor goes first, and `_stopping`
         # closes the window where it is already inside `_scale()`.
         self._stopping = True
+        await self.todos.stop()
         await self.graph.stop()
         for extra in (self._supervisor, self._sweeper):
             if extra is not None:
@@ -224,6 +228,7 @@ class TaskManager:
         scope: str = "package",
         anchor: dict[str, Any] | None = None,
         options: dict[str, Any] | None = None,
+        state: TaskState = TaskState.QUEUED,
     ) -> Task:
         display_title = (title or problem.strip().splitlines()[0])[:80]
         directory = self.config.project_dir(project or self.config.default_project)
@@ -234,6 +239,7 @@ class TaskManager:
             problem=problem.strip(),
             title=display_title,
             slug=slugify(slug or display_title, taken),
+            state=state,
         )
         task.thread_id = thread_id
         task.anchor = anchor
@@ -246,6 +252,8 @@ class TaskManager:
         task.scope = scope
         task.options = dict(options or {})
         task.model = await self.settings.model_for(self.config.project, self.config.model)
+        if task.is_todos:
+            task.model = self.config.planner_model
         await self.tasks.create(task)
 
         self.bus.publish(
@@ -257,6 +265,8 @@ class TaskManager:
             )
         )
         self._wake_workers()
+        if not task.todo:
+            self.todos.wake()
         return task
 
     async def queue_message(self, task_id: str, body: str,

@@ -12,6 +12,9 @@ from typing import Any, Literal
 
 
 class TaskState(str, Enum):
+    #: Waiting for dex to be idle (todos.py). Behind everything else: it moves
+    #: to queued when nothing else runs, and comes back here when something does.
+    TODO = "todo"
     QUEUED = "queued"
     RUNNING = "running"
     #: Blocked on a clarifying question or a tool approval from the operator.
@@ -46,7 +49,7 @@ class TaskState(str, Enum):
     @property
     def waiting(self) -> bool:
         """Will run again without anyone asking."""
-        return self in (TaskState.QUEUED, TaskState.PAUSED, TaskState.BLOCKED)
+        return self in (TaskState.TODO, TaskState.QUEUED, TaskState.PAUSED, TaskState.BLOCKED)
 
     @property
     def resumable(self) -> bool:
@@ -108,7 +111,7 @@ EventType = Literal[
 #: design turn and a survey are both agent runs someone is sitting in a thread
 #: waiting for. They are tasks so they get the activity surface, but they are
 #: budgeted as chats — see `Task.interactive`.
-INTERACTIVE_SCOPES = ("design", "survey", "chat")
+INTERACTIVE_SCOPES = ("design", "survey", "chat", "todos")
 
 
 @dataclass(slots=True)
@@ -239,6 +242,16 @@ class Task:
         A turn that only answers is a success, not an empty package.
         """
         return self.scope == "chat"
+
+    @property
+    def is_todos(self) -> bool:
+        """The light run that splits a request into todos (todos.py). Someone is waiting on it."""
+        return self.scope == "todos"
+
+    @property
+    def todo(self) -> Any:
+        """Set on a todo and all it spawns: they give way to regular work."""
+        return (self.options or {}).get("todo")
 
     @property
     def is_power(self) -> bool:

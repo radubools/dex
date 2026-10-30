@@ -500,13 +500,14 @@ function PlanCard({
  * a wall of them, and the count says the rest; clicking opens the group.
  */
 const STATUS_RANK: Record<string, number> = {
-  running: 0, awaiting_input: 1, blocked: 2, queued: 3, paused: 4,
+  running: 0, awaiting_input: 1, blocked: 2, queued: 3, paused: 4, todo: 5,
   failed: 5, cancelled: 6, succeeded: 7,
 }
 
 const STATUS_LABEL: Record<string, string> = {
   running: 'running',
   awaiting_input: 'waiting on you',
+  todo: 'todo',
   queued: 'queued',
   paused: 'paused',
   blocked: 'waiting on tasks',

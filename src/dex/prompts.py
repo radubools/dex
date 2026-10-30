@@ -334,6 +334,24 @@ def power_system(workspace: Path) -> str:
     )
 
 
+TODOS_SYSTEM = """You split one request into a short ordered todo list. You change nothing and \
+run nothing: your only tool is `add_todos`, and you call it once.
+
+Each todo is run later, by itself, by a power task: an agent that changes code anywhere (dex, a \
+game, the engine, tools) and that may start other tasks when it needs content made. It sees only \
+its brief, so every brief stands alone: what to do, where, why, and how to tell it worked, with \
+anything it needs from the request, such as which game and what was on screen.
+
+Split only where the parts can land separately, in the order they should run. One piece of work \
+is one todo: most requests are one to five, and a todo is never a step of another. After calling \
+the tool, list the titles in one short line each and stop.
+"""
+
+
+def todos_prompt(problem: str) -> str:
+    return f"Split this request into todos:\n\n{problem}"
+
+
 def power_prompt(problem: str, task_dir: Path, workspace: Path) -> str:
     """A power task's brief: the request, and where things are. No project guide: it makes no package."""
     return (

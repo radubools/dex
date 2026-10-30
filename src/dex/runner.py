@@ -45,7 +45,8 @@ from . import local_sources, skills, surveyor, widgets
 from .threads import ThreadMessage
 from .permissions import PermissionPolicy
 from .prompts import (
-    DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM, power_prompt, power_system,
+    DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM, TODOS_SYSTEM, power_prompt, power_system,
+    todos_prompt,
     design_prompt, generation_prompt, survey_prompt,
 )
 from .usage import is_usage_limit_error, limit_pause_note
@@ -240,6 +241,7 @@ class TaskRunner:
         self._attribution: skills.Attribution | None = None
         #: Rollup writes keep their order: naming a skill must follow what it moves.
         self._usage_lock = asyncio.Lock()
+        self._added_todos = 0
         #: State writes still in flight (`set_state` persists in the background).
         self._writes: set[asyncio.Task[None]] = set()
 
@@ -623,6 +625,27 @@ class TaskRunner:
             return reply({"started": graph.describe(await graph.store.status(child.id))})
 
         @tool(
+            "add_todos",
+            "Add the todos this request splits into, in the order they should run. Each one is a "
+            "power task run later, alone, by an agent that sees only its brief.",
+            {"type": "object", "properties": {"todos": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "A short title, as a to-do."},
+                    "brief": {"type": "string", "description": "The full brief, as the task will read it."},
+                },
+                "required": ["title", "brief"],
+            }}}, "required": ["todos"]},
+        )
+        async def add_todos(args: dict[str, Any]) -> dict[str, Any]:
+            try:
+                made = await graph.m.todos.add(self.task, list(args.get("todos") or []))
+            except Refused as exc:
+                return reply(f"Refused. {exc}")
+            self._added_todos += len(made)
+            return reply({"added": [t.title for t in made]})
+
+        @tool(
             "start_power_task",
             "Start a power task: a code change this task cannot make itself, to dex (its server, UI "
             "or skills) or to any directory outside this project (a game's or engine's code, tools, "
@@ -720,7 +743,9 @@ class TaskRunner:
                  "your turn. " if conversation else "Parked. End your turn now, without further work. ")
                 + "dex resumes this session when they are done, with their results.")})
 
-        if self.task.is_power:
+        if self.task.is_todos:
+            return [add_todos]
+        if self.task.is_power and not self.task.todo:
             # It looks things up; it starts nothing, or it could have content made.
             return [project_threads, find_tasks, task_status]
         return [project_threads, find_tasks, start_task, start_power_task, continue_task, task_status, wait_for_tasks]
@@ -871,6 +896,8 @@ class TaskRunner:
             # source. Created just above, so it exists to start in.
             cwd=str(self.task_dir),
             model=self.task.model or self.config.model,
+            # A split only reads its brief and calls add_todos.
+            tools=[] if self.task.is_todos else None,
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
@@ -878,6 +905,7 @@ class TaskRunner:
                     SURVEY_SYSTEM if self.task.is_survey
                     else DESIGN_SYSTEM if self.task.is_design
                     else power_system(self.config.workspace) if self.task.is_power
+                    else TODOS_SYSTEM if self.task.is_todos
                     else GENERATION_SYSTEM
                 ),
             },
@@ -970,6 +998,8 @@ class TaskRunner:
             )
         elif self.task.is_power:
             prompt = power_prompt(self.task.problem, self.task_dir, self.config.workspace)
+        elif self.task.is_todos:
+            prompt = todos_prompt(self.task.problem)
         else:
             prompt = generation_prompt(
                 problem=self.task.problem,
@@ -1085,8 +1115,10 @@ class TaskRunner:
             # A clean exit is not the same thing as a result. Checked here and
             # not left to the operator's eye, because an empty package looks
             # exactly like a full one in a list of green rows.
+            elif self.task.is_todos and not self._added_todos:
+                self._fail("The request was not split: no todos were added.")
             elif (self.task.builds_package and not self.task.is_chat and not self.task.is_power
-                  and not self._wrote_anything(before)
+                  and not self.task.is_todos and not self._wrote_anything(before)
                   and not (woken and await self._woken_wrote())
                   and not (self.task.resumed_from and self._wrote_since_created())
                   and not await self._answered_notes()):

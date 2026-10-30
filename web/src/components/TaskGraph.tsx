@@ -33,7 +33,7 @@ const FALLBACK_MS = 30_000
 let renderQueue: Promise<void> = Promise.resolve()
 
 const STATE_LABEL: Record<string, string> = {
-  queued: 'queued', running: 'running', awaiting_input: 'waiting on you',
+  todo: 'todo', queued: 'queued', running: 'running', awaiting_input: 'waiting on you',
   paused: 'paused', blocked: 'waiting on tasks', succeeded: 'done',
   failed: 'failed', cancelled: 'cancelled',
 }

@@ -376,6 +376,35 @@ class TaskStore:
             task_id, cost, estimate,
         )
 
+    async def todo_family(self) -> list[Task]:
+        """Every todo list and all it started, oldest first."""
+        rows = await self.db.pool.fetch(
+            f"""SELECT {TASK_COLUMNS} FROM tasks
+                WHERE options ? 'todo' AND state <> 'archived' ORDER BY seq"""
+        )
+        return [task_from_row(row) for row in rows]
+
+    async def regular_work(self) -> bool:
+        """Whether anything that is not a todo is running or about to.
+
+        A task waiting on the operator, or on other tasks, runs nothing. Paused
+        counts, unless the operator holds it: dex will start it again by itself.
+        """
+        return bool(await self.db.pool.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM tasks
+                WHERE (state IN ('queued', 'running') OR (state = 'paused' AND NOT held AND started_at IS NOT NULL))
+                  AND NOT COALESCE(options, '{}'::jsonb) ? 'todo')"""
+        ))
+
+    async def spawned_by(self, task_ids: list[str]) -> dict[str, str]:
+        """Who started each of these tasks, for those another task started."""
+        rows = await self.db.pool.fetch(
+            """SELECT depends_on, task_id FROM task_deps
+               WHERE depends_on = ANY($1::text[]) AND task_id = ANY($1::text[])""",
+            task_ids,
+        )
+        return {row["depends_on"]: row["task_id"] for row in rows}
+
     async def add_usage(
         self, task_id: str, hour: datetime, skill: str, cost: float, counts: dict[str, int],
     ) -> None:
@@ -559,6 +588,7 @@ class TaskStore:
         rows = await self.db.pool.fetch(
             f"""SELECT {TASK_COLUMNS} FROM tasks
                 WHERE state = 'paused' AND started_at IS NOT NULL AND NOT held
+                  AND NOT COALESCE(options, '{{}}'::jsonb) ? 'todo'
                   {scope_filter}
                 ORDER BY priority DESC, seq LIMIT $1""",
             limit, *scopes,

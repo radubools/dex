@@ -1,7 +1,7 @@
 /** Mirrors the server's event and resource shapes (see `src/dex/models.py`). */
 
 export type TaskState =
-  | 'queued' | 'running' | 'awaiting_input'
+  | 'todo' | 'queued' | 'running' | 'awaiting_input'
   | 'succeeded' | 'failed' | 'cancelled'
   /** Stopped mid-run — by dex making room, or by the server dying under it.
       Either way it goes again on its own. */

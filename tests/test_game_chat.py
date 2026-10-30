@@ -167,6 +167,31 @@ def test_a_message_to_a_finished_chat_continues_it(client):
     assert len(chats) == 1 and chats[0]["attempts"] == 2 and chats[0]["taskId"] == r["taskId"]
 
 
+def test_a_todo_message_starts_a_split_and_not_a_chat(client):
+    t = client.thread_id
+    r = client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH, json={
+        "text": "Tidy the lab", "todo": True, "context": {"view": "the lab"},
+    }).json()
+    assert r["delivered"] == "started"
+    first = wait_state(client, r["chatId"], {"succeeded"})
+    listed = client.get(f"/api/game-chat/ml/threads/{t}/chats", headers=AUTH).json()["chats"]
+    assert [c["chatId"] for c in listed] == [r["chatId"]]
+    assert first["chat"]["title"] == "Tidy the lab"
+
+    task = client.get(f"/api/tasks/{r['taskId']}").json()["task"]
+    assert task["scope"] == "todos"
+
+
+def test_a_todo_message_inside_a_chat_starts_its_own(client):
+    t = client.thread_id
+    url = f"/api/game-chat/ml/threads/{t}/messages"
+    chat = client.post(url, headers=AUTH, json={"text": "Hello"}).json()["chatId"]
+    wait_state(client, chat, {"succeeded"})
+    second = client.post(url, headers=AUTH, json={"text": "Later", "chatId": chat, "todo": True}).json()
+    assert second["chatId"] != chat
+    assert second["delivered"] == "started"
+
+
 def test_cancel_and_unknown_chats(client):
     t = client.thread_id
     assert client.post("/api/game-chat/ml/chats/nope/cancel", headers=AUTH).status_code == 404

@@ -175,6 +175,7 @@ flowchart TB
 | `locks` | Lock, read, write, release: thread and file locks for shared state (skills, port leases) |
 | `ports` | Leased TCP ports for task servers, never handed out twice (`python -m dex.ports`) |
 | `deps` | Task dependencies: start, continue and wait for tasks in other threads; blocking and waking |
+| `todos` | Todo lists: work that waits for dex to be idle and gives way to anything else (24) |
 | `designer` | Conversation history for design turns |
 | `store` / `db` | Reads and writes; schema applied at startup |
 | `projects` / `migrate` | Projects, starter guides, design threads, adopting old installs |

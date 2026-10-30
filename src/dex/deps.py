@@ -54,7 +54,7 @@ class Refused(Exception):
 
 
 #: The run options a task hands to the tasks it starts or continues.
-INHERITED = ("e2e",)
+INHERITED = ("e2e", "todo")
 
 
 def inherited(task: Task) -> dict[str, Any]:
@@ -213,7 +213,7 @@ class Dependencies:
         """Start a power task in the project's Power thread; the waiter depends on it."""
         if not (brief or "").strip():
             raise Refused("the brief is empty")
-        if waiter.is_power:
+        if waiter.is_power and not waiter.todo:
             raise Refused("a power task does its own code changes: it starts no tasks")
         project = waiter.project or self.m.config.default_project
         await self._check(waiter)

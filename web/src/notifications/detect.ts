@@ -42,7 +42,7 @@ type Known = {
   state: TaskState
 }
 
-const ACTIVE: TaskState[] = ['queued', 'running', 'awaiting_input', 'paused', 'blocked']
+const ACTIVE: TaskState[] = ['todo', 'queued', 'running', 'awaiting_input', 'paused', 'blocked']
 const TERMINAL: TaskState[] = ['succeeded', 'failed', 'cancelled']
 const isActive = (s: TaskState | undefined) => s !== undefined && ACTIVE.includes(s)
 const isTerminal = (s: TaskState | undefined) => s !== undefined && TERMINAL.includes(s)

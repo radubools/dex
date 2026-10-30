@@ -413,6 +413,7 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 
 .state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
 .state-dot.running { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.state-dot.todo { background: var(--muted); opacity: 0.6; }
 .state-dot.awaiting_input { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
 .state-dot.succeeded { background: var(--add); }
 .state-dot.failed, .state-dot.cancelled { background: var(--del); }
