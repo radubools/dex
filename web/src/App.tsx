@@ -25,6 +25,7 @@ const SkillAdmin = lazy(() =>
   import('./components/SkillAdmin').then((m) => ({ default: m.SkillAdmin })),
 )
 import { TaskPanel } from './components/TaskPanel'
+import { NotificationsButton, useNotifications, type Notice } from './notifications'
 import type { ViewerTarget } from './components/Viewer'
 import { canGoBack, navState, record, type Overlay, type Place, type View } from './navigation'
 import { useSplit, useViewport } from './split'
@@ -121,12 +122,16 @@ export default function App() {
   const [hasPackages, setHasPackages] = useState(false)
   const loaded = useRef<Set<string>>(new Set())
   const [graphChanges, setGraphChanges] = useState(0)
+  // What needs the operator, from the same stream (notifications/).
+  const notices = useNotifications()
+  const observeNotice = notices.observe
 
   // One stream for the whole app; tasks and threads are demultiplexed by the store.
   useEffect(() => {
     const close = openStream(
       (event) => {
         dispatch({ type: 'event', event })
+        observeNotice(event)
         // The task graph refetches on what changes it (a task made, moved on,
         // or made to wait on another), not on every streamed token.
         if (GRAPH_EVENTS.has(event.type)) setGraphChanges((n) => n + 1)
@@ -157,7 +162,12 @@ export default function App() {
       (up) => dispatch({ type: 'connection', up }),
     )
     return close
-  }, [])
+  }, [observeNotice])
+
+  // Notices name their task and tell a root task from a child step by these.
+  const { seedTasks, nameThreads } = notices
+  useEffect(() => seedTasks(Object.values(state.tasks).map((v) => v.task)), [state.tasks, seedTasks])
+  useEffect(() => nameThreads(threads), [threads, nameThreads])
 
   useEffect(() => {
     // Identity first: an unauthenticated visitor must not trigger a wall of
@@ -425,6 +435,36 @@ export default function App() {
     [threadId, refreshThreads, go],
   )
 
+  /** A notice clicked in the panel: its task, or its thread, as a step. */
+  const openNotice = useCallback(
+    (notice: Notice) => {
+      go()
+      setShowCosts(false)
+      setShowGuide(false)
+      setShowUsers(false)
+      setShowSkills(false)
+      setViewing(null)
+      setDrawerOpen(false)
+      setView('chat')
+      if (notice.threadId) setThreadId(notice.threadId)
+      setActiveTaskId(notice.taskId)
+      const switchTo = (slug: string | null | undefined) => {
+        if (!slug) return
+        setProject((current) => {
+          if (current !== slug) loaded.current.clear()
+          return slug
+        })
+      }
+      if (notice.project) switchTo(notice.project)
+      // A thread notice may not know its project; the thread does.
+      else if (notice.threadId)
+        getThread(notice.threadId)
+          .then(({ thread }) => switchTo(thread.project))
+          .catch(() => {})
+    },
+    [go],
+  )
+
   const newThread = async () => {
     const thread = await createThread(project ?? undefined)
     setThreads((current) => [thread, ...current])
@@ -660,6 +700,7 @@ export default function App() {
           >
             <span aria-hidden="true">📖</span>
           </button>
+          <NotificationsButton notices={notices} onOpen={openNotice} />
           <SettingsMenu
             autoApprove={state.autoApprove}
             onOpenCosts={() => openPane('costs')}
