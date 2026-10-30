@@ -161,3 +161,27 @@ test('the arrows page through earlier periods and stop at the ends', async ({ pa
   await expect(older).toHaveCount(0)
   await expect.poll(() => asked.at(-1)).toBe('0')
 })
+
+test('hovering a bar lists its values and leaving hides them', async ({ page }) => {
+  const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00+00:00'
+  await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(1), 'game-mesh', 1.5, 1)] })
+  const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
+  await expect(panel.locator('.cost-chart .axis')).toHaveCount(0)
+
+  const columns = panel.locator('.cost-column')
+  await expect(columns).toHaveCount(7)
+  await columns.nth(5).hover()
+  const card = panel.getByRole('tooltip')
+  await expect(card.locator('strong')).toHaveText('$6.50')
+  await expect(card.locator('.cost-card-row').first()).toContainText('game-story')
+  await expect(card.locator('.cost-card-row').last()).toContainText('$1.50')
+  await card.evaluate((el) => {
+    const box = el.getBoundingClientRect(), plot = el.parentElement!.getBoundingClientRect()
+    if (box.left < plot.left - 1 || box.right > plot.right + 1) throw new Error('card outside the chart')
+  })
+
+  await columns.nth(0).hover()
+  await expect(card).toContainText('Nothing spent')
+  await page.mouse.move(5, 5)
+  await expect(card).toHaveCount(0)
+})

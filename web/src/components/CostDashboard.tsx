@@ -376,6 +376,7 @@ function Coverage({ coverage }: { coverage?: CostsResponse['coverage'] }) {
 
 const MIN_SLOT = 7
 const TICK_WIDTH = 38
+const CARD_WIDTH = 200
 
 /** Plain SVG: a chart library would be a large dependency for one view. */
 function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => string }) {
@@ -398,6 +399,11 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
   const gap = Math.min(4, slot * 0.2)
   const barWidth = slot - gap
   const everyTick = Math.ceil(TICK_WIDTH / slot)
+  const [hovered, setHovered] = useState<number | null>(null)
+  const scrolled = scroller.current?.scrollLeft ?? 0
+  // Beside the bar, on whichever side has room.
+  const barAt = hovered === null ? 0 : hovered * slot - scrolled
+  const cardLeft = barAt > room / 2 ? Math.max(0, barAt - CARD_WIDTH - 6) : Math.min(barAt + slot + 6, room - CARD_WIDTH)
 
   // The newest bars are the ones wanted, and they sit at the far end.
   useLayoutEffect(() => {
@@ -406,7 +412,8 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
   }, [chart, room])
 
   return (
-    <div className="chart-scroll" ref={scroller}>
+    <div className="cost-plot" onPointerLeave={() => setHovered(null)}>
+      <div className="chart-scroll" ref={scroller}>
       <svg className="cost-chart" width={width} height={height + 26} role="img"
            aria-label="Cost over time">
         {[0.25, 0.5, 0.75, 1].map((f) => (
@@ -416,7 +423,7 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
         {chart.buckets.map((bucket, i) => {
           let offset = 0
           return (
-            <g key={bucket} transform={`translate(${i * slot}, 0)`}>
+            <g key={bucket} transform={`translate(${i * slot}, 0)`} className={hovered === i ? 'on' : undefined}>
               {chart.series.map((name, si) => {
                 const value = chart.values[bucket]?.[name] ?? 0
                 if (value <= 0) return null
@@ -431,11 +438,19 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
                     height={Math.max(h, 1)}
                     fill={COLORS[si % COLORS.length]}
                     rx="2"
-                  >
-                    <title>{`${chart.titles[i]} · ${name}: ${format(value)}`}</title>
-                  </rect>
+                  />
                 )
               })}
+              {/* The whole column answers, so a tiny or empty bar can still be read. */}
+              <rect
+                className="cost-column"
+                x="0"
+                y="0"
+                width={slot}
+                height={height}
+                onPointerEnter={() => setHovered(i)}
+                onPointerDown={() => setHovered(i)}
+              />
               {(chart.dayTicks ? bucket.endsWith('T00') : (chart.buckets.length - 1 - i) % everyTick === 0) && (
                 <text x={i === chart.buckets.length - 1 ? barWidth : barWidth / 2} y={height + 16} className="tick"
                       style={i === chart.buckets.length - 1 ? { textAnchor: 'end' } : undefined}>
@@ -445,10 +460,41 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
             </g>
           )
         })}
-        {[0.5, 1].map((f) => (
-          <text key={f} x="2" y={height - height * f + 10} className="axis">{format(chart.max * f)}</text>
-        ))}
       </svg>
+      </div>
+      {hovered !== null && <BucketCard chart={chart} index={hovered} format={format} left={cardLeft} />}
+    </div>
+  )
+}
+
+/** A bar's values, largest first, so nothing has to be read off the chart. */
+function BucketCard({ chart, index, format, left }: {
+  chart: Chart
+  index: number
+  format: (n: number) => string
+  left: number
+}) {
+  const values = chart.values[chart.buckets[index]] ?? {}
+  const rows = chart.series
+    .map((name, i) => ({ name, color: COLORS[i % COLORS.length], value: values[name] ?? 0 }))
+    .filter((r) => r.value > 0)
+    .sort((a, b) => b.value - a.value)
+  const total = rows.reduce((a, r) => a + r.value, 0)
+
+  return (
+    <div className="cost-card" role="tooltip" style={{ left }}>
+      <div className="cost-card-head">
+        <span>{chart.titles[index]}</span>
+        <strong>{format(total)}</strong>
+      </div>
+      {rows.length === 0 && <div className="muted small">Nothing spent</div>}
+      {rows.map((r) => (
+        <div key={r.name} className="cost-card-row">
+          <span className="swatch" style={{ background: r.color }} />
+          <span className="cost-card-name">{r.name}</span>
+          <span>{format(r.value)}</span>
+        </div>
+      ))}
     </div>
   )
 }

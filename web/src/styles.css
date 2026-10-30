@@ -955,7 +955,13 @@ body.resizing iframe { pointer-events: none; }
 .cost-filter-menu { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; min-width: 170px; max-height: 260px; overflow: auto; padding: 6px; background: var(--panel, #12151c); border: 1px solid var(--line); border-radius: 8px; }
 .cost-filter-menu label { display: flex; align-items: center; gap: 8px; padding: 5px 6px; cursor: pointer; white-space: nowrap; }
 .cost-filter-menu .ghost-btn { width: 100%; margin-bottom: 4px; }
-.cost-chart .axis { fill: var(--muted); font-size: 9px; paint-order: stroke; stroke: var(--bg, #0b0d12); stroke-width: 3px; }
+.cost-plot { position: relative; }
+.cost-chart .cost-column { fill: transparent; }
+.cost-chart g.on .cost-column { fill: rgba(255, 255, 255, 0.06); }
+.cost-card { position: absolute; top: 4px; z-index: 4; width: 200px; padding: 8px 10px; font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; background: var(--panel, #12151c); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); }
+.cost-card-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.cost-card-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.cost-card-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cost-chart .tick { fill: var(--muted); font-size: 9px; text-anchor: middle; }
 
 .legend { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
