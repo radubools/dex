@@ -9,6 +9,7 @@ them either — hence this.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 from claude_agent_sdk import (
@@ -20,6 +21,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
+from dex import skills
 from dex.bus import EventBus
 from dex.models import Task
 from dex.runner import TaskRunner
@@ -351,3 +353,85 @@ async def test_the_tag_is_read_loosely(runner):
     run, _ = runner
     options = ["Put it in the project `utils/`", "Keep it in the task directory"]
     assert await run._auto_answer(" Utility ", options) == options[0]
+
+
+def _message(content, message_id, output=100):
+    return AssistantMessage(
+        content=content, model="claude-opus-5", message_id=message_id,
+        usage={"input_tokens": 10, "output_tokens": output,
+               "output_tokens_details": {"thinking_tokens": 40}},
+    )
+
+
+async def _rollup(db, task_id):
+    return await db.pool.fetch(
+        "SELECT skill, cost_usd, input_tokens, output_tokens, thinking_tokens "
+        "FROM task_usage WHERE task_id = $1 ORDER BY skill", task_id,
+    )
+
+
+async def test_a_message_repeated_per_block_counts_once(runner, db):
+    run, _ = runner
+    block = TextBlock(text="hi")
+    run._translate(_message([block], "m1"))
+    run._translate(_message([block], "m1"))
+    run._translate(_message([block], "m1", output=120))
+    await run.settled()
+
+    rows = await _rollup(db, run.task.id)
+    assert [(r["input_tokens"], r["output_tokens"], r["thinking_tokens"]) for r in rows] == [(10, 120, 40)]
+
+
+async def test_usage_is_kept_when_a_run_never_reaches_its_result(runner, db):
+    run, _ = runner
+    run._translate(_message([TextBlock(text="hi")], "m1"))
+    await run.settled()
+    assert (await _rollup(db, run.task.id))[0]["output_tokens"] == 100
+
+
+async def test_spend_follows_the_skill_and_settles_to_the_agents_total(runner, db, monkeypatch):
+    run, _ = runner
+    run._attribution = skills.Attribution(frozenset({"game-story"}), {"code_trace": "game-story"})
+    run._translate(_message([TextBlock(text="planning")], "m1"))
+    run._translate(_message(
+        [ToolUseBlock(id="t", name="Read", input={"file_path": "/x/skills/game-story/ab/SKILL.md"})],
+        "m2",
+    ))
+    run._translate(ResultMessage(
+        subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+        session_id="s", total_cost_usd=5.0,
+    ))
+    await run.settled()
+
+    rows = await _rollup(db, run.task.id)
+    assert [r["skill"] for r in rows] == ["game-story"]
+    assert rows[0]["cost_usd"] == pytest.approx(5.0)
+    assert rows[0]["input_tokens"] == 20
+
+
+async def test_a_resumed_sessions_total_counts_only_what_it_added(runner, db):
+    run, _ = runner
+    run.task.session_id = "s"
+    earlier = Task(problem="p", title="first", slug="first")
+    earlier.session_id = "s"
+    await run.store.create(earlier)
+    await run.store.set_session(earlier.id, "s")
+    await run.store.set_session(run.task.id, "s")
+    await run.store.add_usage(earlier.id, datetime.now(UTC), "", 4.0, {})
+    run._translate(_message([TextBlock(text="hi")], "m1"))
+    run._translate(ResultMessage(
+        subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+        session_id="s", total_cost_usd=7.0,
+    ))
+    await run.settled()
+
+    rows = await _rollup(db, run.task.id)
+    assert sum(r["cost_usd"] for r in rows) == pytest.approx(3.0)
+
+
+def test_attribution_reads_paths_and_imports_only():
+    found = skills.Attribution(frozenset({"game-story", "game-mesh"}), {"catalog": "game-mesh"})
+    assert found.find("Bash", {"command": "python -c 'from utils import catalog'"}) == ["game-mesh"]
+    assert found.find("Read", {"file_path": "/d/skills/game-story/a/SKILL.md"}) == ["game-story"]
+    assert found.find("Write", {"file_path": "a.md", "content": "skills/game-story/"}) == []
+    assert found.find("Read", {"file_path": "/d/skills/other/a/SKILL.md"}) == []

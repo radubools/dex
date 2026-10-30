@@ -289,11 +289,23 @@ export type SettingsResponse = {
   limit: LimitStatus
 }
 
-export type CostPoint = { bucket: string; series: string; cost: number; tasks: number }
+export type CostPoint = {
+  bucket: string
+  series: string
+  cost: number
+  tasks: number
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  /** The part of `output` spent reasoning. */
+  thinking: number
+}
 
 export type CostsResponse = {
   totals: CostTotals
   series: CostPoint[]
+  coverage: { spend: number; with_tokens: number; inferred: number }
   period: string
   granularity: string
   group: string

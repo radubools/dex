@@ -324,3 +324,22 @@ BEGIN
         DROP TABLE views;
     END IF;
 END $$;
+
+-- Spend and tokens as they happen: a row per task, hour and skill, added to on
+-- every message. The dashboard sums this table and nothing else, so what it
+-- shows never depends on a run having reached its result. `skill` is '' when a
+-- task touched none; `inferred` marks history rebuilt by backfill_usage.py.
+CREATE TABLE IF NOT EXISTS task_usage (
+    task_id            TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    hour               TIMESTAMPTZ NOT NULL,
+    skill              TEXT NOT NULL DEFAULT '',
+    cost_usd           DOUBLE PRECISION NOT NULL DEFAULT 0,
+    input_tokens       BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens  BIGINT NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens      BIGINT NOT NULL DEFAULT 0,
+    thinking_tokens    BIGINT NOT NULL DEFAULT 0,
+    inferred           BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (task_id, hour, skill)
+);
+CREATE INDEX IF NOT EXISTS task_usage_hour ON task_usage (hour);

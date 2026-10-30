@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -227,6 +228,18 @@ class TaskRunner:
         #: Running list-price estimate, so a task shows spend while it works
         #: instead of nothing until it finishes.
         self._estimated_cost = 0.0
+        #: Each message's usage so far. The SDK hands a message over once per
+        #: content block, each repeating its usage, so counting them as they
+        #: come would bill most messages about three times.
+        self._message_usage: dict[str, dict[str, float]] = {}
+        #: This run's cost per rollup row, to correct to the agent's own total.
+        self._run_costs: dict[tuple[datetime, str], float] = {}
+        #: The skill spend goes to now. '' until the task touches one.
+        self._skill = "power" if task.is_power else ""
+        self._skill_named = task.is_power
+        self._attribution: skills.Attribution | None = None
+        #: Rollup writes keep their order: naming a skill must follow what it moves.
+        self._usage_lock = asyncio.Lock()
         #: State writes still in flight (`set_state` persists in the background).
         self._writes: set[asyncio.Task[None]] = set()
 
@@ -1102,8 +1115,8 @@ class TaskRunner:
                 shutil.rmtree(leftover, ignore_errors=True)
                 self._skill_work_dir = None
 
-    def _accrue(self, usage: Any) -> None:
-        """Add one message's usage to the running estimate and report it.
+    def _accrue(self, usage: Any, message_id: str | None = None) -> None:
+        """Add one message's usage to the rollup and the running estimate.
 
         Guarded separately from `_observe` so a pricing problem costs only the
         estimate, not the tool and text events in the same message.
@@ -1112,17 +1125,89 @@ class TaskRunner:
             return
         try:
             as_dict = usage if isinstance(usage, dict) else getattr(usage, "__dict__", None)
-            added = pricing.estimate(self.task.model or self.config.model, as_dict)
+            seen = self._message_usage.get(message_id, {}) if message_id else {}
+            now = {
+                "cost": pricing.estimate(self.task.model or self.config.model, as_dict),
+                **pricing.tokens(as_dict),
+            }
+            added = {k: max(0, v - seen.get(k, 0)) for k, v in now.items()}
+            if message_id:
+                self._message_usage[message_id] = {k: max(v, seen.get(k, 0)) for k, v in now.items()}
         except Exception:
             log.exception("could not price usage for task %s", self.task.id)
             return
-        if added <= 0:
+        cost = added.pop("cost")
+        if not any(added.values()) and cost <= 0:
             return
-        self._estimated_cost += added
+        hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        key = (hour, self._skill)
+        self._run_costs[key] = self._run_costs.get(key, 0.0) + cost
+        self._write_usage(self.store.add_usage, self.task.id, hour, self._skill, cost,
+                          {k: int(v) for k, v in added.items()})
+        if cost <= 0:
+            return
+        self._estimated_cost += cost
         self.task.cost_usd = self._estimated_cost
         self.task.cost_is_estimate = True
         self.emit("cost", costUsd=self._estimated_cost, estimate=True)
         asyncio.create_task(self._store_cost(self._estimated_cost, estimate=True))
+
+    def _note_skill(self, tool: str, tool_input: dict[str, Any] | None) -> None:
+        """Follow which skill the task is working with, so spend lands on it."""
+        if self.task.is_power:
+            return
+        if self._attribution is None:
+            self._attribution = skills.attribution(self.config.workspace)
+        found = self._attribution.find(tool, tool_input)
+        if not found or self._skill in found:
+            return
+        self._skill = found[0]
+        if not self._skill_named:
+            self._skill_named = True
+            for (hour, skill), cost in list(self._run_costs.items()):
+                if skill == "":
+                    del self._run_costs[(hour, skill)]
+                    key = (hour, self._skill)
+                    self._run_costs[key] = self._run_costs.get(key, 0.0) + cost
+            self._write_usage(self.store.name_usage_skill, self.task.id, self._skill)
+
+    def _settle_usage(self, total: float) -> None:
+        """Correct this run's rollup rows to the agent's own total.
+
+        The estimate is list price and misses what only the agent knows, so
+        the rows keep its shape and take the real figure. A resumed session's
+        total includes everything before it, which the rollup already holds.
+        """
+        if total <= 0:
+            return
+
+        async def settle() -> None:
+            earlier = await self.store.session_usage(self.task.id, self.task.session_id)
+            own = max(0.0, total - max(0.0, earlier - self._estimated_cost))
+            if self._estimated_cost <= 0:
+                hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+                self._run_costs[(hour, self._skill)] = own
+                await self.store.add_usage(self.task.id, hour, self._skill, own, {})
+            elif own > 0:
+                factor = own / self._estimated_cost
+                for (hour, skill), cost in self._run_costs.items():
+                    self._run_costs[(hour, skill)] = cost * factor
+                    await self.store.add_usage(self.task.id, hour, skill, cost * (factor - 1), {})
+            self._estimated_cost = own or self._estimated_cost
+
+        self._write_usage(settle)
+
+    def _write_usage(self, write: Any, *args: Any) -> None:
+        async def run() -> None:
+            async with self._usage_lock:
+                try:
+                    await write(*args)
+                except Exception:
+                    log.exception("could not record usage for %s", self.task.id)
+
+        task = asyncio.create_task(run())
+        self._writes.add(task)
+        task.add_done_callback(self._writes.discard)
 
     async def _record_limit(self, info: dict[str, Any]) -> None:
         """Keep the reading. Never let it interfere with the run."""
@@ -1639,7 +1724,7 @@ class TaskRunner:
             return
 
         if isinstance(message, AssistantMessage):
-            self._accrue(getattr(message, "usage", None))
+            self._accrue(getattr(message, "usage", None), getattr(message, "message_id", None))
             for block in message.content:
                 # Text already arrived as deltas; re-emitting the completed
                 # block here would duplicate every word.
@@ -1660,6 +1745,7 @@ class TaskRunner:
                         self.emit("thinking", text=block.thinking)
                     continue
                 if isinstance(block, ToolUseBlock):
+                    self._note_skill(block.name, block.input)
                     title = _tool_title(block.name, block.input)
                     self.task.activity = title
                     self.emit(
@@ -1699,6 +1785,7 @@ class TaskRunner:
         if isinstance(message, ResultMessage):
             # The agent's own total supersedes the running estimate.
             if message.total_cost_usd is not None:
+                self._settle_usage(message.total_cost_usd)
                 self.task.cost_usd = message.total_cost_usd
                 self.task.cost_is_estimate = False
                 asyncio.create_task(

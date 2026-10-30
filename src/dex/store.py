@@ -13,6 +13,7 @@ import re
 import uuid
 import socket  # noqa: F401  (hostname is supplied by the caller)
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -193,8 +194,9 @@ class ThreadStore:
 
     async def costs_by_thread(self) -> dict[str, float]:
         rows = await self.db.pool.fetch(
-            """SELECT thread_id, COALESCE(sum(cost_usd), 0)::float8 AS cost
-               FROM tasks WHERE thread_id IS NOT NULL GROUP BY thread_id"""
+            """SELECT t.thread_id, sum(u.cost_usd)::float8 AS cost
+               FROM task_usage u JOIN tasks t ON t.id = u.task_id
+               WHERE t.thread_id IS NOT NULL GROUP BY t.thread_id"""
         )
         return {row["thread_id"]: row["cost"] for row in rows}
 
@@ -373,6 +375,63 @@ class TaskStore:
                WHERE id = $1 AND ($3 = false OR cost_is_estimate = true OR cost_usd IS NULL)""",
             task_id, cost, estimate,
         )
+
+    async def add_usage(
+        self, task_id: str, hour: datetime, skill: str, cost: float, counts: dict[str, int],
+    ) -> None:
+        """Add one message's spend to the rollup the dashboard reads."""
+        await self.db.pool.execute(
+            """INSERT INTO task_usage (task_id, hour, skill, cost_usd, input_tokens,
+                   cache_read_tokens, cache_write_tokens, output_tokens, thinking_tokens)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (task_id, hour, skill) DO UPDATE SET
+                   cost_usd = task_usage.cost_usd + EXCLUDED.cost_usd,
+                   input_tokens = task_usage.input_tokens + EXCLUDED.input_tokens,
+                   cache_read_tokens = task_usage.cache_read_tokens + EXCLUDED.cache_read_tokens,
+                   cache_write_tokens = task_usage.cache_write_tokens + EXCLUDED.cache_write_tokens,
+                   output_tokens = task_usage.output_tokens + EXCLUDED.output_tokens,
+                   thinking_tokens = task_usage.thinking_tokens + EXCLUDED.thinking_tokens""",
+            task_id, hour, skill, cost,
+            counts.get("input_tokens", 0),
+            counts.get("cache_read_tokens", 0),
+            counts.get("cache_write_tokens", 0),
+            counts.get("output_tokens", 0),
+            counts.get("thinking_tokens", 0),
+        )
+
+    async def session_usage(self, task_id: str, session_id: str | None) -> float:
+        """What a task's whole agent session has cost so far, over all its tasks."""
+        value = await self.db.pool.fetchval(
+            """SELECT COALESCE(sum(u.cost_usd), 0)::float8 FROM task_usage u
+               JOIN tasks t ON t.id = u.task_id
+               WHERE u.task_id = $1 OR ($2::text IS NOT NULL AND t.session_id = $2)""",
+            task_id, session_id,
+        )
+        return float(value or 0)
+
+    async def name_usage_skill(self, task_id: str, skill: str) -> None:
+        """Give a task's unattributed spend to the first skill it touched.
+
+        Reading the brief and deciding what to do is work for that skill, and
+        it comes before anything that could say so.
+        """
+        async with self.db.pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                """INSERT INTO task_usage (task_id, hour, skill, cost_usd, input_tokens,
+                       cache_read_tokens, cache_write_tokens, output_tokens, thinking_tokens)
+                   SELECT task_id, hour, $2, cost_usd, input_tokens,
+                       cache_read_tokens, cache_write_tokens, output_tokens, thinking_tokens
+                   FROM task_usage WHERE task_id = $1 AND skill = ''
+                   ON CONFLICT (task_id, hour, skill) DO UPDATE SET
+                       cost_usd = task_usage.cost_usd + EXCLUDED.cost_usd,
+                       input_tokens = task_usage.input_tokens + EXCLUDED.input_tokens,
+                       cache_read_tokens = task_usage.cache_read_tokens + EXCLUDED.cache_read_tokens,
+                       cache_write_tokens = task_usage.cache_write_tokens + EXCLUDED.cache_write_tokens,
+                       output_tokens = task_usage.output_tokens + EXCLUDED.output_tokens,
+                       thinking_tokens = task_usage.thinking_tokens + EXCLUDED.thinking_tokens""",
+                task_id, skill,
+            )
+            await conn.execute("DELETE FROM task_usage WHERE task_id = $1 AND skill = ''", task_id)
 
     async def set_tokens(self, task_id: str, counts: dict[str, int]) -> None:
         """Record the token counts the agent reported for a finished run.
@@ -871,16 +930,16 @@ class CostStore:
         """Spend over the usual windows, for the header menu."""
         row = await self.db.pool.fetchrow(
             """SELECT
-                 COALESCE(sum(cost_usd) FILTER (WHERE created_at > now() - interval '1 day'), 0) AS day,
-                 COALESCE(sum(cost_usd) FILTER (WHERE created_at > now() - interval '7 days'), 0) AS week,
-                 COALESCE(sum(cost_usd) FILTER (WHERE created_at > now() - interval '30 days'), 0) AS month,
+                 COALESCE(sum(cost_usd) FILTER (WHERE hour > now() - interval '1 day'), 0) AS day,
+                 COALESCE(sum(cost_usd) FILTER (WHERE hour > now() - interval '7 days'), 0) AS week,
+                 COALESCE(sum(cost_usd) FILTER (WHERE hour > now() - interval '30 days'), 0) AS month,
                  COALESCE(sum(cost_usd), 0) AS all_time
-               FROM tasks"""
+               FROM task_usage"""
         )
         return {k: float(v) for k, v in dict(row).items()}
 
     async def token_totals(self) -> dict[str, int]:
-        """Tokens over the same windows, with thinking split out of output.
+        """All-time tokens, with thinking split out of output.
 
         `thinking_tokens` is the part of `output_tokens` the model spent
         thinking, so `visible` is the remainder. The three never sum to more
@@ -893,18 +952,41 @@ class CostStore:
                  COALESCE(sum(cache_write_tokens), 0) AS cache_write,
                  COALESCE(sum(output_tokens), 0)      AS output,
                  COALESCE(sum(thinking_tokens), 0)    AS thinking,
-                 count(*) FILTER (WHERE output_tokens IS NOT NULL) AS counted,
-                 count(*) FILTER (WHERE cost_usd IS NOT NULL)      AS with_cost
-               FROM tasks"""
+                 count(DISTINCT task_id) FILTER (WHERE output_tokens > 0) AS counted,
+                 count(DISTINCT task_id) FILTER (WHERE cost_usd > 0)      AS with_cost
+               FROM task_usage"""
         )
         totals = {k: int(v) for k, v in dict(row).items()}
         totals["visible"] = max(0, totals["output"] - totals["thinking"])
         return totals
 
+    async def coverage(self, since: str = "week") -> dict[str, float]:
+        """How much of a period's spend has tokens, and how much was inferred."""
+        interval = _INTERVALS.get(since, "7 days")
+        row = await self.db.pool.fetchrow(
+            f"""SELECT
+                  COALESCE(sum(cost_usd), 0)::float8 AS spend,
+                  COALESCE(sum(cost_usd) FILTER (WHERE output_tokens > 0), 0)::float8 AS with_tokens,
+                  COALESCE(sum(cost_usd) FILTER (WHERE inferred), 0)::float8 AS inferred
+                FROM task_usage WHERE hour > now() - interval '{interval}'"""
+        )
+        return dict(row)
+
+    async def by_tasks(self, task_ids: list[str]) -> dict[str, float]:
+        """What each task itself spent."""
+        rows = await self.db.pool.fetch(
+            """SELECT task_id, sum(cost_usd)::float8 AS cost FROM task_usage
+               WHERE task_id = ANY($1::text[]) GROUP BY task_id""",
+            task_ids,
+        )
+        return {row["task_id"]: row["cost"] for row in rows}
+
     async def by_thread(self, thread_id: str) -> float:
         """A thread costs what the tasks it started cost."""
         value = await self.db.pool.fetchval(
-            "SELECT COALESCE(sum(cost_usd), 0) FROM tasks WHERE thread_id = $1", thread_id
+            """SELECT COALESCE(sum(u.cost_usd), 0) FROM task_usage u
+               JOIN tasks t ON t.id = u.task_id WHERE t.thread_id = $1""",
+            thread_id,
         )
         return float(value or 0)
 
@@ -917,22 +999,26 @@ class CostStore:
         freely — it names a SQL expression.
         """
         expression = {
-            "model": "COALESCE(model, 'unknown')",
-            # A project is the assets subdirectory, which for now is one per
-            # deployment; kept as a column so the breakdown is ready for more.
-            "project": "'algorithms'",
-            "state": "state",
-        }.get(group_by, "COALESCE(model, 'unknown')")
+            "model": "COALESCE(t.model, 'unknown')",
+            "project": "COALESCE(t.project, 'none')",
+            "skill": "COALESCE(NULLIF(u.skill, ''), '(no skill)')",
+            "state": "t.state",
+        }.get(group_by, "COALESCE(t.model, 'unknown')")
         interval = _INTERVALS.get(since, "7 days")
         width = _BUCKETS.get(bucket, "day")
 
         rows = await self.db.pool.fetch(
-            f"""SELECT date_trunc('{width}', created_at) AS bucket,
+            f"""SELECT date_trunc('{width}', u.hour) AS bucket,
                        {expression} AS series,
-                       COALESCE(sum(cost_usd), 0)::float8 AS cost,
-                       count(*) AS tasks
-                FROM tasks
-                WHERE created_at > now() - interval '{interval}'
+                       sum(u.cost_usd)::float8 AS cost,
+                       count(DISTINCT u.task_id) AS tasks,
+                       sum(u.input_tokens)::bigint AS input,
+                       sum(u.cache_read_tokens)::bigint AS cache_read,
+                       sum(u.cache_write_tokens)::bigint AS cache_write,
+                       sum(u.output_tokens)::bigint AS output,
+                       sum(u.thinking_tokens)::bigint AS thinking
+                FROM task_usage u JOIN tasks t ON t.id = u.task_id
+                WHERE u.hour > now() - interval '{interval}'
                 GROUP BY 1, 2
                 ORDER BY 1""",
         )
@@ -942,6 +1028,11 @@ class CostStore:
                 "series": row["series"],
                 "cost": row["cost"],
                 "tasks": row["tasks"],
+                "input": row["input"],
+                "cacheRead": row["cache_read"],
+                "cacheWrite": row["cache_write"],
+                "output": row["output"],
+                "thinking": row["thinking"],
             }
             for row in rows
         ]
