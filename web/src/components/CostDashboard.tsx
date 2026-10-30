@@ -64,6 +64,10 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
   const [projects, setProjects] = useState<string[]>([])
   /** How many periods back the chart is; 0 is the one ending now. */
   const [offset, setOffset] = useState(0)
+  /** The series left on, by the group's names. Empty means all of them. */
+  const [picked, setPicked] = useState<string[]>([])
+  /** The same for the token kinds, when the chart stacks kinds. */
+  const [pickedKinds, setPickedKinds] = useState<string[]>([])
 
   // Grouping by project already separates them, so there the filter rests.
   const filter = group === 'project' ? [] : projects
@@ -79,17 +83,26 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
   }, [period, granularity, group, filterKey, offset])
 
   const view = TOKEN_VIEWS.find((v) => v.id === tokenView) ?? TOKEN_VIEWS[0]
+  const stacksKinds = metric === 'tokens' && !!view.kinds
   const chart = useMemo(() => {
     const points = data?.series ?? []
     const shown = metric === 'cost' ? stacked(points, (p) => p.cost)
       : view.kinds ? kinds(points, view.kinds)
       : stacked(points, view.of ?? (() => 0))
+    // Kinds are one chart's worth of each group, so a group left off leaves
+    // their totals too. Groups keep theirs, to show what clicking would bring back.
+    const base = stacksKinds ? shown.filter((m) => wanted(picked, m.raw)) : shown
+    const on = stacksKinds
+      ? base.filter((m) => wanted(pickedKinds, m.series))
+      : base.filter((m) => wanted(picked, m.raw))
     // Drawn with the granularity the data came with, not a click still in flight.
-    return collect(shown, data?.period ?? period, (data?.granularity ?? granularity) as Granularity,
+    return collect(base, on, data?.period ?? period, (data?.granularity ?? granularity) as Granularity,
                    data?.earliest, data?.offset ?? 0)
-  }, [data, metric, view, period, granularity])
+  }, [data, metric, view, period, granularity, picked, pickedKinds, stacksKinds])
   const breakdown = useMemo(() => buildBreakdown(data?.series ?? []), [data])
   const format = metric === 'cost' ? money : count
+  const picks = stacksKinds ? pickedKinds : picked
+  const setPicks = stacksKinds ? setPickedKinds : setPicked
   const allowed = PERIODS.find((p) => p.id === period)?.granularities ?? []
 
   return (
@@ -130,7 +143,14 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
           </div>
           <div className="segmented">
             {GROUPS.map((g) => (
-              <button key={g.id} className={group === g.id ? 'on' : ''} onClick={() => setGroup(g.id)}>
+              <button
+                key={g.id}
+                className={group === g.id ? 'on' : ''}
+                onClick={() => {
+                  if (g.id !== group) setPicked([])
+                  setGroup(g.id)
+                }}
+              >
                 {g.label}
               </button>
             ))}
@@ -141,7 +161,14 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
           {metric === 'tokens' && (
             <div className="segmented">
               {TOKEN_VIEWS.map((v) => (
-                <button key={v.id} className={view.id === v.id ? 'on' : ''} onClick={() => setTokenView(v.id)}>
+                <button
+                  key={v.id}
+                  className={view.id === v.id ? 'on' : ''}
+                  onClick={() => {
+                    setTokenView(v.id)
+                    setPickedKinds([])
+                  }}
+                >
                   {v.label}
                 </button>
               ))}
@@ -193,15 +220,38 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
               <>
                 <StackedBars key={offset} chart={chart} format={format} />
                 <ul className="legend">
-                  {chart.series.map((name, i) => (
-                    <li key={name}>
-                      <span className="swatch" style={{ background: COLORS[i % COLORS.length] }} />
-                      {name}
-                      <span className="legend-value">{format(chart.totals[name] ?? 0)}</span>
-                    </li>
-                  ))}
+                  <li>
+                    <button
+                      className={`legend-item ${picks.length === 0 ? '' : 'off'}`}
+                      aria-pressed={picks.length === 0}
+                      onClick={() => setPicks([])}
+                    >
+                      <span className="swatch all" />
+                      All series
+                      <span className="legend-value">
+                        {format(Object.values(chart.totals).reduce((a, c) => a + c, 0))}
+                      </span>
+                    </button>
+                  </li>
+                  {chart.series.map((name, i) => {
+                    const names = chart.members[name] ?? [name]
+                    const on = picks.length > 0 && names.every((n) => picks.includes(n))
+                    return (
+                      <li key={name}>
+                        <button
+                          className={`legend-item ${picks.length === 0 || on ? '' : 'off'}`}
+                          aria-pressed={on}
+                          onClick={() => setPicks(toggled(picks, names))}
+                        >
+                          <span className="swatch" style={{ background: COLORS[i % COLORS.length] }} />
+                          {name}
+                          <span className="legend-value">{format(chart.totals[name] ?? 0)}</span>
+                        </button>
+                      </li>
+                    )
+                  })}
                 </ul>
-                <Breakdown rows={breakdown} />
+                <Breakdown rows={breakdown} picked={picked} onPick={setPicked} />
                 <Coverage coverage={data.coverage} />
               </>
             )}
@@ -260,12 +310,23 @@ type Chart = {
   /** A week of hours can't label every few bars, so it labels each day. */
   dayTicks: boolean
   series: string[]
+  /** What each series stands for: Other is several groups. */
+  members: Record<string, string[]>
   values: Record<string, Record<string, number>>
   totals: Record<string, number>
   max: number
 }
 
-type Mark = { bucket: string; series: string; value: number }
+/** `series` is what the chart stacks; `raw` the group the value belongs to. */
+type Mark = { bucket: string; series: string; raw: string; value: number }
+
+const wanted = (picks: string[], name: string) => picks.length === 0 || picks.includes(name)
+
+/** The first click narrows to one; later ones add or remove; none left is all. */
+const toggled = (picks: string[], names: string[]) =>
+  names.every((n) => picks.includes(n))
+    ? picks.filter((p) => !names.includes(p))
+    : [...new Set([...picks, ...names])]
 
 /** More series than colours reads as noise, so the smallest fold into Other. */
 function stacked(points: CostPoint[], of: (p: CostPoint) => number): Mark[] {
@@ -276,28 +337,35 @@ function stacked(points: CostPoint[], of: (p: CostPoint) => number): Mark[] {
   return points.map((p) => ({
     bucket: p.bucket,
     series: kept.includes(p.series) ? p.series : 'Other',
+    raw: p.series,
     value: of(p),
   }))
 }
 
 function kinds(points: CostPoint[], list: Kind[]): Mark[] {
-  return points.flatMap((p) => list.map((k) => ({ bucket: p.bucket, series: k.name, value: k.of(p) })))
+  return points.flatMap((p) => list.map((k) => ({ bucket: p.bucket, series: k.name, raw: p.series, value: k.of(p) })))
 }
 
 const rangeOf = (chart: Chart) =>
   chart.titles.length > 1 ? `${chart.titles[0]} – ${chart.titles[chart.titles.length - 1]}` : chart.titles[0] ?? ''
 
 function collect(
-  marks: Mark[], period: string, g: Granularity, anchor?: string | null, offset = 0,
+  marks: Mark[], on: Mark[], period: string, g: Granularity, anchor?: string | null, offset = 0,
 ): Chart {
   const values: Record<string, Record<string, number>> = {}
   const totals: Record<string, number> = {}
-  for (const m of marks) {
+  const members: Record<string, string[]> = {}
+  for (const m of on) {
     const key = bucketKey(m.bucket, g)
     values[key] = values[key] ?? {}
     values[key][m.series] = (values[key][m.series] ?? 0) + m.value
-    totals[m.series] = (totals[m.series] ?? 0) + m.value
   }
+  for (const m of marks) {
+    totals[m.series] = (totals[m.series] ?? 0) + m.value
+    const names = (members[m.series] ??= [])
+    if (m.series === 'Other' && !names.includes(m.raw)) names.push(m.raw)
+  }
+  for (const name of Object.keys(members)) if (name !== 'Other') members[name] = [name]
   // Marks of `kinds` come in display order; everything else goes largest first.
   const order = [...new Set(marks.map((m) => m.series))]
   const isKinds = order.every((s) => KINDS.some((k) => k.name === s))
@@ -315,6 +383,7 @@ function collect(
     labels: buckets.map((b) => bucketLabel(b, dayTicks ? 'day' : g)),
     titles: buckets.map((b) => bucketTitle(b, g)),
     series,
+    members,
     values,
     totals,
     max,
@@ -336,7 +405,20 @@ function buildBreakdown(points: CostPoint[]): Row[] {
   return Object.values(rows).sort((a, b) => b.cost - a.cost)
 }
 
-function Breakdown({ rows }: { rows: Row[] }) {
+function Breakdown({ rows, picked, onPick }: {
+  rows: Row[]
+  picked: string[]
+  onPick: (next: string[]) => void
+}) {
+  const sum = (of: (r: Row) => number) => rows.reduce((a, r) => a + of(r), 0)
+  const all: Row = {
+    name: 'All series',
+    cost: sum((r) => r.cost),
+    input: sum((r) => r.input),
+    cached: sum((r) => r.cached),
+    output: sum((r) => r.output),
+    thinking: sum((r) => r.thinking),
+  }
   return (
     <div className="chart-scroll">
       <table className="cost-table">
@@ -344,8 +426,12 @@ function Breakdown({ rows }: { rows: Row[] }) {
           <tr><th /><th>Cost</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th></tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.name}>
+          {[all, ...rows].map((r) => (
+            <tr
+              key={r.name}
+              className={r === all ? 'all' : picked.length === 0 || picked.includes(r.name) ? '' : 'off'}
+              onClick={() => onPick(r === all ? [] : toggled(picked, [r.name]))}
+            >
               <th scope="row">{r.name}</th>
               <td>{whole(r.cost)}</td>
               <td>{count(r.input)}</td>
@@ -377,6 +463,7 @@ function Coverage({ coverage }: { coverage?: CostsResponse['coverage'] }) {
 const MIN_SLOT = 7
 const TICK_WIDTH = 38
 const CARD_WIDTH = 200
+const PIN_MS = 5000
 
 /** Plain SVG: a chart library would be a large dependency for one view. */
 function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => string }) {
@@ -400,6 +487,30 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
   const barWidth = slot - gap
   const everyTick = Math.ceil(TICK_WIDTH / slot)
   const [hovered, setHovered] = useState<number | null>(null)
+  const plot = useRef<HTMLDivElement>(null)
+  const unpin = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  // A finger lifting counts as leaving, so a tap pins the card instead: until
+  // this runs out, another bar is tapped, or a tap lands outside the plot.
+  const pin = (i: number) => {
+    setHovered(i)
+    clearTimeout(unpin.current)
+    unpin.current = setTimeout(() => setHovered(null), PIN_MS)
+  }
+
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (plot.current?.contains(e.target as Node)) return
+      clearTimeout(unpin.current)
+      setHovered(null)
+    }
+    document.addEventListener('pointerdown', away)
+    return () => {
+      document.removeEventListener('pointerdown', away)
+      clearTimeout(unpin.current)
+    }
+  }, [])
+
   const scrolled = scroller.current?.scrollLeft ?? 0
   // Beside the bar, on whichever side has room.
   const barAt = hovered === null ? 0 : hovered * slot - scrolled
@@ -412,7 +523,11 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
   }, [chart, room])
 
   return (
-    <div className="cost-plot" onPointerLeave={() => setHovered(null)}>
+    <div
+      className="cost-plot"
+      ref={plot}
+      onPointerLeave={(e) => e.pointerType === 'mouse' && setHovered(null)}
+    >
       <div className="chart-scroll" ref={scroller}>
       <svg className="cost-chart" width={width} height={height + 26} role="img"
            aria-label="Cost over time">
@@ -448,8 +563,8 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
                 y="0"
                 width={slot}
                 height={height}
-                onPointerEnter={() => setHovered(i)}
-                onPointerDown={() => setHovered(i)}
+                onPointerEnter={(e) => e.pointerType === 'mouse' && setHovered(i)}
+                onPointerDown={(e) => (e.pointerType === 'mouse' ? setHovered(i) : pin(i))}
               />
               {(chart.dayTicks ? bucket.endsWith('T00') : (chart.buckets.length - 1 - i) % everyTick === 0) && (
                 <text x={i === chart.buckets.length - 1 ? barWidth : barWidth / 2} y={height + 16} className="tick"

@@ -93,7 +93,7 @@ test('a token kind on its own follows the group, and the cards follow the period
   await expect(panel.locator('.cost-label', { hasText: 'Reasoning' })).toBeVisible()
   await expect(panel.locator('.legend li', { hasText: 'Cache read' })).toHaveCount(0)
   await panel.locator('.segmented').last().getByRole('button', { name: 'Reasoning' }).click()
-  await expect(panel.locator('.legend li').first()).toContainText('game-story')
+  await expect(panel.locator('.legend li').nth(1)).toContainText('game-story')
 })
 
 test('the largest series leads the legend and Other closes it', async ({ page }) => {
@@ -101,7 +101,8 @@ test('the largest series leads the legend and Other closes it', async ({ page })
     point('2026-10-29T00:00:00+00:00', n, i + 1, 1))
   await open(page, { ...fixture, series })
   const legend = page.getByRole('dialog', { name: 'Cost dashboard' }).locator('.legend li')
-  await expect(legend.first()).toContainText('i')
+  await expect(legend.first()).toContainText('All series')
+  await expect(legend.nth(1)).toContainText('i')
   await expect(legend.last()).toContainText('Other')
 })
 
@@ -184,4 +185,80 @@ test('hovering a bar lists its values and leaving hides them', async ({ page }) 
   await expect(card).toContainText('Nothing spent')
   await page.mouse.move(5, 5)
   await expect(card).toHaveCount(0)
+})
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true })
+
+  test('a tap keeps the card for 5 s, until another bar or a tap outside', async ({ page }) => {
+    const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00+00:00'
+    await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(3), 'game-mesh', 2, 1)] })
+    await page.clock.install()
+    const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
+    const columns = panel.locator('.cost-column')
+    const card = panel.getByRole('tooltip')
+
+    await columns.nth(5).tap()
+    await expect(card.locator('strong')).toHaveText('$5.00')
+    await page.clock.runFor(4500)
+    await expect(card.locator('strong')).toHaveText('$5.00')
+
+    // Another bar takes over and gets its own full 5 s.
+    await columns.nth(3).tap()
+    await expect(card.locator('strong')).toHaveText('$2.00')
+    await page.clock.runFor(4500)
+    await expect(card).toBeVisible()
+    await page.clock.runFor(600)
+    await expect(card).toHaveCount(0)
+
+    await columns.nth(5).tap()
+    await expect(card).toBeVisible()
+    await panel.locator('.cost-grid').tap()
+    await expect(card).toHaveCount(0)
+  })
+})
+
+test('clicking series narrows to them, and All series brings the rest back', async ({ page }) => {
+  await open(page)
+  const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
+  const legend = (name: string) => panel.locator('.legend-item', { hasText: name })
+  const bars = panel.locator('.cost-chart rect:not(.cost-column)')
+  await expect(legend('All series')).toContainText('$8.00')
+  await expect(panel.getByRole('row', { name: /All series/ })).toContainText('$8.00')
+  await expect(bars).toHaveCount(3)
+
+  await legend('(no skill)').click()
+  await expect(bars).toHaveCount(1)
+  await expect(legend('(no skill)')).toHaveAttribute('aria-pressed', 'true')
+  await expect(legend('game-story')).toHaveClass(/off/)
+  await expect(legend('All series')).toHaveClass(/off/)
+
+  // More than one, from the table this time, which stays in step.
+  await panel.getByRole('row', { name: /game-story/ }).click()
+  await expect(bars).toHaveCount(3)
+  await legend('game-story').click()
+  await expect(bars).toHaveCount(1)
+
+  await legend('All series').click()
+  await expect(bars).toHaveCount(3)
+  await expect(legend('All series')).toHaveAttribute('aria-pressed', 'true')
+
+  // The last one off is the same as all.
+  await legend('game-story').click()
+  await legend('game-story').click()
+  await expect(bars).toHaveCount(3)
+})
+
+test('token kinds can be picked too, and a group in the table narrows them', async ({ page }) => {
+  await open(page)
+  const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
+  await panel.getByRole('button', { name: 'Tokens' }).click()
+  const bars = panel.locator('.cost-chart rect:not(.cost-column)')
+  const before = await bars.count()
+  await panel.locator('.legend-item', { hasText: 'Reasoning' }).click()
+  await expect(bars).toHaveCount(2)
+  await panel.locator('.legend-item', { hasText: 'All series' }).click()
+  await expect(bars).toHaveCount(before)
+  await panel.getByRole('row', { name: /no skill/ }).click()
+  await expect(bars).toHaveCount(3)
 })
