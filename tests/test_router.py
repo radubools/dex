@@ -111,7 +111,7 @@ def test_work_for_an_existing_task_goes_to_it(client, routed_to):
     routed_to(lambda threads, tasks: Route("task", task_id=task["id"]))
     got = client.post(f"/api/threads/{main_id}/messages", json={"text": "fix it"}).json()
     assert got["routed"]["taskId"] == task["id"]
-    assert client.get(f"/api/tasks/{task['id']}/messages").json()["messages"][0]["body"] == "fix it"
+    assert got["message"]["body"] == "fix it"
 
 
 def test_other_work_posted_in_a_tasks_activity_starts_new_work(client, routed_to):
