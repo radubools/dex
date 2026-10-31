@@ -84,7 +84,8 @@ class Dependencies:
         )
         return [dict(r) for r in rows]
 
-    async def resolve_thread(self, project: str, ref: str, *, create: bool = False) -> dict[str, Any]:
+    async def resolve_thread(self, project: str, ref: str, *, create: bool = False,
+                             exact: bool = False) -> dict[str, Any]:
         """A thread of `project` by id or title (exact, then a unique prefix); made when asked."""
         ref = (ref or "").strip()
         if not ref:
@@ -94,7 +95,7 @@ class Dependencies:
             hit = [t for t in rows if test(t)]
             if hit:
                 return hit[0]
-        prefix = [t for t in rows if t["title"].lower().startswith(ref.lower())]
+        prefix = [] if exact else [t for t in rows if t["title"].lower().startswith(ref.lower())]
         if len(prefix) == 1:
             return prefix[0]
         if len(prefix) > 1:
@@ -327,6 +328,8 @@ class Dependencies:
             targets.append(latest.id)
             for attempt in chain:
                 todo.extend(await self.store.of(attempt))
+        # A todo stops being one: it no longer gives way to anything (todos.py).
+        await self.m.todos.make_regular(targets)
         raised = await self.m.tasks.prioritize(targets, PRIORITIZED)
         for t in raised:
             self.m.bus.publish(Event(type="task_state", task_id=t.id, project=t.project,

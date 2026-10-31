@@ -299,3 +299,4 @@ blob-report/
 # into a path. Derived from whatever skills are on disk, so it is different on
 # every install and belongs to nobody.
 widgets/index.json
+/ideas/

@@ -53,8 +53,17 @@ const count = (n: number) =>
   : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
   : String(Math.round(n))
 
+type Metric = 'cost' | 'tokens' | 'code' | 'assets'
+
+const METRICS: { id: Metric; label: string }[] = [
+  { id: 'cost', label: 'Cost' },
+  { id: 'tokens', label: 'Tokens' },
+  { id: 'code', label: 'Code lines' },
+  { id: 'assets', label: 'Asset lines' },
+]
+
 export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack?: () => void }) {
-  const [metric, setMetric] = useState<'cost' | 'tokens'>('cost')
+  const [metric, setMetric] = useState<Metric>('cost')
   const [tokenView, setTokenView] = useState(TOKEN_VIEWS[0].id)
   const [period, setPeriod] = useState('week')
   const [group, setGroup] = useState('skill')
@@ -86,7 +95,10 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
   const stacksKinds = metric === 'tokens' && !!view.kinds
   const chart = useMemo(() => {
     const points = data?.series ?? []
+    const lines = data?.lines ?? []
     const shown = metric === 'cost' ? stacked(points, (p) => p.cost)
+      : metric === 'code' ? stacked(lines, (p) => p.code)
+      : metric === 'assets' ? stacked(lines, (p) => p.assets)
       : view.kinds ? kinds(points, view.kinds)
       : stacked(points, view.of ?? (() => 0))
     // Kinds are one chart's worth of each group, so a group left off leaves
@@ -161,8 +173,9 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
           </div>
           <div className="cost-row">
             <div className="segmented">
-              <button className={metric === 'cost' ? 'on' : ''} onClick={() => setMetric('cost')}>Cost</button>
-              <button className={metric === 'tokens' ? 'on' : ''} onClick={() => setMetric('tokens')}>Tokens</button>
+              {METRICS.map((m) => (
+                <button key={m.id} className={metric === m.id ? 'on' : ''} onClick={() => setMetric(m.id)}>{m.label}</button>
+              ))}
             </div>
             {metric === 'tokens' && (
               <div className="segmented">
@@ -188,7 +201,14 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
         {data && (
           <>
             <div className="cost-grid wide">
-              {metric === 'cost'
+              {metric === 'code' || metric === 'assets'
+                ? ([['Code lines', 'code'], ['Asset lines', 'assets']] as const).map(([name, key]) => (
+                    <div key={key} className="cost-cell">
+                      <span className="cost-label">{name}</span>
+                      <span className="cost-value">{count((data.lines ?? []).reduce((a, p) => a + p[key], 0))}</span>
+                    </div>
+                  ))
+                : metric === 'cost'
                 ? (['day', 'week', 'month', 'all_time'] as const).map((k) => (
                     <div key={k} className="cost-cell">
                       <span className="cost-label">{k === 'all_time' ? 'all time' : k}</span>
@@ -222,7 +242,9 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
             )}
 
             {chart.buckets.length === 0 ? (
-              <p className="muted small">No spend recorded in this period.</p>
+              <p className="muted small">
+                {metric === 'code' || metric === 'assets' ? 'No lines changed in this period.' : 'No spend recorded in this period.'}
+              </p>
             ) : (
               <>
                 <StackedBars key={offset} chart={chart} format={format} />
@@ -258,8 +280,12 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
                     )
                   })}
                 </ul>
-                <Breakdown rows={breakdown} picked={picked} onPick={setPicked} />
-                <Coverage coverage={data.coverage} />
+                {(metric === 'cost' || metric === 'tokens') && (
+                  <>
+                    <Breakdown rows={breakdown} picked={picked} onPick={setPicked} />
+                    <Coverage coverage={data.coverage} />
+                  </>
+                )}
               </>
             )}
           </>
@@ -336,7 +362,7 @@ const toggled = (picks: string[], names: string[]) =>
     : [...new Set([...picks, ...names])]
 
 /** More series than colours reads as noise, so the smallest fold into Other. */
-function stacked(points: CostPoint[], of: (p: CostPoint) => number): Mark[] {
+function stacked<P extends { bucket: string; series: string }>(points: P[], of: (p: P) => number): Mark[] {
   const spent: Record<string, number> = {}
   for (const p of points) spent[p.series] = (spent[p.series] ?? 0) + of(p)
   const names = Object.keys(spent).sort((a, b) => spent[b] - spent[a])

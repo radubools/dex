@@ -343,3 +343,13 @@ CREATE TABLE IF NOT EXISTS task_usage (
     PRIMARY KEY (task_id, hour, skill)
 );
 CREATE INDEX IF NOT EXISTS task_usage_hour ON task_usage (hour);
+
+-- How many lines each task added or modified (changes.py), as they happen.
+-- `inferred` marks history counted by backfill_changes.py.
+CREATE TABLE IF NOT EXISTS task_changes (
+    task_id     TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    code_lines  BIGINT NOT NULL DEFAULT 0,
+    asset_lines BIGINT NOT NULL DEFAULT 0,
+    inferred    BOOLEAN NOT NULL DEFAULT false,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

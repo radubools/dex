@@ -252,7 +252,7 @@ class TaskManager:
         task.scope = scope
         task.options = dict(options or {})
         task.model = await self.settings.model_for(self.config.project, self.config.model)
-        if task.is_todos:
+        if task.is_todos or task.is_ideation:
             task.model = self.config.planner_model
         await self.tasks.create(task)
 

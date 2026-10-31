@@ -262,3 +262,17 @@ test('token kinds can be picked too, and a group in the table narrows them', asy
   await panel.getByRole('row', { name: /no skill/ }).click()
   await expect(bars).toHaveCount(3)
 })
+
+test('Code lines and Asset lines show summed lines, not cost', async ({ page }) => {
+  await open(page, { ...fixture, lines: [
+    { bucket: '2026-10-29T00:00:00+00:00', series: 'game-story', code: 1500, assets: 40 },
+    { bucket: '2026-10-30T00:00:00+00:00', series: '(no skill)', code: 500, assets: 2 },
+  ] })
+  await page.getByRole('button', { name: 'Code lines' }).click()
+  await expect(page.locator('.cost-cell', { hasText: 'Code lines' }).locator('.cost-value')).toHaveText('2.0k')
+  await expect(page.locator('.cost-cell', { hasText: 'Asset lines' }).locator('.cost-value')).toHaveText('42')
+  await expect(page.locator('.legend-item', { hasText: 'game-story' }).locator('.legend-value')).toHaveText('1.5k')
+  await page.getByRole('button', { name: 'Asset lines' }).click()
+  await expect(page.locator('.legend-item', { hasText: 'game-story' }).locator('.legend-value')).toHaveText('40')
+  await expect(page.locator('.legend-item', { hasText: 'game-story' })).not.toContainText('$')
+})

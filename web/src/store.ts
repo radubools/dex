@@ -35,6 +35,8 @@ export type State = {
    * filter pill without a reload.
    */
   tags: Record<string, Record<string, string[]>>
+  /** Size tags from tasks running now, by project and package: the rollup's latest. */
+  sizes: Record<string, Record<string, string[]>>
 }
 
 export const initialState: State = {
@@ -43,6 +45,7 @@ export const initialState: State = {
   tasks: {},
   threadMessages: {},
   tags: {},
+  sizes: {},
 }
 
 export type Action =
@@ -56,10 +59,17 @@ export type Action =
   | { type: 'taskEvents'; events: DexEvent[] }
 
 /** A task's priority, and whether ⇡ Prioritize is offered for it in this state. */
-const prioritized = (state: TaskState, priority: number) => ({
+const prioritized = (state: TaskState, priority: number, approval?: Task['approval']) => ({
   priority,
-  canPrioritize: priority < 2 && (['queued', 'paused', 'blocked'] as TaskState[]).includes(state),
+  canPrioritize: priority < 2 && approval !== 'pending' && approval !== 'rejected'
+    && (['todo', 'queued', 'paused', 'blocked'] as TaskState[]).includes(state),
 })
+
+/** Whether a proposed todo can still be decided on, in this state. */
+const decidable = (state: TaskState, task: Task, approval: Task['approval']) =>
+  task.canApprove === undefined && task.canReject === undefined
+    ? {}
+    : { canApprove: state === 'todo' && approval !== 'approved', canReject: state === 'todo' && approval !== 'rejected' }
 
 export function reduce(state: State, action: Action): State {
   switch (action.type) {
@@ -125,6 +135,11 @@ function applyEvent(state: State, event: DexEvent): State {
     return { ...state, tags: { ...state.tags, [event.project]: forProject } }
   }
 
+  if (event.type === 'package_sizes') {
+    const forProject = { ...(state.sizes[event.projectSlug] ?? {}), [event.slug]: event.tags }
+    return { ...state, sizes: { ...state.sizes, [event.projectSlug]: forProject } }
+  }
+
   if (event.type === 'settings') {
     return { ...state, autoApprove: Boolean(event.settings.auto_approve) }
   }
@@ -162,7 +177,10 @@ function applyEvent(state: State, event: DexEvent): State {
           error: event.error ?? view.task.error,
           // Raised by a prioritize; a claim starts it again from 0. Worked out
           // on every change, so a task that ran and was paused offers it again.
-          ...prioritized(event.state, event.priority ?? (event.state === 'running' ? 0 : view.task.priority ?? 0)),
+          approval: event.approval ?? view.task.approval,
+          ...prioritized(event.state, event.priority ?? (event.state === 'running' ? 0 : view.task.priority ?? 0),
+            event.approval ?? view.task.approval),
+          ...decidable(event.state, view.task, event.approval ?? view.task.approval),
         },
       })
 

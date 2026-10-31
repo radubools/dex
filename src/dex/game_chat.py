@@ -24,7 +24,7 @@ Routes:
   `chatId` starts a chat; with one it goes to that chat at once: straight
   into the running agent (it interrupts its turn), or, if the chat has
   stopped, as the next attempt that resumes the same session. With `todo`
-  it always starts a new chat, a `todos` run that splits the message into
+  it always starts a new chat, a `todos` run that scouts the message and splits it into
   todos for when dex is idle (design/24).
 - `GET  …/chats/<chat>/events?after=<seq>`: the chat's events after `seq`
   (none or 0: all of them), with streamed deltas merged, for polling.
@@ -171,7 +171,7 @@ class ChatMessage(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
     #: The chat to continue (its first task's id, as listed); none starts a new one.
     chatId: str | None = None
-    #: Don't run this now: split it into todos, for when dex is idle (todos.py).
+    #: Don't run this now: split it into todos with specs, for when dex is idle (todos.py).
     #: Always a new chat, so it leaves whatever is open running as it was.
     todo: bool = False
     #: A short name for a new chat; defaults to the message's first line.

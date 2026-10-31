@@ -488,3 +488,73 @@ def test_health_reports_the_live_limit_not_a_startup_guess(client):
 
     assert health["concurrency"] == 5
     assert health["maxConcurrency"] == MAX_WORKERS
+
+
+def test_the_library_lists_the_latest_activity_first(client):
+    project = client.config.assets_dir / "algorithms"
+    (project / "a-orphan").mkdir(parents=True, exist_ok=True)
+    for slug in ("older", "newer"):
+        client.post("/api/tasks", json={"problem": slug, "slug": slug, "project": "algorithms"})
+        (project / slug).mkdir(parents=True, exist_ok=True)
+
+    listed = client.get("/api/packages?project=algorithms").json()["packages"]
+    slugs = [p["slug"] for p in listed]
+    assert slugs.index("newer") < slugs.index("older") < slugs.index("a-orphan")
+    assert listed[slugs.index("a-orphan")]["lastActivity"] is None
+
+
+def test_the_ideation_switch_reaches_the_project(client):
+    """It has a project in its path, not a task: guarded by a task's id it
+    answered 422 before it ran, and the checkbox in Settings silently did
+    nothing."""
+    response = client.put("/api/projects/algorithms/ideation", json={"enabled": True})
+
+    # Refused by the switch itself: this project does not have the Power skill.
+    assert response.status_code == 409
+    assert "Power skill" in response.json()["detail"]
+    assert client.post("/api/projects/algorithms/ideation", json={}).status_code == 409
+
+    directory = client.config.project_dir("algorithms")
+    (directory / "skills.json").write_text('{"skills": {"power": "abc"}}', encoding="utf-8")
+
+    assert client.put("/api/projects/algorithms/ideation", json={"enabled": True}).json()["enabled"] is True
+    assert client.get("/api/projects/algorithms/ideation/status").json()["enabled"] is True
+    assert client.put("/api/projects/algorithms/ideation", json={"enabled": False}).json()["enabled"] is False
+
+
+def test_the_ideation_switch_needs_the_power_skill_and_takes_json(client):
+    (client.config.assets_dir / "algorithms").mkdir(parents=True, exist_ok=True)
+    assert client.get("/api/projects/algorithms/ideation/status").json()["available"] is False
+    response = client.put("/api/projects/algorithms/ideation", json={"enabled": True})
+    assert response.status_code == 409 and "Power" in response.json()["detail"]
+    doubled = client.put("/api/projects/algorithms/ideation", content='{"enabled": true}',
+                         headers={"content-type": "application/json, application/json"})
+    assert doubled.status_code == 422
+
+
+def test_a_plain_package_earns_no_tags(client):
+    project = client.config.assets_dir / "algorithms"
+    (project / "plain").mkdir(parents=True, exist_ok=True)
+    client.post("/api/tasks", json={"problem": "plain", "slug": "plain", "project": "algorithms"})
+    listed = {p["slug"]: p for p in client.get("/api/packages?project=algorithms").json()["packages"]}
+    assert listed["plain"]["tags"] == [] and listed["plain"]["earnedTags"] == []
+
+
+def test_a_proposals_files_are_listed(client):
+    """Ideas are beside the assets: the listing kept only what was under them."""
+    idea = client.config.ideas_dir / "algorithms" / "todo-one"
+    idea.mkdir(parents=True)
+    (idea / "SPEC.md").write_text("# Spec\n", encoding="utf-8")
+
+    listed = client.get("/api/assets", params={"path": "ideas/algorithms/todo-one", "match": "**/*"}).json()
+
+    assert [e["name"] for e in listed["entries"]] == ["ideas/algorithms/todo-one/SPEC.md"]
+
+
+
+def test_actual_sizes_replace_an_estimate_in_a_packages_tags():
+    from dex.api import _with_earned
+    estimate = ["code-lines:3c", "asset-lines:1a"]
+    actual = ["code-lines:2c", "asset-lines:0a"]
+    assert _with_earned([*estimate, "todo:done"], ["origin:ideation", *actual]) == ["todo:done", "origin:ideation", *actual]
+    assert _with_earned([*estimate, "todo:approved"], ["origin:ideation"]) == [*estimate, "todo:approved", "origin:ideation"]

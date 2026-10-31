@@ -316,6 +316,23 @@ export const importSkill = async (
 export const cancelTask = (id: string) => post<{ ok: boolean }>(`/api/tasks/${id}/cancel`)
 
 /** Move a task, and every task under it in the graph, to the front of the queue. Returns those moved. */
+export type IdeationStatus = { available: boolean; enabled: boolean; taskId: string | null; state: string | null }
+
+export const getIdeation = (project: string) =>
+  request<IdeationStatus>(`/api/projects/${encodeURIComponent(project)}/ideation/status`)
+
+export const setIdeation = (project: string, enabled: boolean) =>
+  request<IdeationStatus>(`/api/projects/${encodeURIComponent(project)}/ideation`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+
+export const listIdeas = (project: string) =>
+  request<{ log: string | null; ideas: PackageEntry[] }>(`/api/ideas?project=${encodeURIComponent(project)}`)
+
+export const decideTodo = (id: string, decision: 'approved' | 'rejected') =>
+  post<{ tasks: Task[] }>(`/api/tasks/${id}/approval`, { decision }).then((r) => r.tasks)
+
 export const prioritizeTask = (id: string) =>
   post<{ tasks: Task[] }>(`/api/tasks/${id}/prioritize`).then((r) => r.tasks)
 

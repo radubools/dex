@@ -42,11 +42,13 @@ from .store import SettingsStore, TaskMessageStore, TaskStore, ThreadStore
 from .diffs import preview_change
 from .models import Event, Task, TaskState
 from . import local_sources, skills, surveyor, widgets
+from .changes import file_lines, is_code, is_work
+from .sql import ReadOnlyPool, check, readonly_dsn
 from .threads import ThreadMessage
 from .permissions import PermissionPolicy
 from .prompts import (
-    DESIGN_SYSTEM, GENERATION_SYSTEM, SURVEY_SYSTEM, TODOS_SYSTEM, power_prompt, power_system,
-    todos_prompt,
+    DESIGN_SYSTEM, GENERATION_SYSTEM, IDEATION_SYSTEM, SURVEY_SYSTEM, TODOS_SYSTEM, ideation_prompt,
+    power_prompt, power_system, todos_prompt,
     design_prompt, generation_prompt, survey_prompt,
 )
 from .usage import is_usage_limit_error, limit_pause_note
@@ -236,12 +238,17 @@ class TaskRunner:
         #: This run's cost per rollup row, to correct to the agent's own total.
         self._run_costs: dict[tuple[datetime, str], float] = {}
         #: The skill spend goes to now. '' until the task touches one.
-        self._skill = "power" if task.is_power else ""
-        self._skill_named = task.is_power
+        self._skill = "power" if task.is_power or task.is_ideation else ""
+        self._skill_named = task.is_power or task.is_ideation
         self._attribution: skills.Attribution | None = None
         #: Rollup writes keep their order: naming a skill must follow what it moves.
         self._usage_lock = asyncio.Lock()
         self._added_todos = 0
+        #: A write's lines, until its tool says it happened (changes.py).
+        self._pending_changes: dict[str, tuple[str, int]] = {}
+        self._changed_paths: set[str] = set()
+        self._size_tags: list[str] = []
+        self._artifacts_before: dict[Path, int] = {}
         #: State writes still in flight (`set_state` persists in the background).
         self._writes: set[asyncio.Task[None]] = set()
 
@@ -626,15 +633,21 @@ class TaskRunner:
 
         @tool(
             "add_todos",
-            "Add the todos this request splits into, in the order they should run. Each one is a "
-            "power task run later, alone, by an agent that sees only its brief.",
+            "Add todos, in the order they should run. Each one is a power task run later, alone, "
+            "by an agent that sees only its SPEC.md.",
             {"type": "object", "properties": {"todos": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "A short title, as a to-do."},
-                    "brief": {"type": "string", "description": "The full brief, as the task will read it."},
+                    "spec": {"type": "string", "description": "SPEC.md: the proposed change at a high "
+                             "level, in Markdown. It may hold tables and Mermaid diagrams."},
+                    "code_lines": {"type": "integer", "description": "Ideation: upper bound on lines of "
+                                   "code changed, 0 if none."},
+                    "asset_lines": {"type": "integer", "description": "Ideation: upper bound on lines of "
+                                    "assets changed (stories, catalogs, briefs and other documents, "
+                                    "not code), 0 if none."},
                 },
-                "required": ["title", "brief"],
+                "required": ["title", "spec"],
             }}}, "required": ["todos"]},
         )
         async def add_todos(args: dict[str, Any]) -> dict[str, Any]:
@@ -644,6 +657,59 @@ class TaskRunner:
                 return reply(f"Refused. {exc}")
             self._added_todos += len(made)
             return reply({"added": [t.title for t in made]})
+
+        @tool(
+            "log_idea",
+            "Add one line to the top of this project's IDEAS.md. dex timestamps it. Start with what "
+            "it is, such as `tested:`, `looked at:` or `dropped:`. Proposals are logged for you.",
+            {"type": "object", "properties": {
+                "text": {"type": "string", "description": "One line, under 200 characters."},
+            }, "required": ["text"]},
+        )
+        async def log_idea(args: dict[str, Any]) -> dict[str, Any]:
+            return reply({"logged": graph.m.todos.log(
+                self.task.project or self.config.default_project, str(args.get("text") or ""))})
+
+        @tool(
+            "query_database",
+            "Run one read-only SQL query on dex's Postgres database, to find outliers and interesting "
+            "groups in this project's `tasks` (`slug`, `title`, `state`, `scope`, `project`, `cost_usd`, "
+            "`turns`, `error`, `created_at`, `finished_at`), `events` (`task_id`, `type`, `data`, `ts`) "
+            "and `task_usage`. Filter by project.",
+            {"type": "object", "properties": {
+                "sql": {"type": "string", "description": "A single SELECT."},
+            }, "required": ["sql"]},
+        )
+        async def query_database(args: dict[str, Any]) -> dict[str, Any]:
+            pool = ReadOnlyPool(readonly_dsn(self.config.database_url))
+            try:
+                return reply(await pool.run(check(str(args.get("sql") or "")), [], 200))
+            except Exception as exc:  # noqa: BLE001
+                # A Postgres error has a `detail` too, usually None: the message
+                # is what tells the agent which column it got wrong.
+                return reply(f"Refused. {getattr(exc, 'detail', None) or exc}")
+            finally:
+                await pool.close()
+
+        @tool(
+            "start_discovery",
+            "Start this project's ideation task when the person asks for a discovery or ideation "
+            "task: it runs in the project's Power thread whenever dex is idle, looks for "
+            "improvements and proposes todos for them to approve. A project has one, and dex "
+            "refuses a second while one exists, even paused. Set force only if they ask to run "
+            "the next step now: that stops the existing one and starts a new one at once.",
+            {"type": "object", "properties": {
+                "force": {"type": "boolean", "description": "Replace the existing one and run now (default false)."},
+            }},
+        )
+        async def start_discovery(args: dict[str, Any]) -> dict[str, Any]:
+            try:
+                made = await graph.m.todos.discovery(
+                    self.task.project or self.config.default_project, force=bool(args.get("force")),
+                )
+            except Refused as exc:
+                return reply(f"Refused. {exc}")
+            return reply({"started": made.slug, "state": made.state.value})
 
         @tool(
             "start_power_task",
@@ -745,17 +811,24 @@ class TaskRunner:
 
         if self.task.is_todos:
             return [add_todos]
+        if self.task.is_ideation:
+            return [add_todos, log_idea, query_database]
         if self.task.is_power and not self.task.todo:
             # It looks things up; it starts nothing, or it could have content made.
             return [project_threads, find_tasks, task_status]
-        return [project_threads, find_tasks, start_task, start_power_task, continue_task, task_status, wait_for_tasks]
+        return [project_threads, find_tasks, start_task, start_power_task, continue_task, task_status, wait_for_tasks,
+                *([start_discovery] if conversation else [])]
 
     async def _escalate(
         self, approval_id: str, tool_name: str, input_data: dict[str, Any], title: str | None
     ) -> str:
+        # Someone is waiting on a split, and it only looks around.
+        if self.task.is_todos:
+            return "deny"
         # Read the toggle now rather than at task start, so turning it on takes
-        # effect on runs already in flight.
-        if await self.settings.auto_approve():
+        # effect on runs already in flight. Ideation always runs with nobody
+        # there to ask; what it must never do is refused before this.
+        if self.task.is_ideation or await self.settings.auto_approve():
             self.emit(
                 "approval",
                 id=approval_id,
@@ -797,6 +870,7 @@ class TaskRunner:
                 log.exception("could not build a diff for %s", tool_name)
                 change = None
             if change is not None:
+                self._pending_changes[context.tool_use_id or change.path] = (change.path, change.additions)
                 self.emit(
                     "diff",
                     id=context.tool_use_id or change.path,
@@ -878,6 +952,9 @@ class TaskRunner:
             delegate_assets=self.task.is_chat,
             asset_dirs=tuple(root / "public" / "assets" for root in self._chat_game_roots()),
             power=self.task.is_power,
+            scout=self.task.is_todos or self.task.is_ideation,
+            unattended=self.task.is_ideation,
+            ideas_dir=None if self.task.is_power or self.task.is_ideation else self.config.ideas_dir,
             assets_dir=self.config.assets_dir,
         )
         decide = self._with_diffs(policy.build())
@@ -896,8 +973,9 @@ class TaskRunner:
             # source. Created just above, so it exists to start in.
             cwd=str(self.task_dir),
             model=self.task.model or self.config.model,
-            # A split only reads its brief and calls add_todos.
-            tools=[] if self.task.is_todos else None,
+            # A split looks around and calls add_todos; ideation also keeps its log.
+            tools=(["Read", "Grep", "Glob", "Bash"] if self.task.is_todos
+                   else ["Read", "Grep", "Glob", "Bash", "Write", "Edit"] if self.task.is_ideation else None),
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
@@ -906,6 +984,7 @@ class TaskRunner:
                     else DESIGN_SYSTEM if self.task.is_design
                     else power_system(self.config.workspace) if self.task.is_power
                     else TODOS_SYSTEM if self.task.is_todos
+                    else IDEATION_SYSTEM if self.task.is_ideation
                     else GENERATION_SYSTEM
                 ),
             },
@@ -1000,6 +1079,15 @@ class TaskRunner:
             prompt = power_prompt(self.task.problem, self.task_dir, self.config.workspace)
         elif self.task.is_todos:
             prompt = todos_prompt(self.task.problem)
+        elif self.task.is_ideation:
+            from .game_chat import game_root as _game_root  # noqa: PLC0415 -- the API module, imported lazily
+
+            prompt = ideation_prompt(
+                self.task.problem, self.task_dir,
+                self.task.project_dir(self.config.assets_dir, self.config.default_project),
+                sorted(skills.read_enabled(self.task.project_dir(self.config.assets_dir, self.config.default_project)).skills),
+                game=_game_root(self.config, self.task.project),
+            )
         else:
             prompt = generation_prompt(
                 problem=self.task.problem,
@@ -1040,6 +1128,7 @@ class TaskRunner:
         # in it. Against emptiness alone, both would pass without lifting a
         # finger.
         before = self._artifacts() if self.task.builds_package else {}
+        self._artifacts_before = before
 
         try:
             async with asyncio.timeout(self.config.task_timeout_s):
@@ -1118,7 +1207,7 @@ class TaskRunner:
             elif self.task.is_todos and not self._added_todos:
                 self._fail("The request was not split: no todos were added.")
             elif (self.task.builds_package and not self.task.is_chat and not self.task.is_power
-                  and not self.task.is_todos and not self._wrote_anything(before)
+                  and not self.task.is_todos and not self.task.is_ideation and not self._wrote_anything(before)
                   and not (woken and await self._woken_wrote())
                   and not (self.task.resumed_from and self._wrote_since_created())
                   and not await self._answered_notes()):
@@ -1135,6 +1224,10 @@ class TaskRunner:
                 else:
                     self._resync_skills()
         finally:
+            try:
+                self._count_scripted()
+            except Exception:
+                log.exception("could not count what %s changed", self.task.id)
             for future in list(self.task.pending.values()):
                 if not future.done():
                     future.cancel()
@@ -1202,6 +1295,42 @@ class TaskRunner:
                     key = (hour, self._skill)
                     self._run_costs[key] = self._run_costs.get(key, 0.0) + cost
             self._write_usage(self.store.name_usage_skill, self.task.id, self._skill)
+
+    def _settle_change(self, tool_id: str, *, ok: bool) -> None:
+        """A write went through: its lines count. One that was refused never happened."""
+        change = self._pending_changes.pop(tool_id, None)
+        if change is None or not ok:
+            return
+        path, lines = change
+        self._changed_paths.add(path)
+        if is_work(path):
+            code = is_code(path)
+            self._write_usage(self._record_changes, lines if code else 0, 0 if code else lines)
+
+    def _count_scripted(self) -> None:
+        """Files that changed in the package with no diff, which a command wrote: counted
+        whole, since the old copy is gone. Also how a task that changed nothing gets its row."""
+        code = assets = 0
+        if self.task.builds_package:
+            root = self.config.workspace.resolve()
+            changed = {str((root / p).resolve()) for p in self._changed_paths}
+            for relative, written in self._artifacts().items():
+                path = (self.task_dir / relative).resolve()
+                if self._artifacts_before.get(relative) == written or str(path) in changed or not is_work(relative):
+                    continue
+                lines = file_lines(path)
+                code, assets = (code + lines, assets) if is_code(path) else (code, assets + lines)
+        self._write_usage(self._record_changes, code, assets)
+
+    async def _record_changes(self, code: int, assets: int) -> None:
+        """Add to the rollup, and tell the Library if the package changed magnitude."""
+        await self.store.add_changes(self.task.id, code, assets)
+        project = self.task.project or self.config.default_project
+        package = self.task.output_slug or self.task.slug
+        tags = await self.store.package_sizes(project, package)
+        if tags != self._size_tags:
+            self._size_tags = tags
+            self.emit("package_sizes", slug=package, projectSlug=project, tags=tags)
 
     def _settle_usage(self, total: float) -> None:
         """Correct this run's rollup rows to the agent's own total.
@@ -1798,6 +1927,7 @@ class TaskRunner:
             content = message.content if isinstance(message.content, list) else []
             for block in content:
                 if isinstance(block, ToolResultBlock):
+                    self._settle_change(block.tool_use_id, ok=not block.is_error)
                     self.emit(
                         "tool_result",
                         id=block.tool_use_id,

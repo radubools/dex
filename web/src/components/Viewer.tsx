@@ -1,8 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
-import { assetUrl, readAsset } from '../api'
-import type { AssetResponse, SourceAnchor } from '../types'
+import { assetUrl, decideTodo, getTask, readAsset } from '../api'
+import type { AssetResponse, SourceAnchor, Task } from '../types'
 import { resolveWidget, resolveWidgets, type WidgetInfo } from '../api'
 import { AnimationPlayer } from './AnimationPlayer'
 import { VideoPlayer } from './VideoPlayer'
@@ -65,6 +65,7 @@ export function Viewer({
   activity?: (taskId: string) => ReactNode
 }) {
   const label = labelOf(target)
+  const proposedBy = target.kind === 'package' ? target.taskId : undefined
   const taskId = target.kind === 'package' && activity ? target.taskId : undefined
   // Files first, every time a different package opens: the Library is browsed
   // for what things look like, and the conversation is the second question.
@@ -93,6 +94,7 @@ export function Viewer({
         <div className="viewer-activity">{activity!(taskId!)}</div>
       ) : (
       <div className="viewer-body">
+        {proposedBy && <TodoDecision taskId={proposedBy} />}
         {target.kind === 'diff' ? (
           <Diff patch={target.patch} />
         ) : target.kind === 'package' ? (
@@ -134,6 +136,27 @@ const ASSET_GROUPS: { label: string; icon: string; test: (name: string) => boole
   { label: 'Other', icon: '📄', test: () => true },
 ]
 
+/** Approve or reject a proposed todo beside its spec, where it is read. */
+function TodoDecision({ taskId }: { taskId: string }) {
+  const [task, setTask] = useState<Task | null>(null)
+  useEffect(() => {
+    let live = true
+    setTask(null)
+    getTask(taskId).then((got) => live && setTask(got)).catch(() => {})
+    return () => { live = false }
+  }, [taskId])
+  if (!task || !(task.canApprove || task.canReject)) return null
+  const decide = (decision: 'approved' | 'rejected') =>
+    decideTodo(taskId, decision).then(([changed]) => setTask(changed))
+  return (
+    <p className="todo-decision">
+      <span className="badge">{task.approval === 'rejected' ? 'rejected' : 'needs approval'}</span>
+      {task.canApprove && <button className="ghost-btn small accent" onClick={() => void decide('approved')}>✓ Approve</button>}
+      {task.canReject && <button className="ghost-btn small" onClick={() => void decide('rejected')}>✕ Reject</button>}
+    </p>
+  )
+}
+
 /**
  * A package as one page: its name, what it produced, and the explanation read
  * inline rather than hidden behind another click.
@@ -164,7 +187,8 @@ function PackageView({
         if (!live || listing.kind !== 'dir') return
         const names = listing.entries.map((e) => e.name)
         setFiles(names)
-        const doc = names.find((n) => n.endsWith('/explanation.md'))
+        // A todo's spec, or a project's log of ideas, is what its directory is for.
+        const doc = names.find((n) => /\/(explanation|SPEC|IDEAS)\.md$/.test(n))
         if (!doc) return
         const asset = await readAsset(doc)
         if (live && asset.kind === 'file') setExplanation(asset.content)

@@ -339,13 +339,16 @@ def power_system(workspace: Path) -> str:
     )
 
 
-TODOS_SYSTEM = """You split one request into a short ordered todo list. You change nothing and \
-run nothing: your only tool is `add_todos`, and you call it once.
+TODOS_SYSTEM = """You turn one request into a short ordered todo list. You change nothing: scout \
+just enough with Read, Grep, Glob and read-only commands to say what should change, then call \
+`add_todos` once.
 
 Each todo is run later, by itself, by a power task: an agent that changes code anywhere (dex, a \
-game, the engine, tools) and that may start other tasks when it needs content made. It sees only \
-its brief, so every brief stands alone: what to do, where, why, and how to tell it worked, with \
-anything it needs from the request, such as which game and what was on screen.
+game, the engine, tools) and that may start other tasks when it needs content made. It gets only \
+its SPEC.md, so every spec stands alone. Write it in Markdown at a high level: what to change, \
+where, why, and how to tell it worked, with anything it needs from the request, such as which \
+game and what was on screen. Tables and Mermaid diagrams from your scouting are welcome where \
+they say it better.
 
 Split only where the parts can land separately, in the order they should run. One piece of work \
 is one todo: most requests are one to five, and a todo is never a step of another. After calling \
@@ -353,8 +356,65 @@ the tool, list the titles in one short line each and stop.
 """
 
 
+IDEATION_SYSTEM = """You improve one project while dex has nothing else to do, by using what it \
+made the way a person would, and saying what you found. You change nothing but IDEAS.md and other \
+.md notes directly in your directory: you propose, and the operator decides. Nobody is there to \
+ask, so your commands are approved unasked, inside a sandbox the system enforces: anywhere else, a \
+write fails with "Operation not permitted", and the only network is localhost ports 4400-4499. \
+That is not something to work around. Temporary files go in $TMPDIR. Only `add_todos` proposes work.
+
+Having nothing to do is not a result. "Everything is healthy" means you have not looked hard \
+enough yet: suites that pass tell you little, so don't stop at them. Keep each run to one logical \
+subset of the project, chosen for variety, and pick at random within it (`ls ... | sort -R | head -1`) \
+so that runs cover different ground.
+
+1. Read IDEAS.md in your directory first. It is your log: never propose the same idea twice, and \
+   go where it shows you have not been, including what the operator rejected.
+2. Exercise something for real. Choose one you have not done lately, and if it turns up nothing, \
+   choose another:
+   - Play it. With a game, play a random story end to end, the way the operator's own checks do. \
+     It takes minutes, so give the Bash call `timeout: 600000`, and keep one desktop viewport \
+     unless phone layout is the point:
+     `cd ~/games && node engine/tools/story-e2e.mjs --game <game> --story <package> \
+     --out $TMPDIR/e2e/<name> --port <4400-4499> --viewports desktop`
+     Run it fresh even if the package has a report: a stored report says how it played then, and \
+     the game has changed since. Then read `report.json` and look at the screenshots in `shots/` \
+     with Read: a green run can still be confusing, ugly or wrong.
+   - Use the app. Start its dev server on a port of yours (`npx vite --port 44xx --strictPort`, in \
+     the background) and drive it with `playwright`: the screens a newcomer would meet first, a \
+     narrow phone viewport, what happens on a wrong answer. Screenshot to $TMPDIR and look at them.
+   - Test assets end to end: pick random packages and validate, render or load them the way the \
+     game does, not just their unit tests. Look for what a table of numbers would miss: \
+     captions out of step, previews that show nothing, a model facing the wrong way.
+   - Read a lesson as its learner would: does each card follow from the last, is it right, is \
+     anything a beginner couldn't follow?
+   - Query with `query_database`: outliers and interesting groups in the project's tasks and events.
+3. Every run proposes one to three todos with `add_todos`, each with a title and a SPEC.md as high \
+   level as a design note, with what you saw, tables and diagrams. Bugs are not the only ideas: \
+   a better explanation, a clearer screen, a missing case, a test nobody has written all count. \
+   Only if it would repeat an open todo, go and look at something else first. They wait for the \
+   operator, and you don't wait for them.
+4. Append to IDEAS.md, dated: what you exercised and how it went, and each idea you proposed or \
+   dropped and why.
+
+Then stop. dex arranges the next run.
+"""
+
+
 def todos_prompt(problem: str) -> str:
     return f"Split this request into todos:\n\n{problem}"
+
+
+def ideation_prompt(
+    problem: str, task_dir: Path, project_dir: Path, enabled: list[str], game: Path | None = None,
+) -> str:
+    """An ideation run's brief: the project, what it goes into, and where its log is."""
+    target = f"The game they go into, `{game.name}`: `{game}`\n" if game else ""
+    return (
+        f"{problem}\n\n---\nThe project's assets, and its brief in AGENTS.md: `{project_dir}`\n"
+        f"{target}Its skills: {', '.join(enabled) or 'none'}\n"
+        f"Your directory, with your log: `{task_dir / 'IDEAS.md'}`"
+    )
 
 
 def power_prompt(problem: str, task_dir: Path, workspace: Path) -> str:

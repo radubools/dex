@@ -33,6 +33,8 @@ from claude_agent_sdk import (
     ToolPermissionContext,
 )
 
+from . import sandbox
+
 READ_ONLY_TOOLS = {"Read", "Glob", "Grep", "NotebookRead", "TodoWrite", "WebSearch", "WebFetch"}
 
 #: Every built-in the CLI offers, for a run that is meant to have none.
@@ -69,6 +71,11 @@ ALLOWED_COMMANDS = {
     # directly rather than `npx`, which downloads a package that is missing.
     "node", "playwright",
 }
+
+#: What a run that only looks may run besides the allowlist: tests, and git's reads.
+SCOUT_COMMAND = re.compile(
+    r"(cd \S+ && )?(npm (test|run test\S*|run e2e\S*)|npx (vitest|playwright)|git (log|show|diff|status|blame|grep))\b"
+)
 
 #: Never auto-approved, however the command is spelled.
 DANGEROUS = {"rm", "sudo", "chmod", "chown", "curl", "wget", "ssh", "scp", "git", "npm", "pip", "brew", "kill", "pkill"}
@@ -146,6 +153,9 @@ class PermissionPolicy:
         delegate_assets: bool = False,
         asset_dirs: tuple[Path, ...] = (),
         power: bool = False,
+        scout: bool = False,
+        unattended: bool = False,
+        ideas_dir: Path | None = None,
         assets_dir: Path | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
@@ -174,6 +184,14 @@ class PermissionPolicy:
         #: A power task: code anywhere, no content (`_power_refusal`). Every
         #: project's packages are under `assets_dir`.
         self.power = power
+        #: A todo split or an ideation run: it looks and tests, and changes nothing
+        #: outside its own directory.
+        self.scout = scout
+        #: Ideation: everything is approved unasked (`_escalate`), so what it must
+        #: never do is refused here, as for a power task.
+        self.unattended = unattended
+        #: Set for every task but power and ideation: it may not touch this.
+        self.ideas_dir = ideas_dir.resolve() if ideas_dir else None
         self.assets_dir = assets_dir.resolve() if assets_dir else None
 
     def _within(self, raw: str | None, root: Path) -> bool:
@@ -262,16 +280,19 @@ class PermissionPolicy:
             if refusal is not None:
                 return PermissionResultDeny(message=refusal)
 
+            allowed = self._confined(tool_name, input_data)
             reason = self._auto_reason(tool_name, input_data)
             if reason is None:
-                return PermissionResultAllow(updated_input=input_data)
+                return PermissionResultAllow(updated_input=allowed)
 
             decision = await self.escalate(
                 uuid.uuid4().hex[:12], tool_name, input_data, f"{context.title or tool_name} — {reason}"
             )
             if decision == "allow":
-                return PermissionResultAllow(updated_input=input_data)
-            return PermissionResultDeny(message=f"The operator declined: {reason}")
+                return PermissionResultAllow(updated_input=allowed)
+            return PermissionResultDeny(message=(
+                f"Not allowed in this unattended run: {reason}" if self.scout
+                else f"The operator declined: {reason}"))
 
         return can_use_tool
 
@@ -285,6 +306,12 @@ class PermissionPolicy:
         """
         if self.power:
             return self._power_refusal(tool_name, input_data)
+        if self.ideas_dir is not None and self._touches_ideas(tool_name, input_data):
+            return "Ideas are only for power tasks: this task may not read or write them."
+        if self.unattended:
+            why = self._unattended_refusal(tool_name, input_data)
+            if why is not None:
+                return why
         if self.delegate_assets:
             why = self._delegation_refusal(tool_name, input_data)
             if why is not None:
@@ -314,6 +341,36 @@ class PermissionPolicy:
             "project, but only your own directory is yours to change — and that "
             "package may be being written right now by the task that owns it."
         )
+
+    def _confined(self, tool_name: str, input_data: dict[str, Any]) -> dict[str, Any]:
+        """An ideation run's shell command, in the sandbox that makes it read-only."""
+        if not self.unattended or tool_name != "Bash":
+            return input_data
+        return {**input_data, "command": sandbox.confine(str(input_data.get("command", "")), self.task_dir)}
+
+    def _unattended_refusal(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
+        if tool_name in WRITE_TOOLS:
+            target = self._resolved(_target_path(input_data))
+            # Not a todo's directory, below this one: a spec does not change
+            # after it was approved.
+            if target is None or target.parent != self.task_dir or target.suffix != ".md":
+                return "An ideation run writes only its own notes: propose the change as a todo instead."
+            if target.name == "IDEAS.md":
+                return "The log takes one line at a time, through `log_idea`."
+        if tool_name == "Bash":
+            if not sandbox.available():
+                return "An ideation run has no shell here: nothing can confine it (sandbox-exec is missing)."
+            command = str(input_data.get("command", ""))
+            for pattern, why in POWER_FORBIDDEN:
+                if pattern.search(command):
+                    return f"Not this command: {why}."
+        return None
+
+    def _touches_ideas(self, tool_name: str, input_data: dict[str, Any]) -> bool:
+        if tool_name == "Bash":
+            return str(self.ideas_dir) in str(input_data.get("command", ""))
+        path = _target_path(input_data)
+        return bool(path) and self._within(path, self.ideas_dir)
 
     def _power_refusal(self, tool_name: str, input_data: dict[str, Any]) -> str | None:
         """What a power task may not do: everything else it does unasked.
@@ -388,9 +445,21 @@ class PermissionPolicy:
                 return None
             return f"writes outside the task directory ({path})"
         if tool_name == "Bash":
-            ok, why = self._bash_verdict(str(input_data.get("command", "")))
+            command = str(input_data.get("command", ""))
+            if self.scout and _scouting(command):
+                return None
+            ok, why = self._bash_verdict(command)
             return None if ok else why
         return f"{tool_name} has no auto-approval rule"
+
+
+def _scouting(command: str) -> bool:
+    """A single test run or git read, at most after a `cd`."""
+    matched = SCOUT_COMMAND.match(command.strip())
+    if matched is None:
+        return False
+    rest = command.strip()[matched.end():]
+    return not any(tok in rest for tok in (";", "&", "|", "`", "$(", ">"))
 
 
 def _target_path(input_data: dict[str, Any]) -> str | None:

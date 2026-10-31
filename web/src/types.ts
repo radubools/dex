@@ -34,6 +34,12 @@ export type Task = {
   sessionId: string | null
   resumedFrom: string | null
   outputSlug: string
+  /** Where its files are, when not in its package: `ideas/<project>/...`. */
+  filesPath?: string | null
+  /** A todo's SPEC.md, readable before it runs. */
+  specPath?: string | null
+  /** The task that proposed or split out this todo. */
+  spawnedBy?: string | null
   project: string | null
   model: string | null
   /** True while costUsd is a running estimate, not the agent's own total. */
@@ -44,8 +50,13 @@ export type Task = {
   canPause: boolean
   /** Claim order among queued work: 1 woken, 2 prioritized by the operator (design/18). */
   priority?: number
-  /** Queued, paused or waiting, and not prioritized yet. */
+  /** Waiting to run, and not prioritized yet. A proposed todo needs approving first. */
   canPrioritize?: boolean
+  /** A todo's: only an approved one runs (design/24). */
+  approval?: 'pending' | 'approved' | 'rejected' | null
+  /** A todo an ideation task proposed, not started yet. */
+  canApprove?: boolean
+  canReject?: boolean
   /** Stopped short — paused, failed or cancelled — so it can go again. */
   canContinue: boolean
   canArchive: boolean
@@ -175,7 +186,7 @@ export type DexEvent = Base &
     | { type: 'task_message_delivered'; count: number; startedTaskId: string }
     | { type: 'thread_message'; threadId: string; message: ThreadMessage }
     | { type: 'task_created'; task: Task }
-    | { type: 'task_state'; state: TaskState; activity: string | null; error?: string; priority?: number }
+    | { type: 'task_state'; state: TaskState; activity: string | null; error?: string; priority?: number; approval?: Task['approval'] }
     | { type: 'text'; text: string }
     | { type: 'text_delta'; id: string; delta: string }
     | { type: 'thinking'; text: string }
@@ -186,6 +197,7 @@ export type DexEvent = Base &
     | { type: 'diff'; id: string; tool: string; path: string; patch: string; additions: number; deletions: number }
     | { type: 'asset'; path: string; kind: AssetKind; bytes: number; change: string }
     | { type: 'tags'; project: string; slug: string; tags: string[]; removed: boolean }
+    | { type: 'package_sizes'; projectSlug: string; slug: string; tags: string[] }
     | { type: 'question'; id: string; question: string; options: string[] }
     | { type: 'question_answered'; id: string; answer: string; auto?: boolean; reuse?: boolean }
     | { type: 'approval'; id: string; tool: string; title: string; input: Record<string, string>; auto?: boolean }
@@ -289,6 +301,8 @@ export type SettingsResponse = {
   limit: LimitStatus
 }
 
+export type LinePoint = { bucket: string; series: string; code: number; assets: number }
+
 export type CostPoint = {
   bucket: string
   series: string
@@ -305,6 +319,8 @@ export type CostPoint = {
 export type CostsResponse = {
   totals: CostTotals
   series: CostPoint[]
+  /** Lines changed, split the same way. An older server has none. */
+  lines?: LinePoint[]
   coverage: { spend: number; with_tokens: number; inferred: number }
   /** Every project with spend, whatever the filter: what it can choose from. */
   projects?: string[]
@@ -393,8 +409,12 @@ export type PackageEntry = {
   path: string
   /** From the package's manifest. Empty for one written before it had tags. */
   tags: string[]
+  /** Earned from its tasks (`chat`, `ideation`), not in its manifest, so a manifest change keeps them. */
+  earnedTags?: string[]
   /** The newest task that wrote this package: what its Activity tab shows and continues. */
   taskId?: string | null
+  /** When its tasks last did anything, in seconds: the Library shows the latest first. */
+  lastActivity?: number | null
 }
 
 /** A tag and how many packages carry it, for the Library's filter pills. */

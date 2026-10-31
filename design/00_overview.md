@@ -164,6 +164,7 @@ flowchart TB
 | `queue` | Claims tasks, enforces capacity, pause / resume / archive |
 | `runner` | One task through the SDK, translated into events |
 | `permissions` | What a task may do without asking |
+| `sandbox` | The kernel sandbox that keeps an ideation run's shell commands from changing anything |
 | `prompts` | System prompts and briefs |
 | `planner` | Message → plan of tasks |
 | `sources` | A document's shape — outline, search, bounded peek |
@@ -175,7 +176,8 @@ flowchart TB
 | `locks` | Lock, read, write, release: thread and file locks for shared state (skills, port leases) |
 | `ports` | Leased TCP ports for task servers, never handed out twice (`python -m dex.ports`) |
 | `deps` | Task dependencies: start, continue and wait for tasks in other threads; blocking and waking |
-| `todos` | Todo lists: work that waits for dex to be idle and gives way to anything else (24) |
+| `todos` | Todos and ideation: work that waits for dex to be idle and gives way to anything else (24) |
+| `changes` | Lines of code and of assets each task changed (25) |
 | `designer` | Conversation history for design turns |
 | `store` / `db` | Reads and writes; schema applied at startup |
 | `projects` / `migrate` | Projects, starter guides, design threads, adopting old installs |

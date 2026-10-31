@@ -70,6 +70,7 @@ class TaskState(str, Enum):
     def pausable(self) -> bool:
         """Running or about to; pausing it means it goes again later."""
         return self in (
+            TaskState.TODO,
             TaskState.QUEUED,
             TaskState.RUNNING,
             TaskState.AWAITING_INPUT,
@@ -102,6 +103,8 @@ EventType = Literal[
     "asset",
     #: A package's tags changed, because its manifest did.
     "tags",
+    #: A package's order of magnitude changed, because a task wrote to it (changes.py).
+    "package_sizes",
     "result",
     "error",
 ]
@@ -245,8 +248,23 @@ class Task:
 
     @property
     def is_todos(self) -> bool:
-        """The light run that splits a request into todos (todos.py). Someone is waiting on it."""
+        """The run that scouts a request and splits it into todos (todos.py). Someone is waiting on it."""
         return self.scope == "todos"
+
+    @property
+    def is_ideation(self) -> bool:
+        """A project's one ideation task: it runs when nothing else does (todos.py)."""
+        return self.scope == "ideation"
+
+    @property
+    def approval(self) -> str | None:
+        """A todo's: pending, approved or rejected. Only an approved one runs."""
+        return (self.options or {}).get("approval")
+
+    @property
+    def proposed(self) -> bool:
+        """A todo an ideation task proposed, which the operator decides on."""
+        return bool((self.options or {}).get("proposed"))
 
     @property
     def todo(self) -> Any:
@@ -361,6 +379,21 @@ class Task:
         """
         return not (self.project_wide or self.is_design or self.is_survey)
 
+    @property
+    def files_path(self) -> str | None:
+        """Where the Files tab finds this task, when it is not its package."""
+        if self.is_ideation:
+            return f"ideas/{self.project}"
+        return f"ideas/{self.project}/{self.output_slug or self.slug}" if self.proposed else None
+
+    @property
+    def spec_path(self) -> str | None:
+        """A todo's SPEC.md: what it was asked to do, before it ever runs."""
+        if not (self.is_power and self.todo):
+            return None
+        base = self.files_path or f"{self.project}/{self.output_slug or self.slug}"
+        return f"{base}/SPEC.md"
+
     def output_dir(self, assets_dir: Path, project: str | None = None) -> Path:
         """Where this task writes: its package, or the whole project.
 
@@ -368,6 +401,11 @@ class Task:
         are already there — so its directory is the project root.
         """
         root = self.project_dir(assets_dir, project)
+        if self.is_ideation or self.proposed:
+            # Ideas are not assets: `ideas/<project>/`, with the log, and a
+            # directory in it for each proposal (design/24).
+            ideas = assets_dir.parent / "ideas" / root.name
+            return ideas if self.is_ideation else ideas / (self.output_slug or self.slug)
         if not self.builds_package:
             return root
         return root / (self.output_slug or self.slug)
@@ -397,6 +435,10 @@ class Task:
             "resumedFrom": self.resumed_from,
             # What the UI may offer for this task right now.
             "outputSlug": self.output_slug or self.slug,
+            "filesPath": self.files_path,
+            "specPath": self.spec_path,
+            # The task that spawned this todo, when it was one (`options["todo"]`).
+            "spawnedBy": self.todo if self.is_power and isinstance(self.todo, str) else None,
             "model": self.model,
             "scope": self.scope,
             "held": self.held,
@@ -415,8 +457,12 @@ class Task:
             "canPause": self.state.pausable,
             "priority": self.priority,
             # Queued, paused or waiting work can be moved to the front.
-            "canPrioritize": self.state in (TaskState.QUEUED, TaskState.PAUSED, TaskState.BLOCKED)
-            and self.priority < 2,
+            "canPrioritize": self.state in (TaskState.TODO, TaskState.QUEUED, TaskState.PAUSED, TaskState.BLOCKED)
+            and self.priority < 2 and self.approval not in ("pending", "rejected"),
+            "approval": self.approval,
+            # A proposed todo stays open to a change of mind until it starts.
+            "canApprove": self.proposed and self.state is TaskState.TODO and self.approval != "approved",
+            "canReject": self.proposed and self.state is TaskState.TODO and self.approval != "rejected",
             "canContinue": self.state.continuable,
             # Anything can be archived except what is already archived; a
             # running task is stopped first.

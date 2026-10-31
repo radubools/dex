@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import asyncio
 import contextlib
 import json
@@ -24,6 +26,10 @@ from pydantic import BaseModel, Field
 
 from .bus import EventBus
 from . import widgets
+from .deps import Refused
+
+#: An order-of-magnitude tag: `code-lines:2c` or `asset-lines:1a` (changes.py).
+SIZE_TAG = re.compile(r"(code|asset)-lines:[0-6][ca]")
 from .sql import build_sql_router
 from .authn import (
     Access,
@@ -177,6 +183,18 @@ class GuideRequest(BaseModel):
     text: str
 
 
+class TodoDecision(BaseModel):
+    decision: Literal["approved", "rejected"]
+
+
+class IdeationRequest(BaseModel):
+    force: bool = False
+
+
+class IdeationSwitch(BaseModel):
+    enabled: bool
+
+
 class ThreadMessageRequest(BaseModel):
     text: str = Field(min_length=1)
     #: Upload batches attached to this message.
@@ -237,6 +255,13 @@ class ApprovalRequest(BaseModel):
 
 
 # ------------------------------------------------------------------------- app
+
+
+def _with_earned(tags: list[str], earned: list[str]) -> list[str]:
+    """A package's tags and those its tasks earned. Actual sizes replace an estimate."""
+    if any(SIZE_TAG.fullmatch(tag) for tag in earned):
+        tags = [tag for tag in tags if not SIZE_TAG.fullmatch(tag)]
+    return [*tags, *earned]
 
 
 def _manifest_title(manifest: Path) -> str | None:
@@ -458,6 +483,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     task_run_guard = [Depends(run_dep), Depends(guard_task)]
     thread_run_guard = [Depends(run_dep), Depends(guard_thread)]
     slug_design_guard = [Depends(design_dep), Depends(guard_slug)]
+    slug_run_guard = [Depends(run_dep), Depends(guard_slug)]
 
     # ---------------------------------------------------------------- status
 
@@ -956,6 +982,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             # and guessing a winner would hide which one is in use.
             raise HTTPException(409, str(exc)) from exc
         log.info("%s skill %s for %s", "enabled" if on else "disabled", name, slug)
+        if name == "power":
+            await tasks.todos.skill_changed(slug, on)
         return {"project": slug, "skills": now.skills}
 
     @app.get("/api/skills/{name}/export", dependencies=admin_only)
@@ -1019,6 +1047,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         return {
             "totals": await store.totals(chosen),
             "series": await store.series(period, granularity, group, chosen, offset),
+            "lines": await store.line_series(period, granularity, group, chosen, offset),
             "coverage": await store.coverage(period, chosen, granularity, offset),
             "projects": await store.projects(),
             "earliest": await store.earliest(chosen),
@@ -1284,8 +1313,42 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     @app.post("/api/tasks/{task_id}/prioritize", dependencies=task_run_guard)
     async def prioritize(task_id: str) -> dict[str, Any]:
         """Move a task, and every task under it in the graph, to the front of the queue (deps.py)."""
-        raised = await tasks.graph.prioritize(task_id)
+        try:
+            raised = await tasks.graph.prioritize(task_id)
+        except Refused as exc:
+            raise HTTPException(409, str(exc)) from exc
         return {"tasks": [t.to_json(config.assets_dir) for t in raised]}
+
+    @app.post("/api/tasks/{task_id}/approval", dependencies=task_run_guard)
+    async def decide_todo(task_id: str, body: TodoDecision) -> dict[str, Any]:
+        """Approve or reject a todo an ideation task proposed (todos.py)."""
+        try:
+            task = await tasks.todos.decide(task_id, body.decision)
+        except Refused as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"tasks": [task.to_json(config.assets_dir)]}
+
+    @app.post("/api/projects/{slug}/ideation", dependencies=slug_run_guard)
+    async def start_ideation(slug: str, body: IdeationRequest) -> dict[str, Any]:
+        """Start the project's one ideation task, or replace it with `force`."""
+        try:
+            task = await tasks.todos.discovery(slug, force=body.force)
+        except Refused as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"task": task.to_json(config.assets_dir)}
+
+    @app.get("/api/projects/{slug}/ideation/status", dependencies=guard)
+    async def ideation_status(slug: str, access: Access = Depends(access_dep)) -> dict[str, Any]:
+        access.check(slug)
+        return await tasks.todos.status(slug)
+
+    @app.put("/api/projects/{slug}/ideation", dependencies=slug_run_guard)
+    async def switch_ideation(slug: str, body: IdeationSwitch) -> dict[str, Any]:
+        """The project's ideation cycle on or off (todos.py)."""
+        try:
+            return await tasks.todos.switch(slug, body.enabled)
+        except Refused as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.post("/api/tasks/{task_id}/cancel", dependencies=task_run_guard)
     async def cancel(task_id: str) -> dict[str, bool]:
@@ -1845,7 +1908,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             # tree a directory at a time.
             if ".." in match or match.startswith("/"):
                 raise HTTPException(400, "match must stay inside the directory")
-            root = config.assets_dir.resolve()
+            # A glob can follow a link out, so each hit stays under what was
+            # asked for's own root: the assets, or `ideas/`.
+            root = (config.ideas_dir if path.strip("/").split("/")[0] == "ideas" else config.assets_dir).resolve()
             found = sorted(
                 child
                 for child in target.glob(match)
@@ -1999,7 +2064,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         counts: dict[str, int] = {}
         for directory in sorted(p for p in root.iterdir() if p.is_dir()):
             files = [f for f in directory.rglob("*") if f.is_file() and not f.name.startswith(".")]
-            tags = indexed.get(directory.name, [])
+            earned = made_by[directory.name][3] if directory.name in made_by else []
+            tags = _with_earned(indexed.get(directory.name, []), earned)
             for tag in tags:
                 counts[tag] = counts.get(tag, 0) + 1
             packages.append({
@@ -2014,10 +2080,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 "files": len(files),
                 "path": f"{chosen}/{directory.name}",
                 "tags": tags,
+                "earnedTags": earned,
                 "taskId": made_by[directory.name][0] if directory.name in made_by else None,
+                "lastActivity": made_by[directory.name][2].timestamp() if directory.name in made_by else None,
             })
 
+        # What was worked on last comes first; a package with no task goes last.
         packages.sort(key=lambda p: p["displayName"].lower())
+        packages.sort(key=lambda p: p["lastActivity"] or 0, reverse=True)
         return {
             "packages": packages,
             # Ordered by how many packages carry each, so the pills that
@@ -2028,6 +2098,38 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
             ],
         }
+
+    @app.get("/api/ideas", dependencies=guard)
+    async def list_ideas(
+        project: str | None = Query(default=None),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """A project's ideation log and proposals, the Library's other side.
+
+        Latest activity first, like its packages. The operator reads these
+        here; of the tasks, only power and ideation may (design/24).
+        """
+        chosen = await resolve_project(project)
+        access.check(chosen)
+        root = config.ideas_dir / chosen
+        if not root.is_dir():
+            return {"log": None, "ideas": []}
+        made_by = await tasks.tasks.latest_by_package(chosen)
+        ideas = []
+        for directory in (p for p in root.iterdir() if p.is_dir()):
+            made = made_by.get(directory.name)
+            ideas.append({
+                "slug": directory.name,
+                "displayName": _manifest_title(directory / "manifest.json") or (made[1] if made else directory.name),
+                "files": sum(1 for f in directory.rglob("*") if f.is_file()),
+                "path": f"ideas/{chosen}/{directory.name}",
+                "tags": _with_earned(read_manifest_tags(directory / "manifest.json"), made[3] if made else ["origin:ideation"]),
+                "taskId": made[0] if made else None,
+                "lastActivity": made[2].timestamp() if made else None,
+            })
+        ideas.sort(key=lambda p: p["lastActivity"] or 0, reverse=True)
+        log_file = root / "IDEAS.md"
+        return {"log": f"ideas/{chosen}/IDEAS.md" if log_file.is_file() else None, "ideas": ideas}
 
     @app.get("/api/assets/animation", dependencies=guard)
     async def animation_info(
@@ -2177,8 +2279,10 @@ def _check_asset_path(access: Access, path: str) -> None:
     """
     if access.unrestricted or access.is_admin:
         return
-    first = path.strip("/").split("/")[0] if path.strip("/") else ""
-    if not first:
+    parts = path.strip("/").split("/") if path.strip("/") else []
+    # Ideas are addressed `ideas/<project>/...`, beside the assets.
+    first = parts[1] if parts[:1] == ["ideas"] and len(parts) > 1 else parts[0] if parts else ""
+    if not first or first == "ideas":
         raise HTTPException(status_code=404, detail="not found")
     access.check(first)
 
@@ -2186,6 +2290,8 @@ def _check_asset_path(access: Access, path: str) -> None:
 def _resolve(config: Config, path: str) -> Path:
     """Resolve a client-supplied path inside the assets root, or 403/404."""
     root = config.assets_dir.resolve()
+    if path.strip("/").split("/")[0] == "ideas":
+        root, path = config.ideas_dir.resolve(), path.strip("/")[len("ideas"):].lstrip("/")
     candidate = (root / path).resolve()
     if candidate != root and root not in candidate.parents:
         raise HTTPException(403, "path is outside the assets directory")
@@ -2195,6 +2301,9 @@ def _resolve(config: Config, path: str) -> Path:
 
 
 def _rel(config: Config, path: Path) -> str:
+    ideas = config.ideas_dir.resolve()
+    if path == ideas or ideas in path.parents:
+        return f"ideas/{path.relative_to(ideas)}"
     return str(path.relative_to(config.assets_dir.resolve()))
 
 

@@ -172,7 +172,7 @@ async def test_the_dashboard_can_be_narrowed_to_several_projects(db):
 async def test_pages_of_a_period_meet_without_overlapping(db):
     tasks = TaskStore(db)
     task = await _task(tasks, "a")
-    today = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     for days_ago, cost in ((0, 1.0), (6, 2.0), (7, 4.0), (13, 8.0), (14, 16.0)):
         await tasks.add_usage(task.id, today - timedelta(days=days_ago), "", cost, {})
 

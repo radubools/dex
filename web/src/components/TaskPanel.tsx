@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  answerQuestion, cancelTask, getTaskMessages, prioritizeTask, rerunTask,
-  resolveApproval, resumeTask, sendTaskMessage,
+  answerQuestion, cancelTask, decideTodo, getTask, getTaskMessages, prioritizeTask, readAsset,
+  rerunTask, resolveApproval, resumeTask, sendTaskMessage,
 } from '../api'
 import { progressOf, type FeedItem, type TaskView } from '../store'
 import type { SourceAnchor, Task, TaskMessage, TaskState } from '../types'
@@ -13,6 +13,9 @@ import { ErrorNote } from './ErrorNote'
 import { Prose } from './Prose'
 import { AssetExplorer } from './AssetExplorer'
 import type { ViewerTarget } from './Viewer'
+
+// Mermaid and marked are large; only a todo's spec needs them here.
+const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markdown })))
 
 type Tab = 'activity' | 'files'
 
@@ -78,8 +81,10 @@ export function TaskPanel({
     setScrollable(!!el && el.scrollHeight > el.clientHeight + 4)
   }, [])
   useLayoutEffect(() => {
-    stuck.current = true
-    toEnd()
+    // A proposal is there to be read, from the top of its spec.
+    stuck.current = task.approval !== 'pending'
+    if (stuck.current) toEnd()
+    else if (body.current) body.current.scrollTop = 0
   }, [task.id, tab, toEnd])
   useLayoutEffect(() => {
     if (stuck.current) toEnd()
@@ -140,13 +145,45 @@ export function TaskPanel({
         {(task.priority ?? 0) >= 2 && ['queued', 'paused', 'blocked'].includes(task.state) && (
           <span className="badge prioritized" title="Starts at the next free slot, before other queued work">⇡ next</span>
         )}
+        {task.approval === 'pending' && (
+          <span className="badge" title="An ideation task proposed this; it runs only if you approve it">needs approval</span>
+        )}
+        {task.approval === 'rejected' && <span className="badge">rejected</span>}
+        {/* An ideation task's proposal. Either can be undone until it starts. */}
+        {task.canApprove && (
+          <button
+            className="ghost-btn small accent"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              decideTodo(task.id, 'approved').then((tasks) => onTasks?.(tasks)).finally(() => setBusy(false))
+            }}
+          >
+            ✓ Approve
+          </button>
+        )}
+        {task.canReject && (
+          <button
+            className="ghost-btn small"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              decideTodo(task.id, 'rejected').then((tasks) => onTasks?.(tasks)).finally(() => setBusy(false))
+            }}
+          >
+            ✕ Reject
+          </button>
+        )}
         {/* To the front of the queue, with every task under it in the graph
-            (what it started, continued or waits on), so they run first. */}
+            (what it started, continued or waits on), so they run first. A todo
+            becomes regular work, and never goes back to waiting. */}
         {task.canPrioritize && (
           <button
             className="ghost-btn small"
             disabled={busy}
-            title="Run this next, and the tasks it waits on before it"
+            title={task.state === 'todo'
+              ? 'Run this next as a regular task: it no longer waits for dex to be idle'
+              : 'Run this next, and the tasks it waits on before it'}
             onClick={() => {
               setBusy(true)
               prioritizeTask(task.id).then((tasks) => onTasks?.(tasks)).finally(() => setBusy(false))
@@ -223,7 +260,8 @@ export function TaskPanel({
               // project, then the output slug — which is the parent's for a
               // resumed or re-run attempt, not this task's own slug. Without the
               // project the lookup 404s for every task outside the default one.
-              slug={task.project ? `${task.project}/${task.outputSlug}` : task.outputSlug}
+              // Ideation and its proposals are in `ideas/`, not in the assets.
+              slug={task.filesPath ?? (task.project ? `${task.project}/${task.outputSlug}` : task.outputSlug)}
               assets={view.assets}
               openPath={openPath}
               onOpen={(path) => onOpen({ kind: 'asset', path })}
@@ -231,9 +269,14 @@ export function TaskPanel({
           </>
         ) : (
           <div className="feed" ref={feedBox}>
+            {task.specPath && (
+              <TaskSpec path={task.specPath} spawnedBy={task.spawnedBy} onOpenTask={onStarted} />
+            )}
             {view.feed.length === 0 && (
               <p className="muted small">
-                {task.state === 'paused'
+                {task.approval === 'pending'
+                  ? 'Waiting for your approval. Nothing runs until you approve it.'
+                  : task.state === 'paused'
                   ? 'Stopped before it finished. It goes again on its own when there is room.'
                   : 'Waiting for the agent to start…'}
               </p>
@@ -542,6 +585,63 @@ function firstLine(message: string): string {
   return line.length > 200 ? `${line.slice(0, 200)}…` : line
 }
 
+
+/**
+ * What a todo was asked to do, and by whom: above its activity, because a todo
+ * has none until it runs, and approving one means reading this first.
+ */
+function TaskSpec({
+  path,
+  spawnedBy,
+  onOpenTask,
+}: {
+  path: string
+  spawnedBy?: string | null
+  onOpenTask: (task: Task) => void
+}) {
+  const [spec, setSpec] = useState<string | null>(null)
+  const [missing, setMissing] = useState(false)
+  const [origin, setOrigin] = useState<Task | null>(null)
+
+  useEffect(() => {
+    let live = true
+    setSpec(null)
+    setMissing(false)
+    readAsset(path)
+      .then((asset) => {
+        if (live && asset.kind === 'file') setSpec(asset.content)
+      })
+      .catch(() => live && setMissing(true))
+    return () => { live = false }
+  }, [path])
+
+  useEffect(() => {
+    let live = true
+    setOrigin(null)
+    if (spawnedBy) getTask(spawnedBy).then((task) => live && setOrigin(task)).catch(() => {})
+    return () => { live = false }
+  }, [spawnedBy])
+
+  return (
+    <div className="task-spec">
+      <div className="card-kind">Spec</div>
+      {origin && (
+        <button className="task-origin" onClick={() => onOpenTask(origin)}>
+          Proposed by <span>{origin.title}</span>
+        </button>
+      )}
+      {spec !== null ? (
+        <Suspense fallback={<p className="muted small">Loading the spec…</p>}>
+          <Markdown source={spec} />
+        </Suspense>
+      ) : missing ? (
+        <ErrorNote text="This todo has no SPEC.md." detail={`Not found: ${path}`} />
+      ) : (
+        <p className="muted small">Loading the spec…</p>
+      )}
+    </div>
+  )
+}
 
 /**
  * The material this task was cut out of, above the files it produced.

@@ -21,6 +21,7 @@ import asyncpg
 
 from .config import DEFAULT_CONCURRENCY, MAX_WORKERS
 from .db import Database
+from .changes import size_tags
 from .models import INTERACTIVE_SCOPES, Task, TaskState
 from .threads import Thread, ThreadMessage
 
@@ -299,8 +300,29 @@ class TaskStore:
             )
         return [task_from_row(row) for row in rows]
 
-    async def latest_by_package(self, project: str) -> dict[str, tuple[str, str]]:
-        """The newest task behind each of a project's packages: id and title.
+    async def add_changes(self, task_id: str, code: int, assets: int) -> None:
+        """Add to what a task has changed. Called with nothing, it says it changed nothing."""
+        await self.db.pool.execute(
+            """INSERT INTO task_changes (task_id, code_lines, asset_lines) VALUES ($1, $2, $3)
+               ON CONFLICT (task_id) DO UPDATE SET code_lines = task_changes.code_lines + $2,
+                   asset_lines = task_changes.asset_lines + $3, updated_at = now()""",
+            task_id, code, assets,
+        )
+
+    async def package_sizes(self, project: str, package: str) -> list[str]:
+        """A package's size tags, summed over the tasks that wrote to it."""
+        row = await self.db.pool.fetchrow(
+            """SELECT sum(c.code_lines) AS code, sum(c.asset_lines) AS assets
+               FROM task_changes c JOIN tasks t ON t.id = c.task_id
+               WHERE t.project = $1 AND coalesce(t.output_slug, t.slug) = $2""",
+            project, package,
+        )
+        return size_tags(int(row["code"]), int(row["assets"])) if row and row["code"] is not None else []
+
+    async def latest_by_package(self, project: str) -> dict[str, tuple[str, str, datetime, list[str]]]:
+        """The newest task behind each of a project's packages: id, title, last activity,
+        and the tags its tasks earn it. Those are worked out here and never written
+        to a manifest: a chat's directory may hold no package, or an installed one.
 
         A package is written by every attempt at it (a resume or a follow-up
         writes into its parent's `output_slug`), so the newest one is the run
@@ -309,13 +331,28 @@ class TaskStore:
         """
         rows = await self.db.pool.fetch(
             """SELECT DISTINCT ON (coalesce(output_slug, slug))
-                      coalesce(output_slug, slug) AS package, id, title
-                 FROM tasks
+                      coalesce(output_slug, slug) AS package, id, title,
+                      count(c.task_id) OVER package AS counted,
+                      sum(c.code_lines) OVER package AS code_lines,
+                      sum(c.asset_lines) OVER package AS asset_lines,
+                      max(greatest(created_at, started_at, finished_at))
+                          OVER package AS last_activity,
+                      bool_or(scope IN ('chat', 'todos'))
+                          OVER package AS from_chat,
+                      bool_or(scope = 'ideation' OR COALESCE(options, '{}'::jsonb) ? 'approval')
+                          OVER package AS from_ideation
+                 FROM tasks LEFT JOIN task_changes c ON c.task_id = tasks.id
                 WHERE project = $1
+               WINDOW package AS (PARTITION BY coalesce(output_slug, slug))
                 ORDER BY coalesce(output_slug, slug), (state = 'archived'), created_at DESC""",
             project,
         )
-        return {row["package"]: (row["id"], row["title"]) for row in rows}
+        return {
+            row["package"]: (row["id"], row["title"], row["last_activity"],
+                             ["origin:chat"] * row["from_chat"] + ["origin:ideation"] * row["from_ideation"]
+                             + (size_tags(int(row["code_lines"]), int(row["asset_lines"])) if row["counted"] else []))
+            for row in rows
+        }
 
     async def taken_slugs(self, project: str | None = None) -> set[str]:
         """Slugs already in use.
@@ -377,12 +414,42 @@ class TaskStore:
         )
 
     async def todo_family(self) -> list[Task]:
-        """Every todo list and all it started, oldest first."""
+        """Every open todo, ideation task and all they started, oldest first."""
         rows = await self.db.pool.fetch(
             f"""SELECT {TASK_COLUMNS} FROM tasks
-                WHERE options ? 'todo' AND state <> 'archived' ORDER BY seq"""
+                WHERE options ? 'todo' AND state NOT IN ('succeeded', 'failed', 'cancelled', 'archived')
+                ORDER BY seq"""
         )
         return [task_from_row(row) for row in rows]
+
+    async def open_todos(self) -> list[Task]:
+        """Todos whose tag may still change: all but the done and the archived."""
+        rows = await self.db.pool.fetch(
+            f"""SELECT {TASK_COLUMNS} FROM tasks
+                WHERE options ? 'approval' AND state <> 'archived'
+                  AND COALESCE(options->>'tag', '') <> 'todo:done'"""
+        )
+        return [task_from_row(row) for row in rows]
+
+    async def current_ideation(self, project: str) -> Task | None:
+        """The project's ideation task that has not ended, if there is one."""
+        row = await self.db.pool.fetchrow(
+            f"""SELECT {TASK_COLUMNS} FROM tasks
+                WHERE scope = 'ideation' AND project = $1
+                  AND state NOT IN ('succeeded', 'failed', 'cancelled', 'archived')
+                ORDER BY seq DESC LIMIT 1""",
+            project,
+        )
+        return task_from_row(row) if row else None
+
+    async def set_option(self, task_id: str, key: str, value: Any) -> None:
+        await self.db.pool.execute(
+            "UPDATE tasks SET options = COALESCE(options, '{}'::jsonb) || jsonb_build_object($2::text, $3::text) WHERE id = $1",
+            task_id, key, value,
+        )
+
+    async def drop_option(self, task_id: str, key: str) -> None:
+        await self.db.pool.execute("UPDATE tasks SET options = options - $2 WHERE id = $1", task_id, key)
 
     async def regular_work(self) -> bool:
         """Whether anything that is not a todo is running or about to.
@@ -395,15 +462,6 @@ class TaskStore:
                 WHERE (state IN ('queued', 'running') OR (state = 'paused' AND NOT held AND started_at IS NOT NULL))
                   AND NOT COALESCE(options, '{}'::jsonb) ? 'todo')"""
         ))
-
-    async def spawned_by(self, task_ids: list[str]) -> dict[str, str]:
-        """Who started each of these tasks, for those another task started."""
-        rows = await self.db.pool.fetch(
-            """SELECT depends_on, task_id FROM task_deps
-               WHERE depends_on = ANY($1::text[]) AND task_id = ANY($1::text[])""",
-            task_ids,
-        )
-        return {row["depends_on"]: row["task_id"] for row in rows}
 
     async def add_usage(
         self, task_id: str, hour: datetime, skill: str, cost: float, counts: dict[str, int],
@@ -1044,6 +1102,39 @@ class CostStore:
         )
         return float(value or 0)
 
+    async def line_series(
+        self, since: str = "7 days", bucket: str = "day", group_by: str = "model",
+        projects: list[str] | None = None, offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Lines of code and of assets per time bucket, split like `series`.
+
+        A task's lines land when it last did anything, and under the skill it
+        spent the most on: `task_changes` keeps a total per task, not per hour.
+        """
+        expression = {
+            "model": "COALESCE(t.model, 'unknown')",
+            "project": "COALESCE(t.project, 'none')",
+            "skill": "COALESCE(NULLIF(u.skill, ''), '(no skill)')",
+            "state": "t.state",
+        }.get(group_by, "COALESCE(t.model, 'unknown')")
+        width = _BUCKETS.get(bucket, "day")
+        when = "greatest(t.created_at, t.started_at, t.finished_at)"
+        rows = await self.db.pool.fetch(
+            f"""SELECT date_trunc('{width}', {when}) AS bucket, {expression} AS series,
+                       sum(c.code_lines)::bigint AS code, sum(c.asset_lines)::bigint AS assets
+                FROM task_changes c JOIN tasks t ON t.id = c.task_id
+                LEFT JOIN LATERAL (SELECT skill FROM task_usage WHERE task_id = t.id
+                                   ORDER BY cost_usd DESC LIMIT 1) u ON true
+                WHERE {_window(since, width, offset, when)}
+                  AND ($1::text[] IS NULL OR t.project = ANY($1))
+                GROUP BY 1, 2
+                HAVING sum(c.code_lines) + sum(c.asset_lines) > 0
+                ORDER BY 1""",
+            projects,
+        )
+        return [{"bucket": r["bucket"].isoformat(), "series": r["series"], "code": r["code"], "assets": r["assets"]}
+                for r in rows]
+
     async def series(
         self, since: str = "7 days", bucket: str = "day", group_by: str = "model",
         projects: list[str] | None = None, offset: int = 0,
@@ -1099,7 +1190,7 @@ _INTERVALS = {"day": "1 day", "week": "7 days", "month": "30 days", "all": "100 
 _BUCKETS = {"hour": "hour", "day": "day", "week": "week", "month": "month"}
 
 
-def _window(since: str, bucket: str, offset: int) -> str:
+def _window(since: str, bucket: str, offset: int, column: str = "u.hour") -> str:
     """SQL for one page of a period, `offset` pages back from now.
 
     Cut on bucket edges, so a day is whole on the page that shows it and on no
@@ -1108,7 +1199,7 @@ def _window(since: str, bucket: str, offset: int) -> str:
     interval = _INTERVALS.get(since, "7 days")
     width = _BUCKETS.get(bucket, "day")
     end = f"(date_trunc('{width}', now()) + interval '1 {width}' - interval '{interval}' * {int(offset)})"
-    return f"u.hour >= date_trunc('{width}', {end} - interval '{interval}') AND u.hour < {end}"
+    return f"{column} >= date_trunc('{width}', {end} - interval '{interval}') AND {column} < {end}"
 
 
 class SettingsStore:

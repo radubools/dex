@@ -707,6 +707,7 @@ export default function App() {
           <NotificationsButton notices={notices} onOpen={openNotice} />
           <SettingsMenu
             autoApprove={state.autoApprove}
+            project={project}
             onOpenCosts={() => openPane('costs')}
             me={me}
             onOpenUsers={() => openPane('users')}
@@ -729,6 +730,7 @@ export default function App() {
               key={project}
               project={project}
               liveTags={state.tags[project]}
+              liveSizes={state.sizes[project]}
               onOpen={openViewer}
               openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
             />

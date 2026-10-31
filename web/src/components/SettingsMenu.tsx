@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { can, getSettings, logout, putSettings, setLimitPaused, setPaused, type Me } from '../api'
+import { can, getIdeation, getSettings, logout, putSettings, setIdeation, setLimitPaused, setPaused, type IdeationStatus, type Me } from '../api'
 import type { SettingsResponse } from '../types'
 import { ServerPicker } from './ServerPicker'
 
@@ -30,6 +30,7 @@ export function SettingsMenu({
   autoApprove,
   onAutoApprove,
   onOpenCosts,
+  project,
   me,
   onOpenUsers,
   onOpenSkills,
@@ -38,6 +39,8 @@ export function SettingsMenu({
   autoApprove: boolean
   onAutoApprove: (enabled: boolean) => void
   onOpenCosts: () => void
+  /** The open project: its ideation cycle has a switch here, with the Power skill. */
+  project?: string | null
   /** Who is signed in, or null on an install with no sign-in configured. */
   me?: Me | null
   onOpenUsers?: () => void
@@ -49,6 +52,10 @@ export function SettingsMenu({
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<SettingsResponse | null>(null)
   const [busy, setBusy] = useState(false)
+  const [ideation, setIdeationState] = useState<IdeationStatus | null>(null)
+  // Shown under the switch: it stays where it was on a failure, and with
+  // nothing said that reads as a checkbox that does not work.
+  const [ideationError, setIdeationError] = useState<string | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
 
   // Still rendered into document.body via a portal: the header has a
@@ -57,7 +64,10 @@ export function SettingsMenu({
   // the viewer depending on what was open. It no longer needs positioning —
   // it covers the screen — but it does still need to escape that context.
 
-  const refresh = () => getSettings().then(setData).catch(() => {})
+  const refresh = () => {
+    if (project) getIdeation(project).then(setIdeationState).catch(() => setIdeationState(null))
+    return getSettings().then(setData).catch(() => {})
+  }
 
   useEffect(() => {
     if (open) refresh()
@@ -192,6 +202,29 @@ export function SettingsMenu({
               onChange={(e) => onAutoApprove(e.target.checked)}
             />
           </label>
+
+          {/* Only with the Power skill, and off until someone turns it on. Off
+              pauses the armed ideation task; on resumes it, and dex keeps one armed. */}
+          {project && ideation?.available && (
+            <label className="menu-row toggle">
+              <span>
+                Ideation
+                <small>Look for improvements in {project} whenever dex is idle, and propose them for approval</small>
+                {ideationError && <small className="error">{ideationError}</small>}
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={ideation.enabled}
+                onChange={(e) => {
+                  setIdeationError(null)
+                  setIdeation(project, e.target.checked)
+                    .then(setIdeationState)
+                    .catch((err: Error) => setIdeationError(err.message))
+                }}
+              />
+            </label>
+          )}
 
           <label className="menu-row toggle">
             <span>

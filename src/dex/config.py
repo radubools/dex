@@ -125,6 +125,11 @@ class Config:
         """Where a project's AGENTS.md and task directories live."""
         return self.assets_dir / (project or self.default_project)
 
+    @property
+    def ideas_dir(self) -> Path:
+        """Ideation's own files, beside `assets/`: only power tasks reach them (design/24)."""
+        return self.assets_dir.parent / "ideas"
+
     def guide_path(self, project: str | None = None) -> Path:
         return self.project_dir(project) / "AGENTS.md"
 

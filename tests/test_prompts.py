@@ -371,3 +371,25 @@ def test_a_power_task_reads_the_newest_published_skill(tmp_path):
             {"name": "power", "description": "d", "version": version, "updated": updated}))
     system = power_system(tmp_path)
     assert "NEW" in system and "OLD" not in system
+
+
+def test_ideation_is_told_to_use_what_was_made_and_always_propose():
+    from dex.prompts import IDEATION_SYSTEM
+
+    assert "story-e2e.mjs" in IDEATION_SYSTEM and "--out $TMPDIR" in IDEATION_SYSTEM
+    assert "Having nothing to do is not a result" in IDEATION_SYSTEM
+    assert "one to three todos" in IDEATION_SYSTEM
+    assert "Run it fresh" in IDEATION_SYSTEM
+    assert "Zero to three" not in IDEATION_SYSTEM
+
+
+def test_ideation_is_told_which_game_it_is_for():
+    from pathlib import Path
+
+    from dex.prompts import ideation_prompt
+
+    told = ideation_prompt("Look.", Path("/ideas/ml"), Path("/assets/ml"), [], Path("/games/model-workshop"))
+
+    assert "`model-workshop`: `/games/model-workshop`" in told
+    assert "game" not in ideation_prompt("Look.", Path("/ideas/ml"), Path("/assets/ml"), [])
+
