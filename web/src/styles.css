@@ -952,7 +952,8 @@ body.resizing iframe { pointer-events: none; }
 
 /* ---------------- cost dashboard ---------------- */
 
-.cost-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.cost-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.cost-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .segmented { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; }
 .segmented button {
   min-height: 34px; padding: 0 10px; background: none; border: none;

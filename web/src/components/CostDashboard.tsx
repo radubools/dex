@@ -114,66 +114,73 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
       </header>
 
       <div className="viewer-body">
+        {/* When, then what to split it by, then what to measure. */}
         <div className="cost-controls">
-          <div className="segmented">
-            <button className={metric === 'cost' ? 'on' : ''} onClick={() => setMetric('cost')}>Cost</button>
-            <button className={metric === 'tokens' ? 'on' : ''} onClick={() => setMetric('tokens')}>Tokens</button>
-          </div>
-          <div className="segmented">
-            {PERIODS.map((p) => (
-              <button
-                key={p.id}
-                className={period === p.id ? 'on' : ''}
-                onClick={() => {
-                  setPeriod(p.id)
-                  setGranularity(p.granularities[0])
-                  setOffset(0)
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div className="segmented">
-            {allowed.map((g) => (
-              <button key={g} className={granularity === g ? 'on' : ''} onClick={() => setGranularity(g)}>
-                {g}
-              </button>
-            ))}
-          </div>
-          <div className="segmented">
-            {GROUPS.map((g) => (
-              <button
-                key={g.id}
-                className={group === g.id ? 'on' : ''}
-                onClick={() => {
-                  if (g.id !== group) setPicked([])
-                  setGroup(g.id)
-                }}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
-          {group !== 'project' && (
-            <ProjectFilter all={data?.projects ?? []} chosen={projects} onChange={setProjects} />
-          )}
-          {metric === 'tokens' && (
+          <div className="cost-row">
             <div className="segmented">
-              {TOKEN_VIEWS.map((v) => (
+              {PERIODS.map((p) => (
                 <button
-                  key={v.id}
-                  className={view.id === v.id ? 'on' : ''}
+                  key={p.id}
+                  className={period === p.id ? 'on' : ''}
                   onClick={() => {
-                    setTokenView(v.id)
-                    setPickedKinds([])
+                    setPeriod(p.id)
+                    setGranularity(p.granularities[0])
+                    setOffset(0)
                   }}
                 >
-                  {v.label}
+                  {p.label}
                 </button>
               ))}
             </div>
-          )}
+            <div className="segmented">
+              {allowed.map((g) => (
+                <button key={g} className={granularity === g ? 'on' : ''} onClick={() => setGranularity(g)}>
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="cost-row">
+            <div className="segmented">
+              {GROUPS.map((g) => (
+                <button
+                  key={g.id}
+                  className={group === g.id ? 'on' : ''}
+                  onClick={() => {
+                    if (g.id !== group) setPicked([])
+                    setGroup(g.id)
+                  }}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+            {group !== 'project' && (
+              <ProjectFilter all={data?.projects ?? []} chosen={projects} onChange={setProjects} />
+            )}
+          </div>
+          <div className="cost-row">
+            <div className="segmented">
+              <button className={metric === 'cost' ? 'on' : ''} onClick={() => setMetric('cost')}>Cost</button>
+              <button className={metric === 'tokens' ? 'on' : ''} onClick={() => setMetric('tokens')}>Tokens</button>
+            </div>
+            {metric === 'tokens' && (
+              <div className="segmented">
+                {TOKEN_VIEWS.map((v) => (
+                  <button
+                    key={v.id}
+                    className={view.id === v.id ? 'on' : ''}
+                    onClick={() => {
+                      setTokenView(v.id)
+                      setPickedKinds([])
+                    }}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {error && <p className="error">{error}</p>}

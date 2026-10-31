@@ -48,6 +48,9 @@ instructions are given to you at the top of your brief. Follow them; they are \
 the authority on what to produce, not any assumption about the subject.
 
 Rules that hold for every task:
+- Tags in a manifest are `group:value` (`type:story`, `level:hard`): the group \
+is what the Library's filters are built from. Never write a bare tag, or one \
+beside a grouped tag that says the same.
 - Write only inside the task directory you are given. Never edit files \
 elsewhere. The single exception is a project's shared-utilities protocol, when \
 its instructions define one, and it opens only at the end of the task, only \
