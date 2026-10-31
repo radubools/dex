@@ -125,7 +125,8 @@ capped at 6: `code-lines:0c` to `6c`, and `asset-lines:0a` to `6a`. Each has a d
 `ideas/<project>/`, not in the project's assets. Approve and Reject are offered on
 the task and beside the spec until the todo starts, and either can be undone.
 
-**Reaching ideas.** The Library's Ideas side lists the log and the proposals, and
+**Reaching ideas.** The Library's Ideas side lists the log and the proposals, with
+the same Arrange as the assets, remembered apart because the tags differ, and
 asset routes read `ideas/<project>/...` for the operator. Of the tasks, only power
 and ideation may: for the rest `permissions.py` refuses paths in `ideas/`, and
 commands naming its absolute path. A command that builds the path some other way

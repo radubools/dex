@@ -43,21 +43,25 @@ const UNTAGGED = '\0untagged'
 /** Arrange by what doesn't use `group:value`. A colon can't be in a group's name. */
 const NO_GROUP = ':none'
 
-const arrangeKey = (project: string) => `dex.library.arrange.${project}`
+/** Assets and ideas have different tags, so each side keeps its own. */
+type Side = 'assets' | 'ideas'
+
+const arrangeKey = (project: string, side: Side) =>
+  `dex.library.arrange.${project}${side === 'ideas' ? '.ideas' : ''}`
 
 /** A viewer's convenience, so it lives in the browser, and may not be there. */
-function remembered(project: string): string {
+function remembered(project: string, side: Side): string {
   try {
-    return localStorage.getItem(arrangeKey(project)) ?? ''
+    return localStorage.getItem(arrangeKey(project, side)) ?? ''
   } catch {
     return ''
   }
 }
 
-function remember(project: string, group: string) {
+function remember(project: string, side: Side, group: string) {
   try {
-    if (group) localStorage.setItem(arrangeKey(project), group)
-    else localStorage.removeItem(arrangeKey(project))
+    if (group) localStorage.setItem(arrangeKey(project, side), group)
+    else localStorage.removeItem(arrangeKey(project, side))
   } catch {
     // Not kept, then: it still works until the page closes.
   }
@@ -79,6 +83,93 @@ function foldersOf(entries: PackageEntry[], valuesOf: (e: PackageEntry) => strin
 }
 
 type Group = { name: string; tags: { tag: string; value: string; count: number }[] }
+
+function groupsOf(entries: PackageEntry[]): Group[] {
+  const counts = new Map<string, number>()
+  for (const entry of entries) {
+    for (const tag of entry.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
+  }
+  const byGroup = new Map<string, Group>()
+  for (const [tag, count] of counts) {
+    const { group, value } = split(tag)
+    if (!byGroup.has(group)) byGroup.set(group, { name: group, tags: [] })
+    byGroup.get(group)!.tags.push({ tag, value, count })
+  }
+  for (const group of byGroup.values()) {
+    group.tags.sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+  }
+  // Smallest vocabulary first: a group with three values divides the library
+  // more usefully than one with thirty, and it keeps the pill rows stable as
+  // packages are tagged. Un-grouped tags last, having no heading to sit under.
+  return [...byGroup.values()].sort(
+    (a, b) =>
+      Number(a.name === '') - Number(b.name === '') ||
+      a.tags.length - b.tags.length ||
+      a.name.localeCompare(b.name),
+  )
+}
+
+/** What Arrange leaves on screen: the folders, or the rows of the one open. */
+function arrangement(shown: PackageEntry[], groups: Group[], arrange: string, folder: string | null) {
+  // The saved group may be gone from this project: then it is All.
+  const arranged = arrange === NO_GROUP || groups.some((g) => g.name === arrange && g.name) ? arrange : ''
+  const bare = arranged === NO_GROUP
+  const groupName = bare ? 'tag' : arranged
+  const valueIn = (entry: PackageEntry) =>
+    bare
+      ? entry.tags.filter((t) => !t.includes(':'))
+      : entry.tags.filter((t) => t.startsWith(`${arranged}:`)).map((t) => split(t).value)
+  // No group keeps only what stays out of the convention: a plain tag, or no tag at all.
+  const pool = bare ? shown.filter((p) => p.tags.length === 0 || valueIn(p).length > 0) : shown
+  const folders = arranged && folder === null ? foldersOf(pool, valueIn, groupName) : null
+  const listed = arranged && folder !== null
+    ? pool.filter((p) => (folder === UNTAGGED ? valueIn(p).length === 0 : valueIn(p).includes(folder)))
+    : pool
+  const trail = folder === null ? '' : `${bare ? 'No group' : arranged} / ${folder === UNTAGGED ? `no ${groupName}` : folder}`
+  return { arranged, pool, folders, listed, trail }
+}
+
+function ArrangeSelect({ value, groups, onChange }: { value: string; groups: Group[]; onChange: (group: string) => void }) {
+  return (
+    <label className="library-arrange">
+      Arrange
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">All</option>
+        <option value={NO_GROUP}>No group</option>
+        {groups.filter((g) => g.name).map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
+      </select>
+    </label>
+  )
+}
+
+/** The way back out of a folder, or the folders themselves. */
+function FolderRows({
+  trail,
+  folders,
+  onPick,
+}: {
+  trail: string
+  folders: ReturnType<typeof foldersOf> | null
+  onPick: (value: string | null) => void
+}) {
+  return (
+    <>
+      {trail && (
+        <button className="asset-row folder-back" onClick={() => onPick(null)}>
+          <span className="asset-icon">‹</span>
+          <span className="asset-main"><span className="asset-name">{trail}</span></span>
+        </button>
+      )}
+      {folders?.map(({ value, name, count }) => (
+        <button key={value} className="asset-row folder" onClick={() => onPick(value)}>
+          <span className="asset-icon">📁</span>
+          <span className="asset-main"><span className="asset-name">{name}</span></span>
+          <span className="asset-size">{count} item{count === 1 ? '' : 's'}</span>
+        </button>
+      ))}
+    </>
+  )
+}
 
 /**
  * Every package the project has generated, searchable by name and filterable
@@ -109,13 +200,15 @@ export function PackageLibrary({
   // is filtering, and the list is what the reader came for.
   const [showFilters, setShowFilters] = useState(false)
   // Ideation's log and proposals are a side of their own, not assets.
-  const [side, setSide] = useState<'assets' | 'ideas'>('assets')
+  const [side, setSide] = useState<Side>('assets')
   const [ideas, setIdeas] = useState<{ log: string | null; ideas: PackageEntry[] }>({ log: null, ideas: [] })
   const [ideaFilter, setIdeaFilter] = useState('')
   /** The tag group the list is arranged by, kept per project; '' is All. */
-  const [arrange, setArrange] = useState(() => remembered(project))
+  const [arrange, setArrange] = useState(() => remembered(project, 'assets'))
   /** The value open under it, or null for its folders. */
   const [folder, setFolder] = useState<string | null>(null)
+  const [ideaArrange, setIdeaArrange] = useState(() => remembered(project, 'ideas'))
+  const [ideaFolder, setIdeaFolder] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
@@ -127,6 +220,10 @@ export function PackageLibrary({
     // A tag chosen in one project means nothing in the next.
     setPicked([])
     setShowFilters(false)
+    setArrange(remembered(project, 'assets'))
+    setFolder(null)
+    setIdeaArrange(remembered(project, 'ideas'))
+    setIdeaFolder(null)
     listPackages(project)
       .then((got) => live && setPackages(got.packages))
       .catch((err: Error) => live && setError(err.message))
@@ -148,30 +245,12 @@ export function PackageLibrary({
     [packages, liveTags, liveSizes],
   )
 
-  const groups: Group[] = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const entry of entries) {
-      for (const tag of entry.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
-    }
-    const byGroup = new Map<string, Group>()
-    for (const [tag, count] of counts) {
-      const { group, value } = split(tag)
-      if (!byGroup.has(group)) byGroup.set(group, { name: group, tags: [] })
-      byGroup.get(group)!.tags.push({ tag, value, count })
-    }
-    for (const group of byGroup.values()) {
-      group.tags.sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
-    }
-    // Smallest vocabulary first: a group with three values divides the library
-    // more usefully than one with thirty, and it keeps the pill rows stable as
-    // packages are tagged. Un-grouped tags last, having no heading to sit under.
-    return [...byGroup.values()].sort(
-      (a, b) =>
-        Number(a.name === '') - Number(b.name === '') ||
-        a.tags.length - b.tags.length ||
-        a.name.localeCompare(b.name),
-    )
-  }, [entries])
+  const groups = useMemo(() => groupsOf(entries), [entries])
+  const ideaEntries = useMemo(
+    () => ideas.ideas.map((entry) => ({ ...entry, tags: distinct(entry.tags) })),
+    [ideas],
+  )
+  const ideaGroups = useMemo(() => groupsOf(ideaEntries), [ideaEntries])
 
   const toggle = (tag: string) =>
     setPicked((current) =>
@@ -194,10 +273,11 @@ export function PackageLibrary({
   if (side === 'ideas') {
     const words = ideaFilter.trim().toLowerCase().split(/\s+/).filter(Boolean)
     // Every word has to match, in the name or a tag, so `catalog 2c` narrows.
-    const shownIdeas = ideas.ideas.filter((entry) => {
+    const shownIdeas = ideaEntries.filter((entry) => {
       const text = [entry.displayName, entry.slug, ...entry.tags].join(' ').toLowerCase()
       return words.every((word) => text.includes(word))
     })
+    const { arranged, pool, folders, listed, trail } = arrangement(shownIdeas, ideaGroups, ideaArrange, ideaFolder)
     return (
       <div className="library">
         {sides}
@@ -208,10 +288,21 @@ export function PackageLibrary({
             aria-label="Find ideas"
             onChange={(e) => setIdeaFilter(e.target.value)}
           />
+          {ideaGroups.length > 0 && (
+            <ArrangeSelect
+              value={arranged}
+              groups={ideaGroups}
+              onChange={(group) => {
+                setIdeaArrange(group)
+                setIdeaFolder(null)
+                remember(project, 'ideas', group)
+              }}
+            />
+          )}
         </div>
         <div className="explorer">
           <div className="explorer-group">
-            {ideas.log && words.length === 0 && (
+            {ideas.log && words.length === 0 && !trail && (
               <button
                 className={`asset-row ${openPath === ideas.log ? 'open' : ''}`}
                 onClick={() => onOpen({ kind: 'asset', path: ideas.log! })}
@@ -220,7 +311,8 @@ export function PackageLibrary({
                 <span className="asset-main"><span className="asset-name">Ideas log</span></span>
               </button>
             )}
-            {shownIdeas.map((entry) => (
+            <FolderRows trail={trail} folders={folders} onPick={setIdeaFolder} />
+            {!folders && listed.map((entry) => (
               <button
                 key={entry.slug}
                 className={`asset-row ${openPath === entry.path ? 'open' : ''}`}
@@ -232,12 +324,15 @@ export function PackageLibrary({
                 <span className="asset-main">
                   <span className="asset-name">{entry.displayName}</span>
                   <span className="asset-tags">
-                    {rowTags(distinct(entry.tags)).map((value) => <span key={value} className="row-tag">{value}</span>)}
+                    {rowTags(entry.tags).map((value) => <span key={value} className="row-tag">{value}</span>)}
                   </span>
                 </span>
                 {entry.lastActivity ? <span className="asset-size">{ago(entry.lastActivity)}</span> : null}
               </button>
             ))}
+            {shownIdeas.length > 0 && pool.length === 0 && (
+              <p className="muted small">Every idea here uses the group:value convention.</p>
+            )}
             {words.length > 0 && shownIdeas.length === 0 && (
               <p className="muted small">No ideas match “{ideaFilter}”.</p>
             )}
@@ -284,20 +379,7 @@ export function PackageLibrary({
     return true
   })
 
-  // The saved group may be gone from this project: then it is All.
-  const arranged = arrange === NO_GROUP || groups.some((g) => g.name === arrange && g.name) ? arrange : ''
-  const bare = arranged === NO_GROUP
-  const groupName = bare ? 'tag' : arranged
-  const valueIn = (entry: PackageEntry) =>
-    bare
-      ? entry.tags.filter((t) => !t.includes(':'))
-      : entry.tags.filter((t) => t.startsWith(`${arranged}:`)).map((t) => split(t).value)
-  // No group keeps only what stays out of the convention: a plain tag, or no tag at all.
-  const pool = bare ? shown.filter((p) => p.tags.length === 0 || valueIn(p).length > 0) : shown
-  const folders = arranged && folder === null ? foldersOf(pool, valueIn, groupName) : null
-  const listed = arranged && folder !== null
-    ? pool.filter((p) => (folder === UNTAGGED ? valueIn(p).length === 0 : valueIn(p).includes(folder)))
-    : pool
+  const { arranged, pool, folders, listed, trail } = arrangement(shown, groups, arrange, folder)
 
   return (
     <div className="library">
@@ -309,21 +391,15 @@ export function PackageLibrary({
           onChange={(e) => setFilter(e.target.value)}
         />
         {groups.length > 0 && (
-          <label className="library-arrange">
-            Arrange
-            <select
-              value={arranged}
-              onChange={(e) => {
-                setArrange(e.target.value)
-                setFolder(null)
-                remember(project, e.target.value)
-              }}
-            >
-              <option value="">All</option>
-              <option value={NO_GROUP}>No group</option>
-              {groups.filter((g) => g.name).map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
-            </select>
-          </label>
+          <ArrangeSelect
+            value={arranged}
+            groups={groups}
+            onChange={(group) => {
+              setArrange(group)
+              setFolder(null)
+              remember(project, 'assets', group)
+            }}
+          />
         )}
         {groups.length > 0 && (
           <button
@@ -370,21 +446,7 @@ export function PackageLibrary({
       )}
       <div className="explorer">
         <div className="explorer-group">
-          {folder !== null && (
-            <button className="asset-row folder-back" onClick={() => setFolder(null)}>
-              <span className="asset-icon">‹</span>
-              <span className="asset-main">
-                <span className="asset-name">{bare ? 'No group' : arranged} / {folder === UNTAGGED ? `no ${groupName}` : folder}</span>
-              </span>
-            </button>
-          )}
-          {folders?.map(({ value, name, count }) => (
-            <button key={value} className="asset-row folder" onClick={() => setFolder(value)}>
-              <span className="asset-icon">📁</span>
-              <span className="asset-main"><span className="asset-name">{name}</span></span>
-              <span className="asset-size">{count} item{count === 1 ? '' : 's'}</span>
-            </button>
-          ))}
+          <FolderRows trail={trail} folders={folders} onPick={setFolder} />
           {!folders && listed.map((entry) => (
             <button
               key={entry.slug}
