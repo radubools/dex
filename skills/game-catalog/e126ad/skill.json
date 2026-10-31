@@ -1,0 +1,10 @@
+{
+  "name": "game-catalog",
+  "description": "Story catalogs for the games in ~/games: the master view of a game's lessons (sections of tiles, each pointing at a story with a display title, icon and thumbnail), laid out as a grid, a winding linear path or mind-map trees with the progression order; write, check with the game's engine, preview and install kind \"catalog\" packages, with placeholder tiles for lessons not written yet.",
+  "version": "e126ad",
+  "updated": 1793406706.671357,
+  "requires": [
+    "PIL",
+    "pytest"
+  ]
+}
