@@ -68,6 +68,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "src"))
 
+from dex.config import CONFIG  # noqa: E402
 from dex.models import Event, Task, continued_problem, slugify  # noqa: E402
 from dex.store import TASK_COLUMNS, task_from_row  # noqa: E402
 from dex.threads import ThreadMessage  # noqa: E402
@@ -182,9 +183,11 @@ async def submit(args: argparse.Namespace) -> None:
             title = (row.get("title") or problem.splitlines()[0])[:80]
             slug = row.get("slug") or title
             task = Task(problem=problem, title=title, slug=slugify(f"power-{slug}" if args.power else slug, taken))
-            task.scope = "power" if args.power else "package"
+            task.scope = "ideation" if args.ideation else "power" if args.power else "package"
             taken.add(task.slug)
             task.project, task.output_slug, task.model = args.project, row.get("package") or None, model
+            if args.ideation:
+                task.model = CONFIG.planner_model
             tasks.append(task)
         request = args.request or (tasks[0].title if len(tasks) == 1 else f"{len(tasks)} tasks")
         if args.dry_run:
@@ -263,6 +266,7 @@ async def main() -> None:
     ap.add_argument("--adopt", help="comma-separated slugs or ids of existing tasks to record a plan for")
     ap.add_argument("--message-to", help="slug or id of a finished task to continue with this message")
     ap.add_argument("--power", action="store_true", help="a power task: a code change anywhere, no content")
+    ap.add_argument("--ideation", action="store_true", help="an ideation run with this brief, now")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     if args.request:

@@ -394,6 +394,17 @@ so that runs cover different ground.
    a better explanation, a clearer screen, a missing case, a test nobody has written all count. \
    Only if it would repeat an open todo, go and look at something else first. They wait for the \
    operator, and you don't wait for them.
+   Give each its size and its severity. If it is a feature improvement with nothing wrong to \
+   count, its severity is `incremental` and it needs no sample. Otherwise measure severity before \
+   proposing: take a random sample \
+   of what is like the thing you found, about 5 to 20 similar assets or tests (`sort -R | head`), \
+   and check each the cheapest way that shows the problem. Don't go through all of them. Pass \
+   what you sampled and how many it hit as `sampled`, such as `4 of 12 random stories`, and \
+   `severity`, whose levels are:
+   - `low`: localized to one asset, or a flaky test.
+   - `medium`: affects a group of assets, or tests fail in a significant number of cases.
+   - `high`: affects a majority of components, causes frequent crashes, or leaves a large number \
+     of tests unable to execute in a test chain.
 4. Append to IDEAS.md, dated: what you exercised and how it went, and each idea you proposed or \
    dropped and why.
 

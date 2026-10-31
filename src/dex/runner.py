@@ -646,6 +646,14 @@ class TaskRunner:
                     "asset_lines": {"type": "integer", "description": "Ideation: upper bound on lines of "
                                     "assets changed (stories, catalogs, briefs and other documents, "
                                     "not code), 0 if none."},
+                    "severity": {"type": "string", "enum": ["incremental", "low", "medium", "high"],
+                                 "description": "Ideation: how far it reaches, measured by sampling; "
+                                 "incremental for a feature improvement."},
+                    "sampled": {"type": "string", "description": "Ideation: what was sampled and how "
+                                "many it hit, such as `4 of 12 random stories`. Not needed for incremental."},
+                    "replaces": {"type": "array", "items": {"type": "string"},
+                                 "description": "Ideation: ids of pending todos this one takes the "
+                                 "place of. They are rejected, which the operator can undo."},
                 },
                 "required": ["title", "spec"],
             }}}, "required": ["todos"]},

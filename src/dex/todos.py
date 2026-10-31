@@ -51,6 +51,10 @@ TICK_S = 3.0
 ARM_EVERY_S = 600.0
 #: At most this many todos from one request: past it the request wants a plan.
 MAX_TODOS = 20
+#: How far a proposed todo reaches, measured by sampling; it is a `severity:` tag.
+SEVERITIES = {"incremental": "🟢 incremental", "low": "🔵 low", "medium": "🟠 medium", "high": "🔴 high"}
+#: A feature improvement, with nothing wrong to count, so it has no sample.
+INCREMENTAL = "incremental"
 WAITING = "waiting for dex to be idle"
 SPEC_FILE = "SPEC.md"
 IDEAS_FILE = "IDEAS.md"
@@ -96,6 +100,10 @@ class Todos:
         if root.is_ideation and not all(_estimated(i) for i in items):
             raise Refused("every proposed todo needs `code_lines` and `asset_lines`: "
                           "your upper bound on each, 0 if there are none")
+        if root.is_ideation and not all(_rated(i) for i in items):
+            raise Refused("every proposed todo needs `severity` (incremental, low, medium or high), and "
+                          "unless it is incremental, `sampled`: what you sampled, and how many of those it hit")
+        replaced = [await self._replaceable(root, ref) for i in items for ref in i.get("replaces") or []]
         if len(items) > MAX_TODOS:
             raise Refused(f"that is {len(items)} todos; {MAX_TODOS} is the most one request may split into")
         project = root.project or self.m.config.default_project
@@ -115,14 +123,19 @@ class Todos:
             if root.is_ideation:
                 code, assets = int(item["code_lines"]), int(item["asset_lines"])
                 tags = size_tags(code, assets)
+                severity, sampled = SEVERITIES[item["severity"]], " ".join(str(item.get("sampled") or "").split())
                 spec = (f"**Estimated change:** up to {code:,} lines of code ({tags[0].split(':')[1]}), "
-                        f"up to {assets:,} lines of assets ({tags[1].split(':')[1]})\n\n{spec}")
+                        f"up to {assets:,} lines of assets ({tags[1].split(':')[1]})\n\n"
+                        f"**Severity:** {severity}.{f' Sampled: {sampled}' if sampled else ''}\n\n{spec}")
+                tags.append(f"severity:{severity}")
                 (self._dir(task) / "manifest.json").write_text(
                     json.dumps({"title": task.title, "tags": tags}, indent=2), encoding="utf-8")
             (self._dir(task) / SPEC_FILE).write_text(spec + "\n", encoding="utf-8")
             made.append(task)
             if root.is_ideation:
-                self.log(project, f"proposed: {task.title} ({task.slug})")
+                self.log(project, f"proposed: {task.title} ({task.slug}), {SEVERITIES[item['severity']]} severity")
+        for old in replaced:
+            await self.decide(old.id, REJECTED, by="its reassessment")
         count = f"{len(made)} todo{'' if len(made) == 1 else 's'}"
         await self._announce(thread["id"], made, (
             f"Proposed {count}, waiting for your approval." if root.is_ideation else f"Added {count}."))
@@ -155,8 +168,17 @@ class Todos:
         except Exception:
             log.exception("could not post to thread %s", thread_id)
 
-    async def decide(self, task_id: str, approval: str) -> Task:
-        """The operator's call on a proposed todo. They may change their mind."""
+    async def _replaceable(self, root: Task, ref: Any) -> Task:
+        """An older proposal this run reassessed: only one still waiting for approval."""
+        task = await self.m.tasks.get(str(ref))
+        if (not root.is_ideation or task is None or task.project != root.project or not task.proposed
+                or task.state is not TaskState.TODO or task.options.get("approval") != PENDING):
+            raise Refused(f"{ref} can't be replaced: `replaces` takes ids of this project's "
+                          "todos still pending approval")
+        return task
+
+    async def decide(self, task_id: str, approval: str, by: str = "the operator") -> Task:
+        """A call on a proposed todo. The operator may change their mind."""
         task = await self.m.tasks.get(task_id)
         if task is None or not task.proposed or task.state is not TaskState.TODO:
             raise Refused("only a proposed todo that has not started can be approved or rejected")
@@ -164,7 +186,7 @@ class Todos:
             raise Refused(f"this todo has no {SPEC_FILE}: there is nothing to approve")
         await self.m.tasks.set_option(task.id, "approval", approval)
         fresh = await self.m.tasks.get(task.id)
-        self.log(task.project or self.m.config.default_project, f"{approval} by the operator: {task.title} ({task.slug})")
+        self.log(task.project or self.m.config.default_project, f"{approval} by {by}: {task.title} ({task.slug})")
         await self._sync_tags()
         self.m.bus.publish(Event(type="task_state", task_id=task.id, project=task.project,
                                  data={"state": task.state.value, "activity": task.activity, "approval": approval}))
@@ -386,6 +408,11 @@ def _estimated(item: dict[str, Any]) -> bool:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return False
     return True
+
+
+def _rated(item: dict[str, Any]) -> bool:
+    severity, sampled = item.get("severity"), item.get("sampled")
+    return severity in SEVERITIES and (severity == INCREMENTAL or (isinstance(sampled, str) and bool(sampled.strip())))
 
 
 def _write_tag(directory: Path, title: str, tag: str) -> None:

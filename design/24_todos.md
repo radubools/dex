@@ -121,7 +121,17 @@ the file stays quick to read however long the cycle runs.
 dependency edge: the run doesn't wait for them. `add_todos` refuses one without
 `code_lines` and `asset_lines`, the run's upper bounds. dex writes them at the top
 of its `SPEC.md` and tags it with the smallest power of ten that bounds each,
-capped at 6: `code-lines:0c` to `6c`, and `asset-lines:0a` to `6a`. Each has a directory in
+capped at 6: `code-lines:0c` to `6c`, and `asset-lines:0a` to `6a`. It refuses one
+without `severity` and `sampled` too: the run takes a random sample of similar assets
+or tests, not all of them, and says what it sampled and how many were hit. That goes
+under the estimate, with a tag whose value carries its colour: `severity:🔵 low` (one
+asset, a flaky test), `severity:🟠 medium` (a group of assets, tests failing in a
+significant number of cases) or `severity:🔴 high` (most components, frequent crashes,
+many tests unable to run). A feature improvement has nothing wrong to count, so it is
+`severity:🟢 incremental`, with no sample. Older proposals have none: a
+level is measured, so it can't be worked out afterwards, but a run briefed to reassess
+them (`enqueue_task.py --ideation`) can propose replacements with `replaces`, which
+rejects the old ones. Each has a directory in
 `ideas/<project>/`, not in the project's assets. Approve and Reject are offered on
 the task and beside the spec until the todo starts, and either can be undone.
 

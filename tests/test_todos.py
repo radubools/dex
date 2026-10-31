@@ -205,7 +205,8 @@ async def project(manager, config):
 
 
 async def propose(m, ideation, *titles):
-    return await m.todos.add(ideation, [{"title": t, "spec": f"Do {t}.", "code_lines": 40, "asset_lines": 0}
+    return await m.todos.add(ideation, [{"title": t, "spec": f"Do {t}.", "code_lines": 40, "asset_lines": 0,
+                                          "severity": "low", "sampled": "1 of 8 tests"}
                                          for t in titles])
 
 
@@ -308,7 +309,7 @@ async def test_a_proposal_waits_for_approval_and_does_not_hold_ideation_back(man
     await manager.todos.tick()
     assert await state(manager, p) is TaskState.TODO
     assert await state(manager, next_one) is TaskState.QUEUED
-    assert manifest(config, p)["tags"] == ["code-lines:2c", "asset-lines:0a", "todo:pending-approval"]
+    assert manifest(config, p)["tags"] == ["code-lines:2c", "asset-lines:0a", "severity:🔵 low", "todo:pending-approval"]
 
 
 async def test_approve_and_reject_can_be_changed_and_only_approved_runs(manager, project, config):
@@ -317,12 +318,12 @@ async def test_approve_and_reject_can_be_changed_and_only_approved_runs(manager,
     with pytest.raises(Refused, match="approved first"):
         await manager.graph.prioritize(p.id)
     assert (await manager.todos.decide(p.id, "rejected")).approval == "rejected"
-    assert manifest(config, p)["tags"] == ["code-lines:2c", "asset-lines:0a", "todo:rejected"]
+    assert manifest(config, p)["tags"] == ["code-lines:2c", "asset-lines:0a", "severity:🔵 low", "todo:rejected"]
     await manager.tasks.set_state(ideation.id, TaskState.CANCELLED, finished_at=1.0)
     await manager.todos.tick()
     assert await state(manager, p) is TaskState.TODO
     await manager.todos.decide(p.id, "approved")
-    assert manifest(config, p)["tags"] == ["code-lines:2c", "asset-lines:0a", "todo:approved"]
+    assert manifest(config, p)["tags"] == ["code-lines:2c", "asset-lines:0a", "severity:🔵 low", "todo:approved"]
     await manager.todos.tick()
     assert await state(manager, p) is TaskState.QUEUED
     with pytest.raises(Refused, match="not started"):
@@ -618,12 +619,15 @@ def test_the_magnitude_is_the_power_of_ten_that_bounds_it(lines, order):
 
 async def test_a_proposal_states_its_estimate_and_is_tagged_by_it(manager, project, config):
     ideation = await manager.todos.discovery(project)
-    p, = await manager.todos.add(ideation, [{"title": "i", "spec": "Why.", "code_lines": 1500, "asset_lines": 7}])
+    p, = await manager.todos.add(ideation, [{"title": "i", "spec": "Why.", "code_lines": 1500, "asset_lines": 7,
+                                                "severity": "medium", "sampled": "4 of 12 random stories"}])
     directory = p.output_dir(config.assets_dir, config.default_project)
     assert (directory / "SPEC.md").read_text() == (
-        "**Estimated change:** up to 1,500 lines of code (4c), up to 7 lines of assets (1a)\n\nWhy.\n")
+        "**Estimated change:** up to 1,500 lines of code (4c), up to 7 lines of assets (1a)\n\n"
+        "**Severity:** 🟠 medium. Sampled: 4 of 12 random stories\n\nWhy.\n")
     await manager.todos.tick()
-    assert json.loads((directory / "manifest.json").read_text())["tags"] == ["code-lines:4c", "asset-lines:1a", "todo:pending-approval"]
+    assert json.loads((directory / "manifest.json").read_text())["tags"] == [
+        "code-lines:4c", "asset-lines:1a", "severity:🟠 medium", "todo:pending-approval"]
 
 
 @pytest.mark.parametrize("item", [{}, {"code_lines": 5}, {"code_lines": -1, "asset_lines": 0},
@@ -632,6 +636,50 @@ async def test_a_proposal_without_an_estimate_is_refused(manager, project, item)
     ideation = await manager.todos.discovery(project)
     with pytest.raises(Refused, match="code_lines"):
         await manager.todos.add(ideation, [{"title": "i", "spec": "Why.", **item}])
+
+
+@pytest.mark.parametrize("item", [{}, {"severity": "low"}, {"sampled": "3 of 9"}, {"severity": "low", "sampled": " "},
+                                  {"severity": "urgent", "sampled": "3 of 9"}])
+async def test_a_proposal_without_a_measured_severity_is_refused(manager, project, item):
+    ideation = await manager.todos.discovery(project)
+    with pytest.raises(Refused, match="severity"):
+        await manager.todos.add(ideation, [{"title": "i", "spec": "Why.", "code_lines": 5, "asset_lines": 0, **item}])
+
+
+async def test_a_feature_improvement_is_incremental_and_needs_no_sample(manager, project, config):
+    ideation = await manager.todos.discovery(project)
+    p, = await manager.todos.add(ideation, [{"title": "i", "spec": "Why.", "code_lines": 5, "asset_lines": 0,
+                                             "severity": "incremental"}])
+    directory = p.output_dir(config.assets_dir, config.default_project)
+    assert "**Severity:** 🟢 incremental.\n\nWhy.\n" in (directory / "SPEC.md").read_text()
+    assert "severity:🟢 incremental" in json.loads((directory / "manifest.json").read_text())["tags"]
+
+
+async def test_a_reassessment_replaces_pending_proposals(manager, project, config):
+    first = await manager.todos.discovery(project)
+    old, other = await propose(manager, first, "old", "other")
+    new, = await manager.todos.add(first, [{"title": "new", "spec": "Why.", "code_lines": 5, "asset_lines": 0,
+                                            "severity": "incremental", "replaces": [old.id]}])
+    assert (await manager.tasks.get(old.id)).options["approval"] == "rejected"
+    assert (await manager.tasks.get(other.id)).options["approval"] == "pending"
+    assert (await manager.tasks.get(new.id)).options["approval"] == "pending"
+    log = (config.ideas_dir / project / "IDEAS.md").read_text()
+    assert f"rejected by its reassessment: old ({old.slug})" in log
+    assert await manager.todos.decide(old.id, "pending") is not None
+
+
+async def test_only_a_pending_proposal_can_be_replaced(manager, project):
+    first = await manager.todos.discovery(project)
+    done, = await propose(manager, first, "done")
+    await manager.todos.decide(done.id, "approved")
+    with pytest.raises(Refused, match="can't be replaced"):
+        await manager.todos.add(first, [{"title": "new", "spec": "Why.", "code_lines": 5, "asset_lines": 0,
+                                         "severity": "incremental", "replaces": [done.id]}])
+
+
+async def test_a_chat_todo_needs_no_severity(manager, project):
+    chat = await manager.submit("x", scope="todos", project=project)
+    assert await manager.todos.add(chat, [{"title": "i", "spec": "Why."}])
 
 
 def test_code_and_documentation_are_code_and_the_rest_are_assets():
