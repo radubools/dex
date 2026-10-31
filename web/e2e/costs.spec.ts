@@ -46,8 +46,7 @@ async function open(page: Page, costs: unknown = fixture, earliest?: string) {
     ;(window as unknown as { EventSource: unknown }).EventSource = Quiet
   })
   await page.goto('/')
-  await page.getByRole('button', { name: /settings/i }).first().click()
-  await page.getByRole('button', { name: /cost|spend/i }).first().click()
+  await page.getByRole('button', { name: 'Cost dashboard' }).click()
   await expect(page.getByRole('dialog', { name: 'Cost dashboard' })).toBeVisible()
 }
 

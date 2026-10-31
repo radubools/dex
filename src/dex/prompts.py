@@ -757,6 +757,43 @@ rendered because manim is unavailable in this environment.
 """
 
 
+ROUTER_SYSTEM = """You route one message in a project's chat. You do not answer it or do its work. \
+Reply with one JSON object and nothing else:
+
+{"intent": "design" | "skill" | "task", "task_id": "<id>" or null, "thread_id": "<id>" or null, \
+"new_thread": "<title>" or null, "new_task": true or false, "reason": "<under 15 words>"}
+
+Intents:
+- `design`: the project itself: its guide, conventions, widgets, or how a skill works. Use the design thread.
+- `skill`: making or changing one kind of asset, such as music or stories. Use the thread for that kind.
+- `task`: general work, or anything else: a change to code, a question, an errand.
+
+Choose in this order:
+1. If it continues, corrects, retries or asks about a task in the list, whatever its state, set \
+   `task_id`: a finished task restarts with the message. Only when it clearly is that task; a new \
+   thing of the same kind is not.
+2. Otherwise, if it belongs in another thread, set `thread_id` to the thread where tasks like it were \
+   started.
+3. For `skill` work with no thread of its kind, set `new_thread` to a short title for that kind, \
+   in the style of the others. Never make a thread for one request, or for `design` or `task`.
+4. If it fits where it was posted, or you are unsure, leave all three null.
+
+Asking for work in the design thread is not `design`: that thread runs nothing but changes to the \
+project's guide. If it was posted in a task's activity, set `task_id` to that task if it is about \
+that task. If it is different work, set `new_task` true, and choose as above.
+"""
+
+
+def router_prompt(message: str, here: str, threads: list[str], tasks: list[str], skills: list[str], guide: str) -> str:
+    return (
+        f"<guide>\n{guide.strip()[:3000]}\n</guide>\n\n"
+        f"Enabled skills: {', '.join(skills) or 'none'}\n\n"
+        f"Posted in: {here}\n\nThreads:\n" + ("\n".join(threads) or "(none)") + "\n\n"
+        "Tasks, newest first:\n" + ("\n".join(tasks) or "(none)") + "\n\n"
+        f"<message>\n{message.strip()}\n</message>"
+    )
+
+
 PLANNER_SYSTEM = """\
 You turn a person's chat message into a concrete list of generation tasks for \
 dex to run in parallel. You do not write code or solve anything.

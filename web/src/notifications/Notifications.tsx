@@ -17,7 +17,7 @@ const reasonOf = (n: Notice) =>
   n.reason === 'finished' && n.failed ? { icon: '⚠️', label: 'Finished with failures' } : REASONS[n.reason]
 
 /**
- * The header's notifications button, and the panel it opens beside itself.
+ * The side menu's notifications button, and the panel it opens beside itself.
  * Opening a notice marks it read, closes the panel and hands it to `onOpen`,
  * which takes the reader to its task or thread.
  */
@@ -35,22 +35,23 @@ export function NotificationsButton({
     <div className="notif-anchor">
       <button
         ref={trigger}
-        className={`menu-trigger icon-only notif-trigger ${unread ? 'has-unread' : ''}`}
+        className={`menu-item notif-trigger ${unread ? 'has-unread' : ''}`}
         aria-expanded={phase !== 'closed'}
         aria-haspopup="dialog"
         onClick={notices.toggle}
         title={label}
         aria-label={label}
       >
-        <span aria-hidden="true">🔔</span>
+        <span className="menu-icon" aria-hidden="true">🔔</span>
+        <span className="menu-label">Notifications</span>
         {unread > 0 && (
           <span className="notif-badge" aria-hidden="true">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
-      {/* Into document.body, as the settings sheet is: the header's
-          backdrop-filter is a stacking context nothing inside it escapes. */}
+      {/* Into document.body, as the settings sheet is: the side menu scrolls
+          and would clip it. */}
       {phase !== 'closed' &&
         createPortal(<Hud notices={notices} trigger={trigger} onOpen={onOpen} />, document.body)}
     </div>
@@ -71,12 +72,15 @@ function Hud({
   const [now, setNow] = useState(Date.now())
   const { dismiss } = notices
 
-  // Hung under the button, right edges aligned, and kept there on resize.
+  // Beside the button in the sidebar. On a phone the drawer is usually shut, so
+  // the panel takes the top of the screen, under the menu button.
   useLayoutEffect(() => {
     const measure = () => {
       const rect = trigger.current?.getBoundingClientRect()
       if (!rect) return
-      setPlace({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) })
+      setPlace(window.innerWidth < 1000
+        ? { top: 60, right: 8 }
+        : { top: Math.max(8, Math.min(rect.top, window.innerHeight - 340)), left: rect.right + 8 })
     }
     measure()
     window.addEventListener('resize', measure)

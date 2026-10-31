@@ -14,7 +14,7 @@ import type { ViewerTarget } from './components/Viewer'
  * instead, so back never stops on a place the reader did not choose.
  */
 
-export type View = 'chat' | 'feed' | 'library' | 'graph'
+export type View = 'home' | 'chat' | 'feed' | 'library' | 'graph'
 export type Overlay = 'costs' | 'guide' | 'users' | 'skills' | null
 
 export interface Place {
@@ -46,9 +46,9 @@ export function urlFor(place: Place): string {
   const params = new URLSearchParams(window.location.search)
   if (place.project) params.set('project', place.project)
   else params.delete('project')
-  if (place.thread) params.set('thread', place.thread)
+  if (place.thread && place.view !== 'home') params.set('thread', place.thread)
   else params.delete('thread')
-  if (place.view !== 'chat') params.set('view', place.view)
+  if (place.view !== 'chat' && place.view !== 'home') params.set('view', place.view)
   else params.delete('view')
   return `${window.location.pathname}?${params}${window.location.hash}`
 }

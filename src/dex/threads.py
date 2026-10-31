@@ -18,7 +18,7 @@ from typing import Any, Literal
 log = logging.getLogger("dex.threads")
 
 MessageRole = Literal["user", "dex"]
-MessageKind = Literal["text", "plan", "tasks", "error"]
+MessageKind = Literal["text", "plan", "tasks", "error", "routed"]
 
 
 @dataclass
@@ -35,7 +35,22 @@ class ThreadMessage:
         return asdict(self)
 
 
-ThreadKind = Literal["chat", "project_design"]
+ThreadKind = Literal["chat", "project_design", "main"]
+
+Intent = Literal["design", "skill", "task"]
+
+#: Chat threads for the project at large: they hold no one kind of asset.
+GENERAL_THREADS = ("Chats", "Power")
+
+
+def intent_of(kind: str | None, title: str | None) -> Intent:
+    """What a thread is for, so what its tasks are for (design/26). Never stored:
+    the thread a message lands in decides it, and old threads have one too."""
+    if kind == "project_design":
+        return "design"
+    if kind is None or kind == "main" or title in GENERAL_THREADS:
+        return "task"
+    return "skill"
 
 
 @dataclass
@@ -64,6 +79,7 @@ class Thread:
             "taskIds": list(self.task_ids),
             "project": self.project,
             "kind": self.kind,
+            "intent": intent_of(self.kind, self.title),
         }
 
     def to_json(self) -> dict[str, Any]:

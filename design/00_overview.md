@@ -40,6 +40,9 @@ This document is the map. Each feature has its own document:
 | [16](16_game_chat.md) | Game chat — a game's players talk to its project from inside the game |
 | [17](17_locks_and_ports.md) | Locked skill promotion and port leases — concurrent tasks never drop each other's work |
 | [18](18_task_dependencies.md) | Task dependencies — a task starts, continues and waits for work in other threads; the task graph view |
+| [24](24_todos.md) | Todos and ideation |
+| [25](25_line_changes.md) | Line changes |
+| [26](26_intent_routing.md) | One chat — every message is routed to its task or thread |
 
 ---
 
@@ -167,6 +170,7 @@ flowchart TB
 | `sandbox` | The kernel sandbox that keeps an ideation run's shell commands from changing anything |
 | `prompts` | System prompts and briefs |
 | `planner` | Message → plan of tasks |
+| `router` | Which task or thread a message belongs in |
 | `sources` | A document's shape — outline, search, bounded peek |
 | `web_sources` | Fetching a URL, and the guard that refuses most of them |
 | `surveyor` | The survey's tool surface, and when a message gets one |

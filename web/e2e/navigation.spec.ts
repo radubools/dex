@@ -30,11 +30,23 @@ const messages: Record<string, unknown[]> = {
 
 /** The task graph's nodes (none unless a test sets them). */
 let dag: unknown[] = []
+/** Someone signed in who may manage users, which shows Skills and Users. */
+let admin = false
 
 function answer(url: URL): unknown {
   const p = url.pathname
   const q = url.searchParams
-  if (p === '/api/auth/me') return { state: 'open', user: null, googleEnabled: false, passwordEnabled: false }
+  if (p === '/api/auth/me') {
+    if (!admin) return { state: 'open', user: null, googleEnabled: false, passwordEnabled: false }
+    return { state: 'ok', googleEnabled: false, passwordEnabled: true, user: {
+      id: 'u1', email: 'a@b.c', name: 'A', picture: null, role: 'admin', projects: [], username: 'a', isAdmin: true,
+      authorised: true, capabilities: ['manage_users', 'manage_projects', 'run_tasks', 'design', 'view'], mustChangePassword: false, createdAt: now } }
+  }
+  if (p === '/api/auth/users') return { users: [] }
+  if (p === '/api/ideas') return { log: null, ideas: [] }
+  if (p === '/api/costs') return { totals: { day: 0, week: 0, month: 0, all_time: 0 }, series: [], coverage: { spend: 0, with_tokens: 0, inferred: 0 },
+    period: q.get('period'), granularity: q.get('granularity'), group: q.get('group'), offset: 0, earliest: null, projects: ['alpha'] }
+  if (p === '/api/skills') return { skills: [], projects: [] }
   if (p === '/api/health') return { ok: true, workspace: '', assetsDir: '', model: 'test', concurrency: 1, manim: true, autoApprove: false, authenticated: true, running: 0, queued: 0 }
   if (p === '/api/settings') return { settings: { auto_approve: false }, costs: { day: 0, week: 0, month: 0, all_time: 0 } }
   if (p === '/api/tasks') return { tasks: [task] }
@@ -48,7 +60,7 @@ function answer(url: URL): unknown {
     const summary = Object.values(THREADS).flat().find((x) => x.id === t[1])!
     return { thread: { ...summary, messages: messages[t[1]] }, tasks: t[1] === 't1' ? [task] : [] }
   }
-  if (p === '/api/packages') return { packages: [] }
+  if (p === '/api/packages') return { packages: admin ? [{ slug: 'widget', displayName: 'Widget', files: 1, path: 'alpha/widget', tags: [], taskId: null, lastActivity: null }] : [] }
   if (p === '/api/feed') return { project: 'alpha', projects: ['alpha'], topics: [] }
   if (p === '/api/dag') return { project: 'alpha', nodes: dag, edges: [] }
   if (/^\/api\/projects\/[^/]+\/skills$/.test(p)) return { skills: [] }
@@ -84,7 +96,7 @@ async function where(page: Page) {
     task: (await page.locator('.task-panel .panel-name').count()) ? (await page.locator('.task-panel .panel-name').textContent())?.trim() : null,
     // A file's viewer is labelled with its path: its name is enough here.
     pane: (await dialog.count()) ? ((await dialog.first().getAttribute('aria-label')) ?? '').split('/').pop() : null,
-    view: await page.locator('.view-toggle [aria-selected="true"]').getAttribute('aria-label'),
+    view: await page.locator('.side-menu .menu-item.on .menu-label').first().textContent(),
   }
 }
 
@@ -111,8 +123,8 @@ test('back walks through every pane that led here, in order, and forward again',
   await step(() => page.locator('.asset-row', { hasText: 'notes.md' }).click(), { task: 'Build the widget', pane: 'notes.md' })
   await step(() => page.locator('section.viewer [aria-label="Close"]').click(), { task: 'Build the widget', pane: null })
   await step(() => page.locator('.asset-row', { hasText: 'readme.md' }).click(), { task: 'Build the widget', pane: 'readme.md' })
-  await step(() => page.getByRole('tab', { name: 'Task graph' }).click(), { view: 'Task graph', task: 'Build the widget', pane: 'readme.md' })
-  await step(() => page.getByRole('tab', { name: 'Chat' }).click(), { view: 'Chat', task: 'Build the widget', pane: 'readme.md' })
+  await step(() => page.getByRole('button', { name: 'Task graph', exact: true }).click(), { view: 'Task graph', task: 'Build the widget', pane: 'readme.md' })
+  await step(() => page.getByRole('button', { name: 'Chat', exact: true }).click(), { view: 'Chat', task: 'Build the widget', pane: 'readme.md' })
   await step(() => page.getByRole('button', { name: /^Guide/ }).click(), { pane: 'Project instructions' })
 
   // Back, one step at a time: the browser's button.
@@ -134,7 +146,7 @@ test("on a wide screen too, each pane's ‹ steps back through what led to it", 
   await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
   await page.getByRole('button', { name: /^Files/ }).click()
   await page.locator('.asset-row', { hasText: 'notes.md' }).click()
-  await page.getByRole('tab', { name: 'Task graph' }).click()
+  await page.getByRole('button', { name: 'Task graph', exact: true }).click()
   await page.getByRole('button', { name: /^Guide/ }).click()
   await at(page, { pane: 'Project instructions' })
   const backIn = (pane: string) => page.locator(`section[aria-label="${pane}"] .back-btn, section[aria-label$="${pane}"] .back-btn`).first()
@@ -159,7 +171,7 @@ test('the task graph is a main view; a task clicked in it opens beside it', asyn
   try {
     await open(page)
     await page.locator('.thread-open', { hasText: 'Ideas' }).click()
-    await page.getByRole('tab', { name: 'Task graph' }).click()
+    await page.getByRole('button', { name: 'Task graph', exact: true }).click()
     await expect(page).toHaveURL(/view=graph/)
     await page.locator('.task-graph-group g.node').first().click()
     await at(page, { view: 'Task graph', thread: 'Widgets', task: 'Build the widget', pane: null })
@@ -200,7 +212,7 @@ test("a pane's ‹ goes back a step, not out of everything", async ({ page }) =>
 
 test('views, projects and closing a pane are steps too; the first page is not left by ‹', async ({ page }) => {
   await open(page)
-  await page.getByRole('tab', { name: 'Review feed' }).click()
+  await page.getByRole('button', { name: 'Review feed', exact: true }).click()
   await at(page, { view: 'Review feed' })
   await page.goBack()
   await at(page, { view: 'Chat', thread: 'Widgets' })
@@ -217,3 +229,83 @@ test('views, projects and closing a pane are steps too; the first page is not le
   // A reload keeps the open panes.
   await at(page, { thread: 'Widgets', task: 'Build the widget' })
 })
+
+// Every pane a phone can have open, then every way out of it in the side menu.
+// On a phone a pane covers the page, so each must end up showing what was picked.
+test.describe('on a phone, the side menu always gets you there', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  test.beforeEach(() => { admin = true })
+  test.afterEach(() => { admin = false })
+
+  const menu = (page: Page) => page.getByRole('button', { name: /^Menu/ }).click()
+  const item = (page: Page, name: string) => page.locator('.side-menu .menu-item').filter({ hasText: new RegExp(`${name}$`) }).click()
+  const task = (page: Page) => page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
+
+  const panes: Record<string, { open: (page: Page) => Promise<unknown>; shown: string }> = {
+    task: { open: task, shown: '.task-panel' },
+    file: {
+      open: async (page) => {
+        await task(page)
+        await page.getByRole('button', { name: /^Files/ }).click()
+        await page.locator('.asset-row', { hasText: 'notes.md' }).click()
+      },
+      shown: 'section.viewer',
+    },
+    guide: { open: async (page) => { await menu(page); await item(page, 'Guide') }, shown: '[aria-label="Project instructions"]' },
+    costs: { open: async (page) => { await menu(page); await item(page, 'Cost dashboard') }, shown: '[aria-label="Cost dashboard"]' },
+    skills: { open: async (page) => { await menu(page); await item(page, 'Skills') }, shown: 'section.viewer[aria-label="Skills"]' },
+    users: { open: async (page) => { await menu(page); await item(page, 'Users and access') }, shown: '[aria-label="Users and access"]' },
+  }
+
+  const targets: Record<string, { go: (page: Page) => Promise<unknown>; shown: string }> = {
+    Home: { go: (page) => item(page, 'Home'), shown: '.home-card' },
+    Library: { go: (page) => item(page, 'Library'), shown: '.library' },
+    'Task graph': { go: (page) => item(page, 'Task graph'), shown: 'section.task-graph' },
+    'Review feed': { go: (page) => item(page, 'Review feed'), shown: '.review-feed' },
+    Guide: { go: (page) => item(page, 'Guide'), shown: '[aria-label="Project instructions"]' },
+    'Cost dashboard': { go: (page) => item(page, 'Cost dashboard'), shown: '[aria-label="Cost dashboard"]' },
+    Skills: { go: (page) => item(page, 'Skills'), shown: 'section.viewer[aria-label="Skills"]' },
+    'Users and access': { go: (page) => item(page, 'Users and access'), shown: '[aria-label="Users and access"]' },
+    thread: { go: (page) => page.locator('.thread-open', { hasText: 'Ideas' }).click(), shown: '.composer' },
+    Chat: { go: (page) => page.locator('.menu-item', { hasText: 'Chat' }).click(), shown: '.composer' },
+  }
+
+  for (const [from, pane] of Object.entries(panes)) {
+    for (const [to, target] of Object.entries(targets)) {
+      test(`from ${from} to ${to}`, async ({ page }) => {
+        await open(page)
+        await pane.open(page)
+        await expect(page.locator(pane.shown).first()).toBeVisible()
+        await menu(page)
+        await target.go(page)
+        if (to === 'Chat') await menu(page)
+        await expect(page.locator('.threads')).not.toBeInViewport()
+        const shown = page.locator(target.shown).first()
+        await expect(shown).toBeVisible()
+        // It is on top: nothing left open is covering it.
+        const box = (await shown.boundingBox())!
+        const hit = await page.evaluate(([x, y, sel]) =>
+          !!document.elementFromPoint(x, y)?.closest(sel), [box.x + box.width / 2, box.y + box.height / 2, target.shown] as const)
+        expect(hit).toBe(true)
+      })
+    }
+  }
+
+  test('going back returns to the pane that was left', async ({ page }) => {
+    await open(page)
+    await task(page)
+    await menu(page)
+    await item(page, 'Library')
+    await expect(page.locator('.task-panel')).toHaveCount(0)
+    await page.goBack()
+    await expect(page.locator('.task-panel')).toBeVisible()
+  })
+})
+
+test('the same view leaves a pane open beside it on a wide screen', async ({ page }) => {
+  await open(page)
+  await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
+  await page.locator('.side-menu').getByRole('button', { name: 'Task graph', exact: true }).click()
+  await expect(page.locator('.task-panel')).toBeVisible()
+})
+

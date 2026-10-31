@@ -163,6 +163,7 @@ export function TaskGraph({
   activeTaskId = null,
   onOpenTask,
   onOpenRequest,
+  shows,
 }: {
   project: string
   /** Bumped by the app when the event stream reports a task change: refetch soon. */
@@ -172,6 +173,8 @@ export function TaskGraph({
   onOpenTask: (node: TaskGraphNode) => void
   /** A request's node: its thread, where the plan and its tasks are. */
   onOpenRequest?: (node: TaskGraphNode) => void
+  /** The intent filter: which nodes to draw. */
+  shows?: (node: TaskGraphNode) => boolean
 }) {
   const [graph, setGraph] = useState<Graph | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -211,10 +214,14 @@ export function TaskGraph({
   // The diagrams' sources; a fetch with the same content draws nothing new.
   const plan = useMemo(() => {
     if (!graph || !graph.nodes.length) return null
-    const parts = groups(graph)
-    const srcs = parts.map((p) => chart(graph, p))
-    return { graph, parts, srcs, all: srcs.join('\n%%\n') }
-  }, [graph])
+    const nodes = shows ? graph.nodes.filter(shows) : graph.nodes
+    if (!nodes.length) return null
+    const kept = new Set(nodes.map((n) => n.id))
+    const seen = { ...graph, nodes, edges: graph.edges.filter((e) => kept.has(e.from) && kept.has(e.to)) }
+    const parts = groups(seen)
+    const srcs = parts.map((p) => chart(seen, p))
+    return { graph: seen, parts, srcs, all: srcs.join('\n%%\n') }
+  }, [graph, shows])
   const planRef = useRef(plan)
   planRef.current = plan
 

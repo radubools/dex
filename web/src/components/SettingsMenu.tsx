@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { can, getIdeation, getSettings, logout, putSettings, setIdeation, setLimitPaused, setPaused, type IdeationStatus, type Me } from '../api'
+import { getIdeation, getSettings, putSettings, setIdeation, setLimitPaused, setPaused, type IdeationStatus } from '../api'
 import type { SettingsResponse } from '../types'
 import { ServerPicker } from './ServerPicker'
 
@@ -23,31 +23,18 @@ const compact = (n: number) =>
   : `${n}`
 
 /**
- * The header menu: everything global in one place — auto-approve, the two
+ * The sidebar's pinned menu: everything global in one place — auto-approve, the two
  * concurrency limits, the model, and what it has all cost.
  */
 export function SettingsMenu({
   autoApprove,
   onAutoApprove,
-  onOpenCosts,
   project,
-  me,
-  onOpenUsers,
-  onOpenSkills,
-  onChangePassword,
 }: {
   autoApprove: boolean
   onAutoApprove: (enabled: boolean) => void
-  onOpenCosts: () => void
   /** The open project: its ideation cycle has a switch here, with the Power skill. */
   project?: string | null
-  /** Who is signed in, or null on an install with no sign-in configured. */
-  me?: Me | null
-  onOpenUsers?: () => void
-  /** Which capabilities each project has on. Admin-only. */
-  onOpenSkills?: () => void
-  /** Offered only to an account that signs in with a password. */
-  onChangePassword?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<SettingsResponse | null>(null)
@@ -392,74 +379,6 @@ export function SettingsMenu({
                 from {data.tokens.counted} of {data.tokens.with_cost} priced tasks
               </div>
             )}
-            {/* Identity, at the bottom with the other operator-level things.
-                Absent entirely when sign-in is not configured, rather than
-                showing an empty account row. */}
-            {me?.user && (
-              <>
-                <div className="menu-row">
-                  <span>
-                    Signed in
-                    <small>
-                      {/* The identifier they signed in with, and their actual
-                          role. This said "admin" or "user" for everyone, which
-                          with four roles would have described two of them
-                          wrongly. */}
-                      {me.user.username ? `@${me.user.username}` : me.user.email} ·{' '}
-                      {me.user.role ?? 'no role'}
-                    </small>
-                  </span>
-                  <button
-                    className="ghost-btn small"
-                    onClick={() => void logout().then(() => location.reload())}
-                  >
-                    Sign out
-                  </button>
-                </div>
-                {can(me.user, 'manage_users') && onOpenUsers && (
-                  <button
-                    className="ghost-btn small"
-                    onClick={() => {
-                      setOpen(false)
-                      onOpenUsers()
-                    }}
-                  >
-                    Users and access
-                  </button>
-                )}
-                {can(me.user, 'manage_users') && onOpenSkills && (
-                  <button
-                    className="ghost-btn small"
-                    onClick={() => {
-                      setOpen(false)
-                      onOpenSkills()
-                    }}
-                  >
-                    Skills
-                  </button>
-                )}
-                {onChangePassword && me.user.username && (
-                  <button
-                    className="ghost-btn small"
-                    onClick={() => {
-                      setOpen(false)
-                      onChangePassword()
-                    }}
-                  >
-                    Change my password
-                  </button>
-                )}
-              </>
-            )}
-            <button
-              className="ghost-btn small"
-              onClick={() => {
-                setOpen(false)
-                onOpenCosts()
-              }}
-            >
-              Open cost dashboard
-            </button>
           </div>
         </div>
       </div>
@@ -470,17 +389,17 @@ export function SettingsMenu({
     <div className="menu-anchor">
       <button
         ref={trigger}
-        className={`menu-trigger icon-only ${autoApprove ? 'warn' : ''}`}
+        className={`menu-item ${autoApprove ? 'warn' : ''}`}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((v) => !v)}
         title={autoApprove ? 'Settings — auto-approve is on' : 'Settings'}
         aria-label={autoApprove ? 'Settings — auto-approve is on' : 'Settings'}
       >
-        {/* The dot keeps carrying auto-approve state: with the word gone it is
-            the only thing that shows the setting is on. */}
+        <span className="menu-icon" aria-hidden="true">⚙</span>
+        <span className="menu-label">Settings</span>
+        {/* The dot keeps carrying auto-approve state. */}
         <span className={`switch-dot ${autoApprove ? 'on' : ''}`} />
-        <span aria-hidden="true">⚙</span>
       </button>
       {open && createPortal(menu, document.body)}
     </div>

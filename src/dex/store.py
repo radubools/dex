@@ -23,7 +23,7 @@ from .config import DEFAULT_CONCURRENCY, MAX_WORKERS
 from .db import Database
 from .changes import size_tags
 from .models import INTERACTIVE_SCOPES, Task, TaskState
-from .threads import Thread, ThreadMessage
+from .threads import Thread, ThreadMessage, intent_of
 
 TASK_COLUMNS = """
     id, thread_id, title, slug, problem, state, activity,
@@ -137,7 +137,8 @@ class ThreadStore:
                             DESC NULLS LAST,
                         -- Otherwise design threads lead: they are the project's
                         -- own conversation.
-                        (t.kind = 'project_design') DESC, t.updated_at DESC""",
+                        (t.kind = 'project_design') DESC, (t.kind = 'main') DESC,
+                        t.updated_at DESC""",
             project, include_hidden, by_viewed,
         )
         return [
@@ -331,28 +332,44 @@ class TaskStore:
         """
         rows = await self.db.pool.fetch(
             """SELECT DISTINCT ON (coalesce(output_slug, slug))
-                      coalesce(output_slug, slug) AS package, id, title,
+                      coalesce(output_slug, slug) AS package, tasks.id, tasks.title,
+                      th.kind AS thread_kind, th.title AS thread_title,
                       count(c.task_id) OVER package AS counted,
                       sum(c.code_lines) OVER package AS code_lines,
                       sum(c.asset_lines) OVER package AS asset_lines,
-                      max(greatest(created_at, started_at, finished_at))
+                      max(greatest(tasks.created_at, started_at, finished_at))
                           OVER package AS last_activity,
                       bool_or(scope IN ('chat', 'todos'))
                           OVER package AS from_chat,
                       bool_or(scope = 'ideation' OR COALESCE(options, '{}'::jsonb) ? 'approval')
                           OVER package AS from_ideation
                  FROM tasks LEFT JOIN task_changes c ON c.task_id = tasks.id
-                WHERE project = $1
+                      LEFT JOIN threads th ON th.id = tasks.thread_id
+                WHERE tasks.project = $1
                WINDOW package AS (PARTITION BY coalesce(output_slug, slug))
-                ORDER BY coalesce(output_slug, slug), (state = 'archived'), created_at DESC""",
+                ORDER BY coalesce(output_slug, slug), (state = 'archived'), tasks.created_at DESC""",
             project,
         )
         return {
             row["package"]: (row["id"], row["title"], row["last_activity"],
-                             ["origin:chat"] * row["from_chat"] + ["origin:ideation"] * row["from_ideation"]
+                             [f"intent:{intent_of(row['thread_kind'], row['thread_title'])}"]
+                             + ["origin:chat"] * row["from_chat"] + ["origin:ideation"] * row["from_ideation"]
                              + (size_tags(int(row["code_lines"]), int(row["asset_lines"])) if row["counted"] else []))
             for row in rows
         }
+
+    async def recent_for_routing(self, project: str, limit: int = 40) -> list[dict[str, Any]]:
+        """Tasks a message might be about: unfinished ones, then the latest. Not the chat's own turns."""
+        rows = await self.db.pool.fetch(
+            """SELECT k.id, k.slug, k.title, k.state, k.thread_id, th.title AS thread
+                 FROM tasks k LEFT JOIN threads th ON th.id = k.thread_id
+                WHERE k.project = $1 AND k.state <> 'archived'
+                  AND k.scope IN ('package', 'project', 'power')
+                  AND NOT EXISTS (SELECT 1 FROM tasks n WHERE n.parent_id = k.id)
+                ORDER BY k.state IN ('running', 'awaiting_input') DESC, k.created_at DESC LIMIT $2""",
+            project, limit,
+        )
+        return [dict(row) for row in rows]
 
     async def taken_slugs(self, project: str | None = None) -> set[str]:
         """Slugs already in use.

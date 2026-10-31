@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import type { PlannedTask, SourceAnchor, Task, TaskState, ThreadMessage } from '../types'
+import type { PlannedTask, Routed, SourceAnchor, Task, TaskState, ThreadMessage } from '../types'
 import { actOnTasks } from '../api'
 import { ErrorNote } from './ErrorNote'
 import { Prose } from './Prose'
@@ -33,10 +33,12 @@ export function Chat({
   threadId,
   onConfirm,
   onOpenTask,
+  onOpenThread,
   onOpenSource,
   onActed,
   activeTaskId,
 }: {
+  onOpenThread?: (threadId: string) => void
   messages: ThreadMessage[]
   tasks: Record<string, TaskView>
   busy: boolean
@@ -198,6 +200,7 @@ export function Chat({
           planState={planState}
           onConfirm={onConfirm}
           onOpenTask={onOpenTask}
+          onOpenThread={onOpenThread}
           onOpenSource={onOpenSource}
           activeTaskId={activeTaskId}
         />
@@ -242,9 +245,11 @@ function Message({
   planState,
   onConfirm,
   onOpenTask,
+  onOpenThread,
   onOpenSource,
   activeTaskId,
 }: {
+  onOpenThread?: (threadId: string) => void
   message: ThreadMessage
   onActed?: () => void
   tasks: Record<string, TaskView>
@@ -281,6 +286,18 @@ function Message({
           </div>
         )}
       </div>
+    )
+  }
+  if (message.kind === 'routed') {
+    const to = message.data as Routed
+    return (
+      <button
+        className="routed"
+        title={to.reason}
+        onClick={() => (to.taskId ? onOpenTask(to.taskId) : onOpenThread?.(to.threadId))}
+      >
+        ↪ {message.text}
+      </button>
     )
   }
   if (message.kind === 'error') {

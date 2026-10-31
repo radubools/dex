@@ -1,7 +1,7 @@
-import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useMemo, useEffect, useReducer, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
-  can, confirmPlan, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
+  can, confirmPlan, logout, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTask, getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads,
   markProjectViewed, markThreadViewed,
   openStream,
@@ -11,7 +11,7 @@ import {
 } from './api'
 import { initialState, reduce, type TaskView } from './store'
 import { notifyAssetChanged } from './assetChanges'
-import type { Health, PlannedTask, Project, ThreadSummary } from './types'
+import type { Health, Intent, PlannedTask, Project, Routed, TaskGraphNode, ThreadSummary } from './types'
 import { Chat } from './components/Chat'
 import { Composer } from './components/Composer'
 import { ProjectPicker } from './components/ProjectPicker'
@@ -49,12 +49,39 @@ const PackageLibrary = lazy(() =>
 
 /** The canvas views, in the order they appear in the header. */
 const VIEWS = [
+  { key: 'home' as const, icon: '🏠', label: 'Home' },
   { key: 'chat' as const, icon: '💬', label: 'Chat' },
   { key: 'feed' as const, icon: '📺', label: 'Review feed' },
   { key: 'library' as const, icon: '📚', label: 'Library' },
   // The live task graph: what runs, what waits, and on what (design/18).
   { key: 'graph' as const, icon: '🕸', label: 'Task graph' },
 ]
+
+const INTENTS: { key: Intent | null; label: string }[] = [
+  { key: null, label: 'All' }, { key: 'design', label: 'Design' },
+  { key: 'skill', label: 'Skills' }, { key: 'task', label: 'Tasks' },
+]
+const INTENT_KEY = 'dex.threads.intent'
+
+/** A viewer's convenience, so it lives in the browser, and may not be there. */
+function rememberedIntent(): Intent | null {
+  try {
+    const saved = localStorage.getItem(INTENT_KEY)
+    return INTENTS.find((i) => i.key === saved)?.key ?? null
+  } catch {
+    return null
+  }
+}
+
+const CHAT_OPEN_KEY = 'dex.menu.chat'
+
+function rememberedChatOpen(): boolean {
+  try {
+    return localStorage.getItem(CHAT_OPEN_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
 
 /** The place the URL is pointing at: project, thread, and which tab. */
 function urlState(): {
@@ -67,8 +94,9 @@ function urlState(): {
   return {
     project: params.get('project'),
     thread: params.get('thread'),
+    // The bare address is the prompt screen; a thread in it is that thread.
     view:
-      view === 'feed' || view === 'library' || view === 'graph' ? view : 'chat',
+      view === 'feed' || view === 'library' || view === 'graph' ? view : params.get('thread') ? 'chat' : 'home',
   }
 }
 
@@ -93,6 +121,31 @@ export default function App() {
   const restored = useRef<Place | null>(navState()?.place ?? null).current
   const [state, dispatch] = useReducer(reduce, initialState)
   const [threads, setThreads] = useState<ThreadSummary[]>([])
+  const [intent, setIntent] = useState<Intent | null>(rememberedIntent)
+  const mainThread = threads.find((t) => t.kind === 'main')
+  const [chatOpen, setChatOpen] = useState(rememberedChatOpen)
+  const pickChatOpen = (open: boolean) => {
+    setChatOpen(open)
+    try {
+      localStorage.setItem(CHAT_OPEN_KEY, String(open))
+    } catch {
+      // Not kept, then: it still works until the page closes.
+    }
+  }
+  const pickIntent = (next: Intent | null) => {
+    setIntent(next)
+    try {
+      if (next) localStorage.setItem(INTENT_KEY, next)
+      else localStorage.removeItem(INTENT_KEY)
+    } catch {
+      // Not kept, then: it still works until the page closes.
+    }
+  }
+  const showsNode = useMemo(() => {
+    if (!intent) return undefined
+    const byThread = new Map(threads.map((t) => [t.id, t.intent]))
+    return (node: TaskGraphNode) => (node.threadId ? byThread.get(node.threadId) : 'task') === intent
+  }, [intent, threads])
   const [threadId, setThreadId] = useState<string | null>(urlState().thread)
   const [health, setHealth] = useState<Health | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
@@ -297,7 +350,7 @@ export default function App() {
         setThreadId((current) => {
           // Keep the thread the URL asked for, when this project has it.
           if (current && existing.some((t) => t.id === current)) return current
-          return existing[0]?.id ?? null
+          return (existing.find((t) => t.kind === 'main') ?? existing[0])?.id ?? null
         })
         if (existing.length === 0) setThreadId((await createThread(project)).id)
       })
@@ -400,13 +453,15 @@ export default function App() {
   const pendingUploads = useRef<string[]>([])
 
   const send = useCallback(
-    async (text: string, uploads: string[] = []) => {
-      if (!threadId) return
+    async (text: string, uploads: string[] = [], to = threadId) => {
+      if (!to) return
       setPlanning(true)
       pendingUploads.current = uploads
       try {
-        await sendMessage(threadId, text, uploads)
+        const { routed } = await sendMessage(to, text, uploads)
         refreshThreads()
+        // Main is for delegating from, so it stays open. Anywhere else it was the wrong thread.
+        if (routed && threads.find((t) => t.id === to)?.kind !== 'main') setThreadId(routed.threadId)
       } catch (err) {
         // The server already recorded the failure as a thread message; this
         // only covers the case where the request never landed.
@@ -415,8 +470,18 @@ export default function App() {
         setPlanning(false)
       }
     },
-    [threadId, refreshThreads],
+    [threadId, threads, refreshThreads],
   )
+
+  /** Other work posted in a task's activity: follow it to where it went. */
+  const followRouted = (routed: Routed) => {
+    refreshThreads()
+    go()
+    setThreadId(routed.threadId)
+    setActiveTaskId(routed.taskId ?? null)
+    setViewing(null)
+    setView('chat')
+  }
 
   const confirm = useCallback(
     async (tasks: PlannedTask[]) => {
@@ -465,10 +530,49 @@ export default function App() {
     [go],
   )
 
+  /** On a phone a pane covers the page, so going anywhere else has to close it.
+      Beside the page, on a wide screen, it can stay. */
+  const leavePanes = () => {
+    if (viewport.wide) return
+    setActiveTaskId(null)
+    setViewing(null)
+    setShowCosts(false)
+    setShowGuide(false)
+    setShowUsers(false)
+    setShowSkills(false)
+  }
+
+  const showView = (next: View) => {
+    go()
+    leavePanes()
+    setView(next)
+    setDrawerOpen(false)
+  }
+
+  const showPane = (pane: Overlay) => {
+    leavePanes()
+    openPane(pane)
+  }
+
+  const menuItem = (icon: string, label: ReactNode, on: boolean, act: () => void) => (
+    <button
+      className={`menu-item ${on ? 'on' : ''}`}
+      aria-current={on ? 'page' : undefined}
+      onClick={() => {
+        act()
+        setDrawerOpen(false)
+      }}
+    >
+      <span className="menu-icon" aria-hidden="true">{icon}</span>
+      <span className="menu-label">{label}</span>
+    </button>
+  )
+
   const newThread = async () => {
     const thread = await createThread(project ?? undefined)
     setThreads((current) => [thread, ...current])
     go()
+    leavePanes()
     setThreadId(thread.id)
     setActiveTaskId(null)
     setViewing(null)
@@ -566,21 +670,80 @@ export default function App() {
       {viewport.wide && sideOpen && (
         <div className="split-handle end" style={{ right: sideSplit.size }} {...sideSplit.handle} />
       )}
+      {/* Outside the header, whose blur would pin it there instead of to the screen. */}
+      <button className="icon-btn menu" onClick={() => setDrawerOpen((open) => !open)} aria-expanded={drawerOpen} aria-label={notices.unread ? `Menu — ${notices.unread} unread` : 'Menu'}>
+        ☰
+        {/* The bell is in there, out of sight on a phone. */}
+        {notices.unread > 0 && <span className="menu-unread" aria-hidden="true" />}
+      </button>
       <aside className={`threads ${drawerOpen ? 'open' : ''}`}>
         <div className="threads-head">
-          <span className="brand">dex</span>
-          <button className="ghost-btn small" onClick={() => void newThread()}>New</button>
+        <ProjectPicker
+          projects={projects}
+          current={project}
+          onSelect={(slug) => {
+            go()
+            leavePanes()
+            setProject(slug)
+            setActiveTaskId(null)
+            setViewing(null)
+            setShowGuide(false)
+            loaded.current.clear()
+          }}
+          onCreate={async (name) => {
+            const created = await createProject(name)
+            setProjects((all) => [...all, created])
+            go()
+            setProject(created.slug)
+          }}
+          canCreate={mayManageProjects}
+        />
         </div>
+        <nav className="side-menu" aria-label="Main menu">
+          {menuItem('🏠', 'Home', view === 'home', () => showView('home'))}
+          {hasPackages && menuItem('📚', 'Library', view === 'library', () => showView('library'))}
+          {menuItem('🕸', 'Task graph', view === 'graph', () => showView('graph'))}
+          <NotificationsButton notices={notices} onOpen={openNotice} />
+          {menuItem('📖', 'Guide', showGuide, () => showPane('guide'))}
+          <button
+            className={`menu-item ${view === 'chat' ? 'on' : ''}`}
+            aria-expanded={chatOpen}
+            onClick={() => {
+              const covered = !viewport.wide && sideOpen
+              if (view === 'chat' && !covered) return pickChatOpen(!chatOpen)
+              go()
+              leavePanes()
+              setView('chat')
+              pickChatOpen(true)
+            }}
+          >
+            <span className="menu-icon" aria-hidden="true">💬</span>
+            <span className="menu-label">Chat</span>
+            <span className="menu-chevron" aria-hidden="true">{chatOpen ? '▾' : '▸'}</span>
+          </button>
+          {chatOpen && (
         <div className="thread-list">
+        <button className="thread-new" onClick={() => void newThread()}>＋ New thread</button>
+        <div className="intent-filter" role="group" aria-label="Show threads and tasks for">
+          {INTENTS.map(({ key, label }) => (
+            <button key={label} className={intent === key ? 'on' : ''} aria-pressed={intent === key} onClick={() => pickIntent(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
           {(() => {
-            const design = threads.filter((t) => t.kind === 'project_design')
-            const chats = threads.filter((t) => t.kind !== 'project_design')
+            // Main stays whatever the filter: it is where to post.
+            const matching = threads.filter((t) => t.kind === 'main' || !intent || t.intent === intent)
+            const design = [...matching.filter((t) => t.kind === 'main'), ...matching.filter((t) => t.kind === 'project_design')]
+            const chats = matching.filter((t) => t.kind === 'chat')
             const row = (thread: ThreadSummary) => (
               <div key={thread.id} className={`thread-row ${thread.id === threadId ? 'on' : ''}`}>
                 <button
                   className="thread-open"
+                  title={[thread.taskIds.length > 0 && `${thread.taskIds.length} tasks`, thread.costUsd && `$${thread.costUsd.toFixed(2)}`].filter(Boolean).join(' · ') || undefined}
                   onClick={() => {
                     go()
+                    leavePanes()
                     setThreadId(thread.id)
                     setDrawerOpen(false)
                     setActiveTaskId(null)
@@ -592,17 +755,16 @@ export default function App() {
                     {thread.kind === 'project_design' && (
                       <span className="thread-icon" title="Project design">◈</span>
                     )}
+                    {thread.kind === 'main' && <span className="thread-icon" title="Post anything here">⌂</span>}
                     {thread.title}
                   </span>
                   <span className="thread-meta">
-                    {thread.taskIds.length > 0 && `${thread.taskIds.length} tasks · `}
-                    {thread.costUsd ? `$${thread.costUsd.toFixed(2)} · ` : ''}
-                    {new Date(thread.updatedAt * 1000).toLocaleDateString()}
+                    {new Date(thread.updatedAt * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                   </span>
                 </button>
                 {/* The design thread is the project's own conversation; it is
                     not something to delete by accident. */}
-                {thread.kind !== 'project_design' && (
+                {thread.kind === 'chat' && (
                   <button
                     className="icon-btn small"
                     aria-label={`Hide ${thread.title}`}
@@ -623,96 +785,30 @@ export default function App() {
             )
           })()}
         </div>
+          )}
+          {menuItem('📺', 'Review feed', view === 'feed', () => showView('feed'))}
+          <hr className="thread-divider" aria-hidden="true" />
+          {menuItem('💰', 'Cost dashboard', showCosts, () => showPane('costs'))}
+          {me?.user && can(me.user, 'manage_users') && (
+            <>
+              {menuItem('🧩', 'Skills', showSkills, () => showPane('skills'))}
+              {menuItem('👥', 'Users and access', showUsers, () => showPane('users'))}
+            </>
+          )}
+          {me?.user?.username && menuItem('🔑', 'Change my password', false, () => setShowPassword(true))}
+          {me?.user && menuItem(
+            '🚪',
+            // Who is signed in, and their actual role: there are four.
+            <>Sign out<small>{me.user.username ? `@${me.user.username}` : me.user.email} · {me.user.role ?? 'no role'}</small></>,
+            false,
+            () => void logout().then(() => location.reload()),
+          )}
+        </nav>
 
-        {health && (
-          <footer className="health">
-            <span className={`chip ${state.connected ? '' : 'warn'}`}>
-              {state.connected ? 'live' : 'reconnecting'}
-            </span>
-            <span className="chip">{health.model}</span>
-            {!health.authenticated && <span className="chip warn">no API key</span>}
-            {!health.manim && <span className="chip warn">no manim</span>}
-          </footer>
-        )}
-      </aside>
-
-      {drawerOpen && <div className="scrim" onClick={() => setDrawerOpen(false)} />}
-
-      <main className="main">
-        <header className="topbar">
-          <button className="icon-btn menu" onClick={() => setDrawerOpen(true)} aria-label="Threads — every conversation in this project">
-            ☰
-          </button>
-          {/* One toggle for what the canvas shows. Icons rather than words so
-              the whole header fits a phone; the name lives in `title` for a
-              pointer and `aria-label` for everyone else. */}
-          <div className="view-toggle" role="tablist" aria-label="Main view">
-            {VIEWS.filter((v) => v.key !== 'library' || hasPackages).map((v) => (
-              <button
-                key={v.key}
-                role="tab"
-                aria-selected={view === v.key}
-                aria-label={v.label}
-                title={v.label}
-                className={view === v.key ? 'on' : ''}
-                onClick={() => {
-                  go()
-                  setView(v.key)
-                }}
-              >
-                <span aria-hidden="true">{v.icon}</span>
-              </button>
-            ))}
-          </div>
-          {/* Project and title. On a wide screen this box is transparent and
-              `order` keeps the project before the view toggle; on a phone it
-              is the second row (styles.css). */}
-          <div className="topbar-context">
-            <ProjectPicker
-              projects={projects}
-              current={project}
-              onSelect={(slug) => {
-                go()
-                setProject(slug)
-                setActiveTaskId(null)
-                setViewing(null)
-                setShowGuide(false)
-                loaded.current.clear()
-              }}
-              onCreate={async (name) => {
-                const created = await createProject(name)
-                setProjects((all) => [...all, created])
-                go()
-                setProject(created.slug)
-              }}
-              canCreate={mayManageProjects}
-            />
-            <span className="topbar-title">
-              {VIEWS.find((v) => v.key === view && v.key !== 'chat')?.label ??
-                threads.find((t) => t.id === threadId)?.title ??
-                'dex'}
-            </span>
-          </div>
-          <button
-            className="ghost-btn small icon-only guide-btn"
-            onClick={() => openPane('guide')}
-            // `title` is the hover description on a pointer; `aria-label` is
-            // what a screen reader and a touch device get, where hover does
-            // not exist. Both are needed — neither covers the other.
-            title="Guide — this project's AGENTS.md"
-            aria-label="Guide — this project's AGENTS.md"
-          >
-            <span aria-hidden="true">📖</span>
-          </button>
-          <NotificationsButton notices={notices} onOpen={openNotice} />
+        <footer className="side-foot">
           <SettingsMenu
             autoApprove={state.autoApprove}
             project={project}
-            onOpenCosts={() => openPane('costs')}
-            me={me}
-            onOpenUsers={() => openPane('users')}
-            onOpenSkills={() => openPane('skills')}
-            onChangePassword={() => setShowPassword(true)}
             onAutoApprove={(enabled) => {
               // Optimistic: the server echoes the change back over the stream.
               dispatch({ type: 'autoApprove', enabled })
@@ -722,6 +818,28 @@ export default function App() {
               })
             }}
           />
+        {health && (
+          <div className="health">
+            <span className={`chip ${state.connected ? '' : 'warn'}`}>
+              {state.connected ? 'live' : 'reconnecting'}
+            </span>
+            <span className="chip">{health.model}</span>
+            {!health.authenticated && <span className="chip warn">no API key</span>}
+            {!health.manim && <span className="chip warn">no manim</span>}
+          </div>
+        )}
+        </footer>
+      </aside>
+
+      {drawerOpen && <div className="scrim" onClick={() => setDrawerOpen(false)} />}
+
+      <main className="main">
+        <header className="topbar">
+        <span className="topbar-title">
+          {VIEWS.find((v) => v.key === view && v.key !== 'chat')?.label ??
+            threads.find((t) => t.id === threadId)?.title ??
+            'dex'}
+        </span>
         </header>
 
         {view === 'library' && project ? (
@@ -739,6 +857,7 @@ export default function App() {
           <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading task graph…</p>}>
             <TaskGraph
               project={project}
+              shows={showsNode}
               changes={graphChanges}
               activeTaskId={activeTaskId}
               onOpenTask={(node) => {
@@ -759,6 +878,25 @@ export default function App() {
               }}
             />
           </Suspense>
+        ) : view === 'home' ? (
+          <div className="home">
+            <div className="home-card">
+              <h1>What should dex do?</h1>
+              <Composer
+                placeholder="Ask for anything. dex works out where it goes."
+                project={project ?? undefined}
+                disabled={planning || !mainThread || !mayRun}
+                onSend={(text, uploads) => {
+                  if (!mainThread) return
+                  // The answer is in the chat, so go there while it comes.
+                  go()
+                  setThreadId(mainThread.id)
+                  setView('chat')
+                  void send(text, uploads, mainThread.id)
+                }}
+              />
+            </div>
+          </div>
         ) : view === 'feed' ? (
           <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading feed…</p>}>
             <Feed key={project ?? 'none'} project={project ?? undefined} onOpen={openViewer} />
@@ -790,6 +928,7 @@ export default function App() {
             setActiveTaskId(id)
             setViewing(null)
           }}
+          onOpenThread={setThreadId}
           onOpenSource={(name, anchor) => {
             // The same pane the activity and the assets use.
             //
@@ -835,6 +974,7 @@ export default function App() {
           openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
           onBack={() => back(() => setActiveTaskId(null))}
           onQueued={(taskId, messages) => dispatch({ type: 'queued', taskId, messages })}
+          onRouted={followRouted}
           onTasks={(tasks) => dispatch({ type: 'tasks', tasks })}
           onStarted={(task) => {
             dispatch({ type: 'tasks', tasks: [task] })

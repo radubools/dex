@@ -4,7 +4,7 @@ import {
   rerunTask, resolveApproval, resumeTask, sendTaskMessage,
 } from '../api'
 import { progressOf, type FeedItem, type TaskView } from '../store'
-import type { SourceAnchor, Task, TaskMessage, TaskState } from '../types'
+import type { Routed, SourceAnchor, Task, TaskMessage, TaskState } from '../types'
 
 /** States in which the agent has not finished with this task. */
 const WORKING_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused', 'blocked'])
@@ -29,8 +29,11 @@ export function TaskPanel({
   onStarted,
   onQueued,
   onTasks,
+  onRouted,
   embedded = false,
 }: {
+  /** The message was other work, and dex took it to a thread or task. */
+  onRouted?: (routed: Routed) => void
   view: TaskView
   onOpen: (target: ViewerTarget) => void
   openPath?: string
@@ -327,6 +330,7 @@ export function TaskPanel({
           // a panel stays open while the picker moves.
           project={task.project ?? undefined}
           onQueued={(messages) => onQueued(task.id, messages)}
+          onRouted={onRouted}
         />
       )}
     </section>
@@ -336,14 +340,17 @@ export function TaskPanel({
 /**
  * Chat inside a task. What you type is queued rather than sent: interrupting a
  * run mid-flight would discard work in progress, so notes are held and become
- * the brief for the task's next attempt once it stops.
+ * the brief for the task's next attempt once it stops. dex may decide it is other
+ * work and take it elsewhere (design/26).
  */
 function TaskComposer({
   taskId,
   live,
   project,
   onQueued,
+  onRouted,
 }: {
+  onRouted?: (routed: Routed) => void
   taskId: string
   live: boolean
   /** Whose `datasets/` directory an attachment goes into. */
@@ -362,7 +369,7 @@ function TaskComposer({
     const sending = attached
     setAttached([])
     sendTaskMessage(taskId, text, namesOf(sending))
-      .then(() => getTaskMessages(taskId).then(onQueued))
+      .then(({ routed }) => (routed ? onRouted?.(routed) : getTaskMessages(taskId).then(onQueued)))
       .catch(() => {
         // Put the message back as it was, attachments included: the files are
         // already on the server, so retrying costs nothing but the click.

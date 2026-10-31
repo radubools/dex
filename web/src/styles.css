@@ -64,33 +64,17 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   gap: 10px;
   padding: max(10px, env(safe-area-inset-top)) 14px 10px;
   border-bottom: 1px solid var(--line);
+  /* The same height as the sidebar's header, so their dividers make one line. */
+  box-sizing: border-box; min-height: calc(max(10px, env(safe-area-inset-top)) + 61px);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
 }
-.view-toggle {
-  display: flex; flex: none;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
-}
-.view-toggle button {
-  /* Sized for a finger and a glyph, not for a word. */
-  min-width: 44px; min-height: 40px; padding: 0 10px;
-  background: none; border: none;
-  color: var(--muted); font-size: 15px; line-height: 1;
-}
-.view-toggle button.on { color: var(--text); background: var(--line); }
-.view-toggle button:first-child { border-radius: 8px 0 0 8px; }
-.view-toggle button:last-child { border-radius: 0 8px 8px 0; }
-
 .topbar-title {
-  flex: 1; min-width: 0; font-weight: 600;
+  flex: 1; min-width: 0; font-weight: 600; text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* One row on a wide screen: the box adds nothing, and these put the drawer
-   button and project back ahead of the view toggle that precedes them in the
-   source. */
-.topbar-context { display: contents; }
-.topbar .icon-btn.menu { order: -2; }
-.topbar .project-anchor { order: -1; }
+.threads-head .project-anchor { flex: 1; min-width: 0; }
+.threads-head .project-trigger { width: 100%; max-width: 100%; }
 
 /* ---------------- auto-approve switch ---------------- */
 
@@ -127,46 +111,6 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 /* The label is a lot of width on a phone; the switch alone carries the state. */
 @media (max-width: 520px) { .auto-label { display: none; } }
 
-/* The controls and the project do not fit across a phone, and the project's
-   name is the one thing here whose width nobody controls. So on a phone the
-   fixed-size controls take the first row, navigation on the left and settings
-   on the far edge, and the second row is the project on the left with the
-   title centred in whatever it leaves. */
-@media (max-width: 560px) {
-  .topbar {
-    flex-wrap: wrap;
-    row-gap: 8px;
-    column-gap: 5px;
-    padding-left: 6px;
-    padding-right: 6px;
-  }
-  /* The second row. Equal outer columns keep the title centred on the page;
-     the first can't go below the project's width, so a wide project pushes
-     the title right only as far as it has to, and a long title takes the
-     room the last column would have kept. */
-  .topbar-context {
-    order: 1; flex: 0 0 100%; min-width: 0;
-    display: grid; align-items: center; column-gap: 5px;
-    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(0, 1fr);
-  }
-  .topbar .project-anchor { justify-self: start; }
-  .topbar-title {
-    /* Two lines at most: a thread title can run to a paragraph, and the
-       header should not take the screen from the conversation under it. */
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    text-align: center;
-  }
-  /* The guide leads the right-hand group, so settings ends at the far edge. */
-  .topbar .guide-btn { margin-left: auto; }
-  /* Capped so a long project name leaves the title room. The full name is
-     still in the dropdown. */
-  .topbar .project-trigger { max-width: min(58vw, 240px); }
-}
-
 /* Icon-only header buttons. The label moves into `title`/`aria-label` so the
    six header controls fit one row on a phone instead of wrapping or running
    off the edge. Sized for a finger, not for the glyph. */
@@ -178,15 +122,11 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 /* Four tabs and four buttons in a phone's first row: 343px at these widths,
    so it holds down to a 355px screen. After the rule above, which it narrows. */
 @media (max-width: 560px) {
-  .topbar .icon-btn.menu, .view-toggle button, .topbar button.icon-only {
-    min-width: 40px; padding-left: 6px; padding-right: 6px;
-  }
+  .topbar button.icon-only { min-width: 40px; padding-left: 6px; padding-right: 6px; }
 }
 @media (max-width: 355px) {
   .topbar { column-gap: 3px; }
-  .topbar .icon-btn.menu, .view-toggle button, .topbar button.icon-only {
-    min-width: 34px; padding-left: 2px; padding-right: 2px;
-  }
+  .topbar button.icon-only { min-width: 34px; padding-left: 2px; padding-right: 2px; }
 }
 
 /* ---------------- threads ---------------- */
@@ -202,7 +142,6 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--panel);
   border-right: 1px solid var(--line);
-  padding-top: env(safe-area-inset-top);
 }
 .threads.open { transform: none; }
 
@@ -210,7 +149,9 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 
 .threads-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px; border-bottom: 1px solid var(--line);
+  /* Clear of the menu button, which stays over this corner. */
+  padding: max(10px, env(safe-area-inset-top)) 14px 10px 56px; border-bottom: 1px solid var(--line);
+  box-sizing: border-box; min-height: calc(max(10px, env(safe-area-inset-top)) + 61px);
 }
 .brand { font-weight: 650; letter-spacing: 0.02em; }
 
@@ -219,15 +160,22 @@ code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospa
 .thread-row.on { background: var(--panel-2); }
 .thread-open {
   flex: 1; min-width: 0; text-align: left;
-  display: flex; flex-direction: column; gap: 2px;
-  background: none; border: none; padding: 10px; min-height: 44px;
+  display: flex; align-items: baseline; gap: 8px;
+  background: none; border: none; padding: 7px 10px; min-height: 36px;
 }
-/* Wrapped rather than truncated: a phone-width drawer cut most of a name off,
-   and thread names ("Yoga · design") are how you tell threads apart. */
-.thread-title { overflow-wrap: anywhere; }
-.thread-meta { font-size: 11px; color: var(--muted); }
+/* One line, so the list stays short; the row's title has the tasks and cost. */
+.thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-meta { flex: none; font-size: 11px; color: var(--muted); }
+.thread-new {
+  display: block; width: 100%; min-height: 36px; padding: 7px 10px; text-align: left;
+  background: none; border: none; border-radius: 10px; color: var(--muted); cursor: pointer;
+}
+.thread-new:hover { background: var(--panel-2); color: var(--text); }
 
-.health { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border-top: 1px solid var(--line); }
+.side-foot { padding: 8px; border-top: 1px solid var(--line); }
+.side-foot .menu-item.warn { color: var(--warn); }
+.side-foot .menu-anchor { display: block; }
+.health { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px 2px; }
 .chip {
   font-size: 11px; padding: 3px 8px; border-radius: 999px;
   background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
@@ -550,7 +498,13 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
   background: none; border: none; color: var(--muted); font-size: 17px;
 }
 .icon-btn.small { min-width: 36px; min-height: 36px; font-size: 13px; margin: 0; }
-.icon-btn.menu { margin: 0; }
+/* Always on screen on a phone, above the drawer it opens and closes. */
+.icon-btn.menu {
+  position: fixed; z-index: 40; margin: 0;
+  top: max(10px, env(safe-area-inset-top)); left: 6px;
+  min-width: 40px; min-height: 40px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
+}
 
 .progress { height: 3px; background: var(--panel-2); }
 .progress-fill { height: 100%; background: var(--accent); transition: width 0.5s ease; }
@@ -828,8 +782,9 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
     grid-template-columns: var(--threads-w, 280px) minmax(0, 1fr) var(--side-w, minmax(360px, 34vw));
   }
 
-  .threads { position: static; transform: none; width: auto; }
+  .threads { position: static; transform: none; width: auto; height: 100dvh; min-height: 0; }
   .scrim, .icon-btn.menu { display: none; }
+  .threads-head { padding-left: 14px; }
 
   /* Three columns side by side; each pane keeps its ‹ to step back. */
   .task-panel, .viewer {
@@ -1369,7 +1324,7 @@ body.resizing iframe { pointer-events: none; }
 /* A row of its own, below everything else: file names are long, and beside
    the textarea they left neither the name nor the box readable. `order`
    carries it past the box and the send button, which it is written before —
-   it shares a component with the `+` that opens the picker. */
+   it shares a component with the paperclip that opens the picker. */
 .attached {
   order: 99; flex-basis: 100%; width: 100%;
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px;
@@ -2039,3 +1994,40 @@ body.resizing iframe { pointer-events: none; }
 
 .library-arrange { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted, inherit); }
 .folder-back .asset-name { font-weight: 600; }
+
+.side-menu { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; min-height: 0; }
+.side-menu .thread-list { overflow: visible; padding: 4px 0 8px 12px; flex: none; }
+.menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 10px;
+  background: none; border: none; border-radius: 10px; color: inherit; text-align: left; cursor: pointer;
+}
+.menu-item:hover { background: var(--panel-2); }
+.menu-item.on { background: var(--panel-2); font-weight: 600; }
+.menu-icon { flex: none; width: 22px; text-align: center; }
+.menu-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.menu-label small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
+.menu-chevron { flex: none; color: var(--muted); }
+
+.intent-filter { display: flex; gap: 4px; padding: 2px 2px 8px; }
+.intent-filter button { flex: 1; padding: 3px 0; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; background: none; color: inherit; cursor: pointer; }
+.intent-filter button.on { border-color: var(--accent); color: var(--accent); }
+.routed { display: block; margin: 4px 0; padding: 0; border: 0; background: none; font-size: 13px; color: var(--accent); cursor: pointer; text-align: left; }
+
+.home { flex: 1; display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 0; overflow: auto; }
+.home-card { width: min(640px, 100%); padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel, var(--bg, transparent)); }
+.home-card h1 { margin: 0 0 12px; font-size: 20px; font-weight: 600; }
+.home-card .composer { border: 0; padding: 0; background: none; }
+.home-card .composer { align-items: center; }
+/* The box on its own row, then attach on the left and send on the right. */
+.home-card .composer textarea { order: -1; flex: 0 0 100%; min-height: 160px; }
+.home-card .composer .send-btn { margin-left: auto; }
+.home-card .composer .attached { order: 1; }
+
+/* Room for the menu button, which floats over the top-left corner of everything. */
+@media (max-width: 999px) {
+  .panel-head, .viewer-bar { padding-left: 52px; }
+}
+@media (max-width: 999px) {
+  /* Even on both sides, so the title stays centred on the page. */
+  .topbar { padding-left: 56px; padding-right: 56px; }
+}

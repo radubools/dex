@@ -12,6 +12,12 @@ from .threads import ThreadMessage
 
 log = logging.getLogger("dex.migrate")
 
+MAIN_OPENER = (
+    "Post anything here. dex works out whether it is about the project's design, a kind of "
+    "asset or a task, carries on with the right task if one exists, and otherwise "
+    "opens it in the right thread."
+)
+
 DESIGN_OPENER = """This is the design thread for **{name}**.
 
 Tell me how tasks in this project should work and I will keep `AGENTS.md` in
@@ -50,6 +56,20 @@ async def adopt_existing_project(db: Database, config: Config) -> None:
         log.info("attached pre-project threads and tasks to %r", slug)
 
     await ensure_design_thread(db, projects, slug)
+
+
+async def ensure_main_thread(db: Database, slug: str) -> str:
+    """Every project has one thread to post in: dex routes from there (design/26)."""
+    existing = await db.pool.fetchval(
+        "SELECT id FROM threads WHERE project = $1 AND kind = 'main' ORDER BY created_at LIMIT 1", slug,
+    )
+    if existing:
+        return existing
+    threads = ThreadStore(db)
+    thread = await threads.create(title="Main", project=slug, kind="main")
+    await threads.append(thread.id, ThreadMessage(role="dex", kind="text", text=MAIN_OPENER))
+    log.info("created the main thread for %r", slug)
+    return thread.id
 
 
 async def ensure_design_thread(db: Database, projects: ProjectStore, slug: str) -> str | None:

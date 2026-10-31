@@ -118,7 +118,7 @@ export type Plan = {
 export type ThreadMessage = {
   id: string
   role: 'user' | 'dex'
-  kind: 'text' | 'plan' | 'tasks' | 'error'
+  kind: 'text' | 'plan' | 'tasks' | 'error' | 'routed'
   text: string
   data: Partial<Plan> & {
     tasks?: (PlannedTask | Task)[]
@@ -155,13 +155,20 @@ export type UploadBatch = {
   files: { name: string; path: string; bytes: number }[]
 }
 
-export type ThreadKind = 'chat' | 'project_design'
+export type ThreadKind = 'chat' | 'project_design' | 'main'
+
+/** What a thread is for, so what its tasks are for (design/26). */
+export type Intent = 'design' | 'skill' | 'task'
+
+/** Where dex took a message. */
+export type Routed = { intent: Intent; threadId: string; threadTitle: string; reason: string; taskId?: string; taskTitle?: string }
 
 export type ThreadSummary = {
   id: string
   title: string
   project: string | null
   kind: ThreadKind
+  intent: Intent
   createdAt: number
   updatedAt: number
   messageCount: number

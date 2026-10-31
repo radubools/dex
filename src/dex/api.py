@@ -50,7 +50,8 @@ from .db import Database, import_json_threads
 from . import animation
 from . import designer, local_sources, skills, surveyor, uploads
 from .feed import ReviewStore, discover
-from .migrate import adopt_existing_project, ensure_design_thread
+from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread
+from .router import Route, route_message
 from .projects import ProjectStore
 from .models import Event, TaskState
 from .planner import Plan, plan_from_message
@@ -667,6 +668,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         """Creates the row, the directory, a starter guide, and a design thread."""
         project = await projects.create(body.name, body.description)
         await ensure_design_thread(db, projects, project.slug)
+        await ensure_main_thread(db, project.slug)
         return {"project": project.to_json()}
 
     @app.delete("/api/projects/{slug}", dependencies=can_manage_projects)
@@ -1292,8 +1294,10 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         return {"messages": await TaskMessageStore(db).pending(task_id)}
 
     @app.post("/api/tasks/{task_id}/messages", dependencies=task_run_guard)
-    async def post_task_message(task_id: str, body: TaskMessageRequest) -> dict[str, Any]:
-        """Queue a follow-up for a task.
+    async def post_task_message(
+        task_id: str, body: TaskMessageRequest, access: Access = Depends(access_dep)
+    ) -> dict[str, Any]:
+        """Queue a follow-up for a task, unless it is other work (design/26).
 
         It is held while the task runs and delivered when it stops, as the brief
         for a follow-up attempt.
@@ -1305,6 +1309,23 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         note = uploads.with_sources(
             body.text, uploads.resolve(sources, body.uploads), sources
         )
+        origin = await threads.get(owner.thread_id) if owner and owner.thread_id else None
+        # A chat's or survey's activity is that conversation: only real work is routed from.
+        if origin is not None and owner.scope in ("package", "project", "power", "design"):
+            route = await _route(origin, body.text, access, on_task=owner)
+            if route is not None and route.task_id and route.task_id != task_id:
+                return await _follow_up(origin, route, body.text, note)
+            if route is not None and route.new_task:
+                attached = uploads.resolve(sources, body.uploads)
+                if route.thread_id or route.new_thread:
+                    origin, moved = await _move_to(origin, route, body.text, attached)
+                else:
+                    await publish_message(origin.id, ThreadMessage(role="user", kind="text", text=body.text))
+                    origin = await threads.get(origin.id)
+                    moved = {"intent": route.intent, "threadId": origin.id, "threadTitle": origin.title,
+                             "reason": route.reason}
+                await _turn(origin, body.text, note, attached)
+                return {"message": None, "routed": moved}
         message = await tasks.queue_message(task_id, note)
         if message is None:
             raise HTTPException(404, "no such task")
@@ -1471,6 +1492,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         chosen = await resolve_project(project)
         access.check(chosen)
         await ensure_design_thread(db, projects, chosen)
+        await ensure_main_thread(db, chosen)
         costs = await threads.costs_by_thread()
         return {
             "project": chosen,
@@ -1557,8 +1579,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         if thread is None:
             raise HTTPException(404, "no such thread")
 
-        design = thread.kind == "project_design"
-        access.require(CAP_DESIGN if design else CAP_RUN_TASKS)
+        access.require(CAP_DESIGN if thread.kind == "project_design" else CAP_RUN_TASKS)
 
         # The transcript keeps what was typed; the model is given the paths as
         # well. Putting the paths in the transcript would make every reread of
@@ -1573,17 +1594,76 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             ),
         )
         prompt = uploads.with_sources(body.text, attached, sources)
-        if design:
+        with _planning(thread.id):
+            route = await _route(thread, body.text, access)
+        moved: dict[str, Any] = {}
+        if route is not None:
+            if route.task_id:
+                return await _follow_up(thread, route, body.text, prompt)
+            thread, moved = await _move_to(thread, route, body.text, attached)
+        reply = await _turn(thread, body.text, prompt, attached)
+        return {**reply, "routed": moved} if moved else reply
+
+    async def _route(thread: Any, text: str, access: Access, on_task: Any = None) -> Route | None:
+        """Where a message belongs, or None for where it is. A failure leaves it there."""
+        project = thread.project or config.default_project
+        listed = await threads.list(project)
+        recent = await tasks.tasks.recent_for_routing(project)
+        route = await route_message(
+            text, config, here=thread, threads=listed, tasks=recent,
+            skills=sorted(skills.read_enabled(config.assets_dir / project).skills),
+            guide=projects.read_guide(project),
+            model=await SettingsStore(db).model_for(project, config.planner_model), on_task=on_task,
+        )
+        if route is None or route.intent == "design" and not access.can(CAP_DESIGN):
+            return None
+        if route.intent != "design" and not access.can(CAP_RUN_TASKS):
+            return None
+        return route
+
+    async def _route_note(origin: Any, target_id: str, title: str, route: Route, task: Any = None) -> dict[str, Any]:
+        data = {"intent": route.intent, "threadId": target_id, "threadTitle": title,
+                "reason": route.reason, **({"taskId": task.id, "taskTitle": task.title} if task else {})}
+        said = f"Added to “{task.title}” in {title}." if task else f"Moved to {title}."
+        await publish_message(origin.id, ThreadMessage(role="dex", kind="routed", text=said, data=data))
+        return data
+
+    async def _follow_up(origin: Any, route: Route, text: str, prompt: str) -> dict[str, Any]:
+        """The message is about a task that exists: it goes to that task."""
+        task = await tasks.tasks.get(route.task_id)
+        owner = await threads.get(task.thread_id) if task.thread_id else None
+        delivered = tasks.say(task.id, prompt) or await tasks.queue_message(task.id, prompt)
+        if owner is not None and owner.id != origin.id:
+            await publish_message(owner.id, ThreadMessage(role="user", kind="text", text=text))
+        moved = await _route_note(origin, owner.id if owner else origin.id, owner.title if owner else origin.title, route, task)
+        return {"message": delivered, "routed": moved}
+
+    async def _move_to(origin: Any, route: Route, text: str, attached: list[Any]) -> tuple[Any, dict[str, Any]]:
+        """The message belongs in another thread: it is posted there, and said so here."""
+        if route.thread_id:
+            target = await threads.get(route.thread_id)
+        else:
+            target = await threads.create(route.new_thread, project=origin.project)
+        await publish_message(target.id, ThreadMessage(
+            role="user", kind="text", text=text,
+            data={"attachments": [u.name for u in attached]} if attached else {},
+        ))
+        moved = await _route_note(origin, target.id, target.title, route)
+        return await threads.get(target.id), moved
+
+    async def _turn(thread: Any, text: str, prompt: str, attached: list[Any]) -> dict[str, Any]:
+        """What a message does in the thread it ended up in."""
+        if thread.kind == "project_design":
             return await _design_turn(thread, prompt)
         # Hardcoded, and the same in every project: a message that arrives with
         # material attached is surveyed before it is planned. No guide gets a
         # say in it — the plan an operator reads has to mean the same thing
         # whichever project they happen to be in, and planning from a filename
         # when the file is right there is guessing.
-        if surveyor.needs_survey(body.text, [u.name for u in attached]):
+        if surveyor.needs_survey(text, [u.name for u in attached]):
             return await _survey_turn(
-                thread, body.text, [u.name for u in attached],
-                surveyor.urls_in(body.text),
+                thread, text, [u.name for u in attached],
+                surveyor.urls_in(text),
             )
         return await _plan_turn(thread, prompt)
 

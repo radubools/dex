@@ -61,3 +61,9 @@
   border: 1px solid var(--line); font-size: 10px; color: var(--muted);
 }
 .notif-dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+
+.menu-item .notif-badge { position: static; flex: none; margin-left: auto; }
+.icon-btn.menu .menu-unread {
+  position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--accent);
+}

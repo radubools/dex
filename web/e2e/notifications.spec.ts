@@ -328,3 +328,14 @@ test('hud: arrive opens for 5 s, a second arrival restarts it, dismiss is immedi
   expect(pending).toHaveLength(0)
   expect(phases).toEqual(['open', 'fading', 'closed', 'open', 'closed'])
 })
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+
+  test('a notice shows on screen with the menu shut, and the menu button is marked', async ({ page }) => {
+    await open(page)
+    await ask(page, 'task-a', 'q1', 'Which colour?')
+    await expect(hud(page)).toBeInViewport({ ratio: 1 })
+    await expect(page.locator('.menu-unread')).toBeVisible()
+  })
+})

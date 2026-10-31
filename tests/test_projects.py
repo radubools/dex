@@ -126,7 +126,7 @@ def test_the_api_lists_and_creates_projects(client):
 
     # Creating one gives it a design thread straight away.
     threads = client.get("/api/threads", params={"project": "graph-theory"}).json()["threads"]
-    assert [t["kind"] for t in threads] == ["project_design"]
+    assert sorted(t["kind"] for t in threads) == ["main", "project_design"]
 
 
 def test_the_default_project_cannot_be_deleted(client):
@@ -168,7 +168,8 @@ def test_a_design_thread_runs_a_task_rather_than_planning(client):
     panel already draws.
     """
     client.post("/api/projects", json={"name": "Drafted"})
-    design = client.get("/api/threads", params={"project": "drafted"}).json()["threads"][0]
+    design = next(t for t in client.get("/api/threads", params={"project": "drafted"}).json()["threads"]
+                  if t["kind"] == "project_design")
 
     body = client.post(
         f"/api/threads/{design['id']}/messages", json={"text": "keep solutions short"}
@@ -190,7 +191,8 @@ def test_a_design_turn_carries_the_guide_and_the_conversation(client, config):
 
     client.post("/api/projects", json={"name": "Asking"})
     guide_before = client.get("/api/projects/asking/guide").json()["text"]
-    design = client.get("/api/threads", params={"project": "asking"}).json()["threads"][0]
+    design = next(t for t in client.get("/api/threads", params={"project": "asking"}).json()["threads"]
+                  if t["kind"] == "project_design")
 
     # The id from this turn's own response. Picking "the last design task" out
     # of /api/tasks reads another test's task whenever the database is shared.

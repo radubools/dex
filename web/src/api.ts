@@ -3,6 +3,7 @@ import type {
   AnimationInfo, FeedResponse, GuideResponse, Project, ProjectsResponse, Settings,
   SettingsResponse, Task, TaskMessage, Thread, ThreadSummary, DesignReply,
   PackageEntry, TagCount, UploadBatch, SkillsResponse, SkillVersion, TaskGraph,
+  Routed,
 } from './types'
 
 /**
@@ -115,7 +116,7 @@ export const deleteThread = (id: string) =>
  * design thread answers by redrafting the project's guide.
  */
 export const sendMessage = (threadId: string, text: string, uploads: string[] = []) =>
-  post<{ plan?: Plan; design?: DesignReply }>(`/api/threads/${threadId}/messages`, {
+  post<{ plan?: Plan; design?: DesignReply; routed?: Routed }>(`/api/threads/${threadId}/messages`, {
     text,
     uploads,
   })
@@ -195,7 +196,7 @@ export const getTaskMessages = (id: string) =>
 
 /** Held while the task runs; delivered as the brief for its next attempt. */
 export const sendTaskMessage = (id: string, text: string, uploads: string[] = []) =>
-  post<{ message: TaskMessage }>(`/api/tasks/${id}/messages`, { text, uploads })
+  post<{ message: TaskMessage | null; routed?: Routed }>(`/api/tasks/${id}/messages`, { text, uploads })
 
 /**
  * Store files in the project's `datasets/` directory, for tasks to read and

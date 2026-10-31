@@ -22,6 +22,14 @@ TEST_DSN = os.environ.get("DEX_TEST_DATABASE_URL", "postgresql://127.0.0.1/dex_t
 DEFAULT_PROJECT = "algorithms"
 
 
+@pytest.fixture(autouse=True)
+def _no_routing(monkeypatch):
+    """A message stays where it is posted, without a real model call, unless a test routes it."""
+    async def stay(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr("dex.api.route_message", stay)
+
+
 @pytest.fixture(scope="session")
 def dsn() -> str:
     return TEST_DSN

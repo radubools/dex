@@ -526,12 +526,12 @@ async def test_tasks_earn_the_chat_and_ideation_tags(manager, project, config):
     idea, = await propose(manager, ideation, "idea")
     plain = await manager.submit("x", title="X", slug="plain", project=project)
     earned = await manager.tasks.latest_by_package(project)
-    assert earned[chat.slug][3] == ["origin:chat"]
-    assert earned[split_run.slug][3] == ["origin:chat"]
-    assert earned[a.slug][3] == ["origin:ideation"]
-    assert earned[idea.slug][3] == ["origin:ideation"]
-    assert earned[ideation.slug][3] == ["origin:ideation"]
-    assert earned[plain.slug][3] == []
+    assert earned[chat.slug][3] == ["intent:task", "origin:chat"]
+    assert earned[split_run.slug][3] == ["intent:task", "origin:chat"]
+    assert earned[a.slug][3] == ["intent:task", "origin:ideation"]
+    assert earned[idea.slug][3] == ["intent:task", "origin:ideation"]
+    assert earned[ideation.slug][3] == ["intent:task", "origin:ideation"]
+    assert earned[plain.slug][3] == ["intent:task"]
     assert not (chat.output_dir(config.assets_dir, project) / "manifest.json").exists()
 
 
@@ -705,7 +705,7 @@ async def test_lines_add_up_and_become_a_packages_tags(manager, project):
     await manager.tasks.add_changes(first.id, 8, 3)
     await manager.tasks.add_changes(first.id, 4, 0)
     await manager.tasks.add_changes(follow.id, 0, 95)
-    assert (await manager.tasks.latest_by_package(project))["pack"][3] == ["code-lines:2c", "asset-lines:2a"]
+    assert (await manager.tasks.latest_by_package(project))["pack"][3] == ["intent:task", "code-lines:2c", "asset-lines:2a"]
 
 
 async def test_the_dashboard_sums_lines_by_group_and_project(manager, project, db):
