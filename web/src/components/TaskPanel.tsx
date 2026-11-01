@@ -24,7 +24,6 @@ export function TaskPanel({
   view,
   onOpen,
   openPath,
-  onClose,
   onBack,
   onStarted,
   onQueued,
@@ -37,7 +36,6 @@ export function TaskPanel({
   view: TaskView
   onOpen: (target: ViewerTarget) => void
   openPath?: string
-  onClose: () => void
   /** Pops one level of the mobile navigation stack. */
   onBack: () => void
   /** Called with the new task when this one is resumed or re-run. */
@@ -124,7 +122,6 @@ export function TaskPanel({
           <span className={`state-dot ${task.state}`} />
           <span className="panel-name">{task.title}</span>
         </div>
-        <button className="icon-btn" onClick={onClose} aria-label="Close task">✕</button>
       </header>
       )}
 

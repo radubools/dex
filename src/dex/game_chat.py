@@ -331,8 +331,8 @@ package files and the game's installed assets here).
    the player's screen (the hidden context below names the lesson, the beat,
    what stands on the stage). It exists: `continue_task` it with exactly what
    to change and why.
-2. **Something new**: `start_task` in the thread for its kind (the project
-   brief's "Which thread" table; `project_threads` lists them), with a brief
+2. **Something new**: `start_task` with the `skill` that makes it (dex puts
+   it in that skill's thread; `project_threads` lists them), with a brief
    that stands on its own. Be judicious: every task spends the operator's
    usage; never start one for a question you can answer.
    **A new set of lessons** (a new section of the game's lesson map, or new

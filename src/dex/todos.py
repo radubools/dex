@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import skills
 from .changes import size_tags
-from .deps import POWER_THREAD, PRIORITIZED, Refused, inherited
+from .deps import POWER_SKILL, PRIORITIZED, Refused, inherited
 from .models import Event, Task, TaskState
 from .threads import ThreadMessage
 
@@ -107,7 +107,7 @@ class Todos:
         if len(items) > MAX_TODOS:
             raise Refused(f"that is {len(items)} todos; {MAX_TODOS} is the most one request may split into")
         project = root.project or self.m.config.default_project
-        thread = await self.m.graph.resolve_thread(project, POWER_THREAD, create=True, exact=True)
+        thread = await self.m.graph.skill_thread(project, POWER_SKILL)
         proposed = {"approval": PENDING, "proposed": True} if root.is_ideation else {"approval": APPROVED}
         made = []
         for item in items:
@@ -264,7 +264,7 @@ class Todos:
         """Power added: its thread exists, and ideation stays off until it is asked for.
         Power removed: the cycle stops where it is, and is off if it is added again."""
         if on:
-            await self.m.graph.resolve_thread(project, POWER_THREAD, create=True, exact=True)
+            await self.m.graph.skill_thread(project, POWER_SKILL)
             return
         await self._set_switch(project, False)
         current = await self.m.tasks.current_ideation(project)
@@ -284,10 +284,10 @@ class Todos:
         """Projects that had the Power skill before it came with a thread."""
         for directory in self.m.config.assets_dir.iterdir():
             if directory.is_dir() and "power" in skills.read_enabled(directory).skills:
-                await self.m.graph.resolve_thread(directory.name, POWER_THREAD, create=True, exact=True)
+                await self.m.graph.skill_thread(directory.name, POWER_SKILL)
 
     async def _ideate(self, project: str, *, force: bool = False) -> Task:
-        thread = await self.m.graph.resolve_thread(project, POWER_THREAD, create=True, exact=True)
+        thread = await self.m.graph.skill_thread(project, POWER_SKILL)
         directory = self.m.config.ideas_dir / project
         directory.mkdir(parents=True, exist_ok=True)
         ideas = directory / IDEAS_FILE

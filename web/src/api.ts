@@ -115,6 +115,11 @@ export const deleteThread = (id: string) =>
  * Says something in a thread. A chat thread answers with a plan to confirm; a
  * design thread answers by redrafting the project's guide.
  */
+/** Tie a thread to a skill the project has on, or untie it with null. */
+export const tieThread = (threadId: string, skill: string | null) =>
+  request<{ thread: ThreadSummary }>(`/api/threads/${threadId}/skill`, { method: 'PUT', body: JSON.stringify({ skill }) })
+    .then((r) => r.thread)
+
 export const sendMessage = (threadId: string, text: string, uploads: string[] = []) =>
   post<{ plan?: Plan; design?: DesignReply; routed?: Routed }>(`/api/threads/${threadId}/messages`, {
     text,

@@ -78,7 +78,6 @@ export function Viewer({
       <header className="viewer-bar">
         <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
         <span className="viewer-path" title={label}>{label}</span>
-        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>
       {taskId && (
         <nav className="tabs">

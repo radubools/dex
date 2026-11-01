@@ -713,7 +713,7 @@ pre, code, .code-view, .md-code, .tool-out, .error-box, .diff-line code {
 /* ---------------- viewer ---------------- */
 
 .viewer-path {
-  font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
+  flex: 1; font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
   min-width: 0; overflow-wrap: anywhere;
 }
 .viewer-body {
@@ -2008,9 +2008,6 @@ body.resizing iframe { pointer-events: none; }
 .menu-label small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
 .menu-chevron { flex: none; color: var(--muted); }
 
-.intent-filter { display: flex; gap: 4px; padding: 2px 2px 8px; }
-.intent-filter button { flex: 1; padding: 3px 0; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; background: none; color: inherit; cursor: pointer; }
-.intent-filter button.on { border-color: var(--accent); color: var(--accent); }
 .routed { display: block; margin: 4px 0; padding: 0; border: 0; background: none; font-size: 13px; color: var(--accent); cursor: pointer; text-align: left; }
 
 .home { flex: 1; display: flex; align-items: center; justify-content: center; padding: 16px; min-height: 0; overflow: auto; }
@@ -2027,7 +2024,12 @@ body.resizing iframe { pointer-events: none; }
 @media (max-width: 999px) {
   .panel-head, .viewer-bar { padding-left: 52px; }
 }
+/* And for the notifications button, in the top-right corner of everything. */
+.panel-head, .viewer-bar { padding-right: 52px; }
 @media (max-width: 999px) {
   /* Even on both sides, so the title stays centred on the page. */
   .topbar { padding-left: 56px; padding-right: 56px; }
 }
+
+.thread-tie { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 14px 0; font-size: 12px; color: var(--muted); }
+.thread-tie select { max-width: 60%; }

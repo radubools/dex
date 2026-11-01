@@ -8,6 +8,9 @@ tasks — which appears as a card in the thread. Nothing runs until the operator
 confirms the card, optionally after deselecting rows. Confirmed rows become
 queued tasks that run in parallel.
 
+A plan of exactly one task, with nothing left to plan, starts without the card
+asking: the operator's message already said what to run.
+
 Planning and running are separate on purpose. Planning is cheap, fast and
 reversible; running spends real money on an agent session per task. The plan
 card is the checkpoint between them.

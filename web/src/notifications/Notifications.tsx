@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CSSProperties, RefObject } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { Notice, Reason } from './detect'
 import { ago } from './model'
@@ -17,7 +17,8 @@ const reasonOf = (n: Notice) =>
   n.reason === 'finished' && n.failed ? { icon: '⚠️', label: 'Finished with failures' } : REASONS[n.reason]
 
 /**
- * The side menu's notifications button, and the panel it opens beside itself.
+ * The notifications button, in the top-right corner of every screen, and the
+ * panel it opens under itself.
  * Opening a notice marks it read, closes the panel and hands it to `onOpen`,
  * which takes the reader to its task or thread.
  */
@@ -35,23 +36,21 @@ export function NotificationsButton({
     <div className="notif-anchor">
       <button
         ref={trigger}
-        className={`menu-item notif-trigger ${unread ? 'has-unread' : ''}`}
+        className={`icon-btn notif-trigger ${unread ? 'has-unread' : ''}`}
         aria-expanded={phase !== 'closed'}
         aria-haspopup="dialog"
         onClick={notices.toggle}
         title={label}
         aria-label={label}
       >
-        <span className="menu-icon" aria-hidden="true">🔔</span>
-        <span className="menu-label">Notifications</span>
+        <span aria-hidden="true">🔔</span>
         {unread > 0 && (
           <span className="notif-badge" aria-hidden="true">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
-      {/* Into document.body, as the settings sheet is: the side menu scrolls
-          and would clip it. */}
+      {/* Into document.body, as the settings sheet is, above the side panes. */}
       {phase !== 'closed' &&
         createPortal(<Hud notices={notices} trigger={trigger} onOpen={onOpen} />, document.body)}
     </div>
@@ -68,24 +67,8 @@ function Hud({
   onOpen: (notice: Notice) => void
 }) {
   const panel = useRef<HTMLDivElement>(null)
-  const [place, setPlace] = useState<CSSProperties>({ visibility: 'hidden' })
   const [now, setNow] = useState(Date.now())
   const { dismiss } = notices
-
-  // Beside the button in the sidebar. On a phone the drawer is usually shut, so
-  // the panel takes the top of the screen, under the menu button.
-  useLayoutEffect(() => {
-    const measure = () => {
-      const rect = trigger.current?.getBoundingClientRect()
-      if (!rect) return
-      setPlace(window.innerWidth < 1000
-        ? { top: 60, right: 8 }
-        : { top: Math.max(8, Math.min(rect.top, window.innerHeight - 340)), left: rect.right + 8 })
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [trigger])
 
   // A click anywhere else closes it at once. The button is not "elsewhere":
   // it toggles, and closing here first would have it reopen straight away.
@@ -114,7 +97,6 @@ function Hud({
     <div
       ref={panel}
       className={`notif-hud ${notices.phase === 'fading' ? 'fading' : ''}`}
-      style={place}
       role="dialog"
       aria-label="Notifications"
     >

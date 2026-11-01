@@ -1,10 +1,12 @@
 /* ---------------- notifications ---------------- */
 
-.notif-anchor { position: relative; flex: none; }
-.notif-trigger { position: relative; }
+/* Floats over the top-right corner of everything, panes included, as the menu
+   button does the top-left. */
+.notif-anchor { position: fixed; z-index: 40; top: max(10px, env(safe-area-inset-top)); right: 6px; }
+.notif-trigger { position: relative; margin: 0; min-width: 40px; min-height: 40px; }
 .notif-trigger.has-unread { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .notif-badge {
-  position: absolute; top: -5px; right: -5px;
+  position: absolute; top: -3px; right: -3px;
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--accent); color: var(--bg);
@@ -12,10 +14,11 @@
 }
 
 .notif-hud {
-  /* Fixed, from the button's rect (Notifications.tsx), and rendered into
-     document.body so no stacking context in the header can bury it. Above the
-     side panes, below the full-screen sheets and modals. */
+  /* Fixed under the button, and rendered into document.body so no stacking
+     context can bury it. Above the side panes, below the full-screen sheets
+     and modals. */
   position: fixed; z-index: 150;
+  top: calc(max(10px, env(safe-area-inset-top)) + 46px); right: 8px;
   width: min(380px, calc(100vw - 16px)); max-height: min(70vh, 560px);
   display: grid; grid-template-rows: auto minmax(0, 1fr);
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -62,7 +65,6 @@
 }
 .notif-dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
 
-.menu-item .notif-badge { position: static; flex: none; margin-left: auto; }
 .icon-btn.menu .menu-unread {
   position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
   border-radius: 50%; background: var(--accent);

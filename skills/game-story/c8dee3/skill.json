@@ -7,5 +7,6 @@
     "PIL",
     "dex",
     "pytest"
-  ]
+  ],
+  "thread": "Stories"
 }

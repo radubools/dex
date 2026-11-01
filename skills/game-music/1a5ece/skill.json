@@ -6,5 +6,6 @@
   "requires": [
     "numpy",
     "pytest"
-  ]
+  ],
+  "thread": "Music"
 }

@@ -76,12 +76,10 @@ export function UserAdmin({
   return (
     <section className="viewer" role="dialog" aria-label="Users and access">
       <header className="viewer-bar">
+        <button className="back-btn" onClick={onClose} aria-label="Back">‹</button>
         <span className="viewer-path">
           Users{waiting > 0 ? ` · ${waiting} waiting for a role` : ''}
         </span>
-        <button className="icon-btn" onClick={onClose} aria-label="Close">
-          ✕
-        </button>
       </header>
 
       <div className="viewer-body">

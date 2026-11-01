@@ -42,6 +42,7 @@ with the message appended to its brief:
     --problem @file       read the brief from a file
     --thread <id | text>  a thread id, or text its title contains (in the project)
     --create-thread       make a thread with that title if none matches
+    --skill NAME          use the thread tied to this skill, made if there is none
     --dry-run             print what would be inserted and stop
 
 Every queued task spends the user's Claude usage the moment a worker claims
@@ -68,6 +69,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "src"))
 
+from dex import skills  # noqa: E402
 from dex.config import CONFIG  # noqa: E402
 from dex.models import Event, Task, continued_problem, slugify  # noqa: E402
 from dex.store import TASK_COLUMNS, task_from_row  # noqa: E402
@@ -105,6 +107,28 @@ async def resolve_thread(conn: asyncpg.Connection, project: str, thread: str | N
         return thread_id
     found = ", ".join(f"{r['id']} ({r['title']!r})" for r in rows) or "none"
     sys.exit(f"--thread {thread!r} must match exactly one thread in {project}; found {found}")
+
+
+async def skill_thread(conn: asyncpg.Connection, project: str, skill: str, title: str | None) -> str:
+    """The thread tied to a skill: its busiest, or a new one under the title the skill declares."""
+    tied = await conn.fetchval(
+        """SELECT th.id FROM threads th WHERE th.project = $1 AND th.skill = $2 AND NOT th.hidden
+           ORDER BY (SELECT count(*) FROM tasks t WHERE t.thread_id = th.id) DESC LIMIT 1""",
+        project, skill,
+    )
+    if tied:
+        return tied
+    declared = skills.thread_skills(ROOT, ASSETS / project).get(skill)
+    title = title or (declared.thread if declared else None)
+    if not title:
+        sys.exit(f"{skill} has no thread in {project}, and declares none: give --thread a title")
+    thread_id, now = uuid.uuid4().hex[:12], time.time()
+    await conn.execute(
+        """INSERT INTO threads (id, title, created_at, updated_at, project, kind, skill)
+           VALUES ($1, $2, to_timestamp($3), to_timestamp($3), $4, 'chat', $5)""",
+        thread_id, title[:80], now, project, skill,
+    )
+    return thread_id
 
 
 async def setting(conn: asyncpg.Connection, key: str):
@@ -196,7 +220,8 @@ async def submit(args: argparse.Namespace) -> None:
             return
 
         async with conn.transaction():
-            thread_id = await resolve_thread(conn, args.project, args.thread, args.create_thread)
+            thread_id = (await skill_thread(conn, args.project, args.skill, args.thread) if args.skill
+                         else await resolve_thread(conn, args.project, args.thread, args.create_thread))
             for task in tasks:
                 task.thread_id = thread_id
             # The thread's record comes first, so the plan is on screen before any task starts.
@@ -260,6 +285,7 @@ async def main() -> None:
     ap.add_argument("--slug")
     ap.add_argument("--thread")
     ap.add_argument("--create-thread", action="store_true")
+    ap.add_argument("--skill", help="the skill that makes this: runs in its thread, made if needed")
     ap.add_argument("--package", help="existing package directory this task rewrites")
     ap.add_argument("--request", help="what the operator asked for; the thread's user message (text or @file)")
     ap.add_argument("--batch", help="JSON list of tasks to submit as one plan")

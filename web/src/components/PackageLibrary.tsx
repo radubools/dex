@@ -44,7 +44,7 @@ const UNTAGGED = '\0untagged'
 const NO_GROUP = ':none'
 
 /** Assets and ideas have different tags, so each side keeps its own. */
-type Side = 'assets' | 'ideas'
+export type Side = 'assets' | 'ideas'
 
 const arrangeKey = (project: string, side: Side) =>
   `dex.library.arrange.${project}${side === 'ideas' ? '.ideas' : ''}`
@@ -175,16 +175,18 @@ function FolderRows({
  * Every package the project has generated, searchable by name and filterable
  * by the tags in each package's manifest. Picking one opens its explanation in
  * the side panel; the rest of its files are a click away from the task that
- * made it.
+ * made it. The Ideas view is this same list over ideation's log and proposals.
  */
 export function PackageLibrary({
   project,
+  side = 'assets',
   liveTags,
   liveSizes,
   onOpen,
   openPath,
 }: {
   project: string
+  side?: Side
   /** Tag changes seen on the event stream since load, by package slug. */
   liveTags?: Record<string, string[]>
   /** The rollup's size tags for packages being written now. They replace what was listed. */
@@ -192,43 +194,43 @@ export function PackageLibrary({
   onOpen: (target: ViewerTarget) => void
   openPath?: string
 }) {
+  const ideas = side === 'ideas'
+  const noun = ideas ? 'ideas' : 'packages'
   const [packages, setPackages] = useState<PackageEntry[] | null>(null)
+  /** Ideation's log, in the Ideas view. */
+  const [log, setLog] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   // Closed by default: the filters are worth a row of chrome only once someone
   // is filtering, and the list is what the reader came for.
   const [showFilters, setShowFilters] = useState(false)
-  // Ideation's log and proposals are a side of their own, not assets.
-  const [side, setSide] = useState<Side>('assets')
-  const [ideas, setIdeas] = useState<{ log: string | null; ideas: PackageEntry[] }>({ log: null, ideas: [] })
-  const [ideaFilter, setIdeaFilter] = useState('')
   /** The tag group the list is arranged by, kept per project; '' is All. */
-  const [arrange, setArrange] = useState(() => remembered(project, 'assets'))
+  const [arrange, setArrange] = useState(() => remembered(project, side))
   /** The value open under it, or null for its folders. */
   const [folder, setFolder] = useState<string | null>(null)
-  const [ideaArrange, setIdeaArrange] = useState(() => remembered(project, 'ideas'))
-  const [ideaFolder, setIdeaFolder] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
     setPackages(null)
-    setSide('assets')
-    setIdeaFilter('')
-    setIdeas({ log: null, ideas: [] })
-    listIdeas(project).then((got) => live && setIdeas(got)).catch(() => {})
+    setLog(null)
+    setFilter('')
     // A tag chosen in one project means nothing in the next.
     setPicked([])
     setShowFilters(false)
-    setArrange(remembered(project, 'assets'))
+    setArrange(remembered(project, side))
     setFolder(null)
-    setIdeaArrange(remembered(project, 'ideas'))
-    setIdeaFolder(null)
-    listPackages(project)
-      .then((got) => live && setPackages(got.packages))
+    const listed = side === 'ideas'
+      ? listIdeas(project).then((got) => {
+          if (live) setLog(got.log)
+          return got.ideas
+        })
+      : listPackages(project).then((got) => got.packages)
+    listed
+      .then((got) => live && setPackages(got))
       .catch((err: Error) => live && setError(err.message))
     return () => { live = false }
-  }, [project])
+  }, [project, side])
 
   // The snapshot is what the server had when this opened; the stream is what
   // has happened since. A task tagging packages right now shows up here.
@@ -246,11 +248,6 @@ export function PackageLibrary({
   )
 
   const groups = useMemo(() => groupsOf(entries), [entries])
-  const ideaEntries = useMemo(
-    () => ideas.ideas.map((entry) => ({ ...entry, tags: distinct(entry.tags) })),
-    [ideas],
-  )
-  const ideaGroups = useMemo(() => groupsOf(ideaEntries), [ideaEntries])
 
   const toggle = (tag: string) =>
     setPicked((current) =>
@@ -258,104 +255,22 @@ export function PackageLibrary({
     )
 
   if (error) return <p className="error" style={{ padding: 16 }}>{error}</p>
-  if (packages === null) return <p className="muted" style={{ padding: 16 }}>Loading library…</p>
+  if (packages === null) return <p className="muted" style={{ padding: 16 }}>Loading {ideas ? 'ideas' : 'library'}…</p>
 
-  const hasIdeas = ideas.log !== null || ideas.ideas.length > 0
-  const sides = hasIdeas && (
-    <nav className="tabs library-sides">
-      <button className={side === 'assets' ? 'on' : ''} onClick={() => setSide('assets')}>Assets</button>
-      <button className={side === 'ideas' ? 'on' : ''} onClick={() => setSide('ideas')}>
-        Ideas{ideas.ideas.length > 0 && <span className="tag-count">{ideas.ideas.length}</span>}
-      </button>
-    </nav>
-  )
-
-  if (side === 'ideas') {
-    const words = ideaFilter.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    // Every word has to match, in the name or a tag, so `catalog 2c` narrows.
-    const shownIdeas = ideaEntries.filter((entry) => {
-      const text = [entry.displayName, entry.slug, ...entry.tags].join(' ').toLowerCase()
-      return words.every((word) => text.includes(word))
-    })
-    const { arranged, pool, folders, listed, trail } = arrangement(shownIdeas, ideaGroups, ideaArrange, ideaFolder)
-    return (
-      <div className="library">
-        {sides}
-        <div className="library-search">
-          <input
-            value={ideaFilter}
-            placeholder={`Find among ${ideas.ideas.length} ideas…`}
-            aria-label="Find ideas"
-            onChange={(e) => setIdeaFilter(e.target.value)}
-          />
-          {ideaGroups.length > 0 && (
-            <ArrangeSelect
-              value={arranged}
-              groups={ideaGroups}
-              onChange={(group) => {
-                setIdeaArrange(group)
-                setIdeaFolder(null)
-                remember(project, 'ideas', group)
-              }}
-            />
-          )}
-        </div>
-        <div className="explorer">
-          <div className="explorer-group">
-            {ideas.log && words.length === 0 && !trail && (
-              <button
-                className={`asset-row ${openPath === ideas.log ? 'open' : ''}`}
-                onClick={() => onOpen({ kind: 'asset', path: ideas.log! })}
-              >
-                <span className="asset-icon">📓</span>
-                <span className="asset-main"><span className="asset-name">Ideas log</span></span>
-              </button>
-            )}
-            <FolderRows trail={trail} folders={folders} onPick={setIdeaFolder} />
-            {!folders && listed.map((entry) => (
-              <button
-                key={entry.slug}
-                className={`asset-row ${openPath === entry.path ? 'open' : ''}`}
-                onClick={() =>
-                  onOpen({ kind: 'package', path: entry.path, title: entry.displayName, taskId: entry.taskId ?? undefined })
-                }
-              >
-                <span className="asset-icon">💡</span>
-                <span className="asset-main">
-                  <span className="asset-name">{entry.displayName}</span>
-                  <span className="asset-tags">
-                    {rowTags(entry.tags).map((value) => <span key={value} className="row-tag">{value}</span>)}
-                  </span>
-                </span>
-                {entry.lastActivity ? <span className="asset-size">{ago(entry.lastActivity)}</span> : null}
-              </button>
-            ))}
-            {shownIdeas.length > 0 && pool.length === 0 && (
-              <p className="muted small">Every idea here uses the group:value convention.</p>
-            )}
-            {words.length > 0 && shownIdeas.length === 0 && (
-              <p className="muted small">No ideas match “{ideaFilter}”.</p>
-            )}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (packages.length === 0) {
+  if (packages.length === 0 && !log) {
     return (
       <div className="empty" style={{ padding: 16 }}>
-        {sides}
-        <h2>Nothing generated yet</h2>
+        <h2>{ideas ? 'No ideas yet' : 'Nothing generated yet'}</h2>
         <p className="muted">
-          Ask for something in the chat and it will appear here once the task
-          finishes.
+          {ideas
+            ? 'What ideation proposes will appear here.'
+            : 'Ask for something in the chat and it will appear here once the task finishes.'}
         </p>
       </div>
     )
   }
 
-  const needle = filter.trim().toLowerCase()
+  const words = filter.trim().toLowerCase().split(/\s+/).filter(Boolean)
   // Picking two values from one group means "either" — two difficulties is a
   // range, not a contradiction. Picking across groups means "both". So the
   // rule is OR within a group, AND across groups, and which tags share a group
@@ -366,13 +281,9 @@ export function PackageLibrary({
     wanted.set(group, [...(wanted.get(group) ?? []), tag])
   }
   const shown = entries.filter((p) => {
-    if (
-      needle &&
-      !p.displayName.toLowerCase().includes(needle) &&
-      !p.slug.includes(needle.replace(/\s+/g, '-'))
-    ) {
-      return false
-    }
+    // Every word has to match, in the name or a tag, so `catalog 2c` narrows.
+    const text = [p.displayName, p.slug, ...p.tags].join(' ').toLowerCase()
+    if (!words.every((word) => text.includes(word))) return false
     for (const [, tags] of wanted) {
       if (!tags.some((tag) => p.tags.includes(tag))) return false
     }
@@ -383,11 +294,11 @@ export function PackageLibrary({
 
   return (
     <div className="library">
-      {sides}
       <div className="library-search">
         <input
           value={filter}
-          placeholder={`Find among ${packages.length} packages…`}
+          placeholder={`Find among ${packages.length} ${noun}…`}
+          aria-label={`Find ${noun}`}
           onChange={(e) => setFilter(e.target.value)}
         />
         {groups.length > 0 && (
@@ -397,7 +308,7 @@ export function PackageLibrary({
             onChange={(group) => {
               setArrange(group)
               setFolder(null)
-              remember(project, 'assets', group)
+              remember(project, side, group)
             }}
           />
         )}
@@ -446,6 +357,15 @@ export function PackageLibrary({
       )}
       <div className="explorer">
         <div className="explorer-group">
+          {log && words.length === 0 && picked.length === 0 && !trail && (
+            <button
+              className={`asset-row ${openPath === log ? 'open' : ''}`}
+              onClick={() => onOpen({ kind: 'asset', path: log })}
+            >
+              <span className="asset-icon">📓</span>
+              <span className="asset-main"><span className="asset-name">Ideas log</span></span>
+            </button>
+          )}
           <FolderRows trail={trail} folders={folders} onPick={setFolder} />
           {!folders && listed.map((entry) => (
             <button
@@ -460,7 +380,7 @@ export function PackageLibrary({
                 })
               }
             >
-              <span className="asset-icon">📦</span>
+              <span className="asset-icon">{ideas ? '💡' : '📦'}</span>
               {/* Name and tags share a column: a tag list beside the name
                   squeezes it until it wraps mid-word. */}
               <span className="asset-main">
@@ -480,12 +400,12 @@ export function PackageLibrary({
             </button>
           ))}
           {shown.length > 0 && pool.length === 0 && (
-            <p className="muted small">Every item here uses the group:value convention.</p>
+            <p className="muted small">Every {ideas ? 'idea' : 'item'} here uses the group:value convention.</p>
           )}
-          {shown.length === 0 && (
+          {shown.length === 0 && packages.length > 0 && (
             <p className="muted small">
-              Nothing matches{needle && ` “${filter}”`}
-              {needle && picked.length > 0 && ' with'}
+              Nothing matches{words.length > 0 && ` “${filter}”`}
+              {words.length > 0 && picked.length > 0 && ' with'}
               {picked.length > 0 && ` ${picked.map((t) => split(t).value).join(' + ')}`}.
             </p>
           )}

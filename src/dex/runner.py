@@ -601,30 +601,33 @@ class TaskRunner:
 
         @tool(
             "start_task",
-            "Start a new task in a thread of this project, for work this task needs but should not do "
-            "itself (an asset in its own asset thread, say). Use it sparingly: only when what exists "
+            "Start a new task for work this task needs but should not do itself (an asset, say). It "
+            "runs in the thread of the skill that makes it, so that thread stays the one place for "
+            "that kind of work. Use it sparingly: only when what exists "
             "cannot do, after find_tasks found nothing to continue. The brief must stand on its own: "
             "what to make, which skill, the package name, the project's conventions (tags), and what "
             "done means. Every task started spends the operator's usage. This task then depends on it: "
             "when this turn ends it is blocked until that task is done, then resumed to review the "
             "result and finish (wait_for_tasks parks it sooner).",
             {"type": "object", "properties": {
-                "thread": {"type": "string", "description": "The thread's title or id (see project_threads)."},
+                "skill": {"type": "string", "description": "The skill that makes this. dex puts the task in "
+                          "that skill's thread, and makes the thread if there is none. Use this, not `thread`."},
+                "thread": {"type": "string", "description": "An existing thread's title or id (see "
+                           "project_threads), to pick among those of a skill, or for work no skill owns."},
                 "title": {"type": "string", "description": "A short title for the task."},
                 "brief": {"type": "string", "description": "The full brief, as the task will read it."},
                 "slug": {"type": "string", "description": "The package directory name, prefixed by its type "
                          "(dataviz-, background-, story-, …): dex checks the thread is the one that type is made in."},
-                "create_thread": {"type": "boolean", "description": "Make the thread if none matches (default false)."},
-            }, "required": ["thread", "title", "brief", "slug"]},
+            }, "required": ["title", "brief", "slug"]},
         )
         async def start_task(args: dict[str, Any]) -> dict[str, Any]:
             if not str(args.get("slug") or "").strip():
                 return reply("Refused. Give the package a slug with its type prefix (e.g. `dataviz-ravine-bowl`).")
             try:
                 child = await graph.spawn(
-                    self.task, thread=str(args.get("thread") or ""), title=str(args.get("title") or ""),
-                    brief=str(args.get("brief") or ""), slug=args.get("slug") or None,
-                    create_thread=bool(args.get("create_thread")),
+                    self.task, thread=str(args.get("thread") or ""), skill=str(args.get("skill") or ""),
+                    title=str(args.get("title") or ""), brief=str(args.get("brief") or ""),
+                    slug=args.get("slug") or None,
                 )
             except Refused as exc:
                 return reply(f"Refused. {exc}")

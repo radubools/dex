@@ -115,6 +115,7 @@ export function SkillAdmin({
   return (
     <section className="viewer" role="dialog" aria-label="Skills">
       <header className="viewer-bar">
+        <button className="back-btn" onClick={onClose} aria-label="Back">‹</button>
         <span className="viewer-path">Skills{skills ? ` · ${skills.length}` : ''}</span>
         <button
           className="ghost-btn small"
@@ -134,7 +135,6 @@ export function SkillAdmin({
             if (chosen) void upload(chosen)
           }}
         />
-        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>
 
       <div className="viewer-body">

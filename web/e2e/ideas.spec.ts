@@ -1,4 +1,4 @@
-// Ideation (design/24): the Library's Ideas side, a proposal's Approve and
+// Ideation (design/24): the Ideas view, a proposal's Approve and
 // Reject, and the project's switch in Settings. The API is answered in the
 // browser from fixtures.
 //
@@ -50,21 +50,36 @@ async function open(page: Page, available = true, stream = '', extra?: typeof pa
     else if (p.endsWith('/ideation/status')) body = status()
     else if (p.endsWith('/ideation')) { enabled = (request.postDataJSON() as { enabled: boolean }).enabled; body = status() }
     else if (p === '/api/assets' || p.startsWith('/api/assets')) body = { kind: 'dir', path: idea.path, entries: [{ name: `${idea.path}/SPEC.md` }] }
-    else if (/\/skills$/.test(p)) body = { skills: [] }
+    else if (/\/skills$/.test(p)) body = { skills: available ? [{ name: 'power' }] : [] }
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.goto('/?project=alpha&thread=t1&view=library')
   return sent
 }
 
-test('ideas are a side of the Library of their own', async ({ page }) => {
+test('Ideas is a menu item under Library, with a list of its own', async ({ page }) => {
   await open(page)
+  await expect(page.locator('.side-menu .menu-label').nth(2)).toHaveText('Ideas')
   await expect(page.locator('.asset-row', { hasText: 'Tree' })).toBeVisible()
   await expect(page.locator('.asset-row', { hasText: 'Better timbres' })).toHaveCount(0)
   await page.getByRole('button', { name: /^Ideas/ }).click()
   await expect(page.locator('.asset-row', { hasText: 'Ideas log' })).toBeVisible()
   await expect(page.locator('.asset-row', { hasText: 'Better timbres' })).toBeVisible()
   await expect(page.locator('.asset-row', { hasText: 'Tree' })).toHaveCount(0)
+  await expect(page).toHaveURL(/view=ideas/)
+  await expect(page.locator('.topbar-title')).toHaveText('Ideas')
+  await page.getByRole('button', { name: /Filters/ }).click()
+  await page.locator('.tag-pill', { hasText: 'approved' }).first().click()
+  await expect(page.locator('.asset-row')).toHaveText([/Fix the catalog/])
+})
+
+test('without the Power skill there is no Ideas, not even by link', async ({ page }) => {
+  await open(page, false)
+  await expect(page.locator('.side-menu .menu-label', { hasText: 'Library' })).toBeVisible()
+  await expect(page.locator('.side-menu .menu-label', { hasText: 'Ideas' })).toHaveCount(0)
+  await page.goto('/?project=alpha&view=ideas')
+  await expect(page.locator('.home-card')).toBeVisible()
+  await expect(page).not.toHaveURL(/view=ideas/)
 })
 
 test('a proposal is approved or rejected beside its spec', async ({ page }) => {
@@ -113,7 +128,7 @@ test('ideas can be searched by name or tag, every word narrowing', async ({ page
   await search.fill('3c')
   await expect(page.locator('.asset-row')).toHaveText([/Fix the catalog/])
   await search.fill('catalog pending')
-  await expect(page.getByText('No ideas match')).toBeVisible()
+  await expect(page.getByText('Nothing matches')).toBeVisible()
   await search.fill('')
   await expect(page.locator('.asset-row')).toHaveCount(3)
 })
@@ -171,7 +186,7 @@ test('No group arranges what stays out of the group:value convention', async ({ 
   await expect(page.locator('.asset-row')).toHaveText([/No group \/ no tag/, /plain/])
 })
 
-test('Arrange works on the Ideas side, kept apart from the assets', async ({ page }) => {
+test('Arrange works on Ideas, kept apart from the assets', async ({ page }) => {
   await open(page)
   await page.getByRole('button', { name: /^Ideas/ }).click()
   const arrange = page.getByLabel('Arrange')
@@ -189,25 +204,18 @@ test('Arrange works on the Ideas side, kept apart from the assets', async ({ pag
   await arrange.selectOption('todo')
 
   await page.reload()
-  await expect(page.getByLabel('Arrange')).toHaveValue('')
-  await page.getByRole('button', { name: /^Ideas/ }).click()
   await expect(page.getByLabel('Arrange')).toHaveValue('todo')
+  await page.getByRole('button', { name: 'Library', exact: true }).click()
+  await expect(page.getByLabel('Arrange')).toHaveValue('')
   expect(await page.evaluate(() => localStorage.getItem('dex.library.arrange.alpha.ideas'))).toBe('todo')
   expect(await page.evaluate(() => localStorage.getItem('dex.library.arrange.alpha'))).toBeNull()
 })
 
-test('the filter shows one intent, and Main is always there to post in', async ({ page }) => {
+test('the list has no filters, Main comes first, and a routed note goes to its thread', async ({ page }) => {
   await open(page)
   await page.goto('/?project=alpha&thread=t1')
-  const rows = page.locator('.thread-title')
-  await expect(rows).toHaveText([/Main/, /Alpha · design/, /Music/])
-  await page.locator('.intent-filter').getByRole('button', { name: 'Skills' }).click()
-  await expect(rows).toHaveText([/Main/, /Music/])
-  await page.locator('.intent-filter').getByRole('button', { name: 'Design' }).click()
-  await expect(rows).toHaveText([/Main/, /Alpha · design/])
-  await page.reload()
-  await expect(rows).toHaveText([/Main/, /Alpha · design/])
-  await page.locator('.intent-filter').getByRole('button', { name: 'All' }).click()
+  await expect(page.locator('.thread-title')).toHaveText([/Main/, /Alpha · design/, /Music/])
+  await expect(page.locator('.intent-filter')).toHaveCount(0)
   await page.locator('.routed').click()
   await expect(page).toHaveURL(/thread=t3/)
 })
@@ -240,7 +248,7 @@ test('home is a prompt with attachments, the menu stays, and sending goes to Mai
 test('the side menu labels its items, and Chat folds the threads under it', async ({ page }) => {
   await open(page)
   const chat = page.locator('.menu-item', { hasText: 'Chat' })
-  await expect(page.locator('.side-menu .menu-label')).toHaveText(['Home', 'Library', 'Task graph', 'Notifications', 'Guide', 'Chat', 'Review feed', 'Cost dashboard'])
+  await expect(page.locator('.side-menu .menu-label')).toHaveText(['Home', 'Library', 'Ideas', 'Task graph', 'Guide', 'Chat', 'Review feed', 'Cost dashboard'])
   await chat.click()
   await expect(page).not.toHaveURL(/view=library/)
   await expect(page.locator('.thread-title').first()).toBeVisible()
@@ -253,8 +261,11 @@ test('the side menu labels its items, and Chat folds the threads under it', asyn
   await expect(page.locator('.brand')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '＋ New thread' })).toBeVisible()
   await expect(page.locator('.side-menu').getByRole('button', { name: 'Settings' })).toHaveCount(0)
-  await expect(page.locator('.side-menu').getByRole('button', { name: 'Notifications' })).toBeVisible()
+  await expect(page.locator('.side-menu').getByRole('button', { name: 'Notifications' })).toHaveCount(0)
   await expect(page.locator('.topbar button:not(.back-btn)')).toHaveCount(0)
+  const bell = (await page.getByRole('button', { name: 'Notifications' }).boundingBox())!
+  expect(bell.x + bell.width).toBeGreaterThan((page.viewportSize()?.width ?? 0) - 12)
+  expect(bell.y).toBeLessThanOrEqual(10)
   await expect(page.locator('.side-foot').getByRole('button', { name: 'Settings' })).toBeVisible()
   await page.getByRole('button', { name: 'Settings' }).click()
   await expect(page.getByRole('dialog', { name: 'Settings' }).getByText('Open cost dashboard')).toHaveCount(0)
@@ -268,6 +279,16 @@ test('Settings stays pinned while the menu scrolls, and a thread is one short li
   expect(await menu.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
   const row = await page.locator('.thread-open').first().boundingBox()
   expect(row!.height).toBeLessThan(40)
+})
+
+test('New thread from another view opens the new thread', async ({ page }) => {
+  await open(page)
+  await page.route('**/api/threads', (route) => route.request().method() === 'POST'
+    ? route.fulfill({ json: { thread: { ...thread, id: 't3', title: 'New thread', kind: 'chat', intent: 'task' } } })
+    : route.fallback())
+  await page.getByRole('button', { name: '＋ New thread' }).click()
+  await expect(page).toHaveURL(/thread=t3/)
+  await expect(page.locator('.composer textarea')).toBeVisible()
 })
 
 test('the project picker opens fully on screen from the sidebar', async ({ page }) => {
@@ -321,3 +342,17 @@ test.describe('on a phone', () => {
     await expect(button).toBeInViewport()
   })
 })
+
+test('a thread is tied to a skill from its chat', async ({ page }) => {
+  let sent: unknown = null
+  await open(page)
+  await page.route('**/api/projects/alpha/skills', (route) => route.fulfill({ json: { skills: [{ name: 'game-music', version: 'a1', description: '' }] } }))
+  await page.route('**/api/threads/t3/skill', (route) => {
+    sent = route.request().postDataJSON()
+    return route.fulfill({ json: { thread: { ...thread, id: 't3' } } })
+  })
+  await page.goto('/?project=alpha&thread=t3')
+  await page.locator('.thread-tie select').selectOption('game-music')
+  await expect.poll(() => sent).toEqual({ skill: 'game-music' })
+})
+

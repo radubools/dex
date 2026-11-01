@@ -38,6 +38,8 @@ class PlannedTask:
     #: "package" for ordinary work, "project" for one small uniform edit across
     #: every package the project already has.
     scope: str = "package"
+    #: The skill that makes this, when it has a thread: the task runs there.
+    skill: str = ""
     #: Where in the attached material this task's work is, when a survey found
     #: it. Carried as the survey emitted it so the operator can open the source
     #: at that spot, and echoed into `problem` so the worker knows its bounds.
@@ -51,6 +53,7 @@ class PlannedTask:
             "updates": self.updates,
             "package": self.package,
             "scope": self.scope,
+            "skill": self.skill,
             "anchor": self.anchor,
         }
 
@@ -88,6 +91,7 @@ async def plan_from_message(
     guide: str = "",
     survey: str = "",
     project_files: list[tuple[str, int]] | None = None,
+    skills: list[str] | None = None,
 ) -> Plan:
     """Ask a short agent run to split the message into independent tasks.
 
@@ -112,7 +116,7 @@ async def plan_from_message(
 
     chunks: list[str] = []
     prompt = planner_prompt(
-        message, existing, project, guide, survey, project_files=project_files
+        message, existing, project, guide, survey, project_files=project_files, skills=skills
     )
     async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, AssistantMessage):
@@ -282,6 +286,7 @@ def parse_plan(raw: str, existing: list[str]) -> Plan:
             PlannedTask(
                 title=title, problem=problem, slug=slug, updates=updates,
                 package=package, scope=scope, anchor=_anchor_of(entry),
+                skill=str(entry.get("skill") or ""),
             )
         )
 

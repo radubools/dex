@@ -112,6 +112,11 @@ class Skill:
     updated: float = 0.0
     #: Python packages its utils import, beyond the standard library.
     requires: list[str] = field(default_factory=list)
+    #: The title of the thread this skill's work goes in, which dex makes when
+    #: it is first needed. Empty for a skill with no thread of its own.
+    thread: str = ""
+    #: Other skills build on it, so a thread is theirs even if it used this most.
+    base: bool = False
 
     @property
     def utils_dir(self) -> Path:
@@ -293,6 +298,8 @@ def read(path: Path) -> Skill | None:
         version=path.name,
         updated=float(data.get("updated") or 0.0),
         requires=[str(r) for r in data.get("requires") or []],
+        thread=str(data.get("thread") or ""),
+        base=bool(data.get("base")),
     )
 
 
@@ -394,6 +401,8 @@ def publish(skill: Skill) -> Skill:
                 "version": skill.version,
                 "updated": skill.updated,
                 "requires": skill.requires,
+                **({"thread": skill.thread} if skill.thread else {}),
+                **({"base": True} if skill.base else {}),
             },
             indent=2,
         )
@@ -655,6 +664,12 @@ def _merge_rules(project_dir: Path, chosen: list[Skill]) -> None:
 
     existing["rules"] = merged
     path.write_text(json.dumps(existing, indent=2) + "\n")
+
+
+def thread_skills(workspace: Path, project_dir: Path) -> dict[str, Skill]:
+    """The project's skills that declare a thread, as it has them enabled."""
+    found = (find(workspace, name, version) for name, version in read_enabled(project_dir).skills.items())
+    return {s.name: s for s in found if s is not None and s.thread}
 
 
 def enabled_utils_dirs(workspace: Path, project_dir: Path) -> tuple[Path, ...]:

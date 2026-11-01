@@ -154,6 +154,8 @@ ALTER TABLE threads ADD COLUMN IF NOT EXISTS project TEXT REFERENCES projects(sl
 -- 'chat' plans and runs tasks; 'project_design' shapes the project's AGENTS.md.
 ALTER TABLE threads ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'chat';
 ALTER TABLE tasks   ADD COLUMN IF NOT EXISTS project TEXT REFERENCES projects(slug) ON DELETE SET NULL;
+-- The skill a thread is tied to: that skill's work goes here (design/26).
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS skill TEXT;
 CREATE INDEX IF NOT EXISTS threads_project ON threads (project, kind, updated_at DESC);
 CREATE INDEX IF NOT EXISTS tasks_project ON tasks (project, created_at);
 

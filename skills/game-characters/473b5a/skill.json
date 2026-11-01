@@ -7,5 +7,6 @@
     "PIL",
     "numpy",
     "scipy"
-  ]
+  ],
+  "thread": "Characters"
 }

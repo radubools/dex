@@ -121,7 +121,10 @@ test('back walks through every pane that led here, in order, and forward again',
   await step(() => page.locator('.task-chip', { hasText: 'Build the widget' }).first().click(), { thread: 'Widgets', task: 'Build the widget', pane: null })
   await page.getByRole('button', { name: /^Files/ }).click()
   await step(() => page.locator('.asset-row', { hasText: 'notes.md' }).click(), { task: 'Build the widget', pane: 'notes.md' })
-  await step(() => page.locator('section.viewer [aria-label="Close"]').click(), { task: 'Build the widget', pane: null })
+  // The pane's ‹ is a step back, so the file it leaves is no longer behind us.
+  await page.locator('section.viewer .back-btn').click()
+  await at(page, { task: 'Build the widget', pane: null })
+  places.pop()
   await step(() => page.locator('.asset-row', { hasText: 'readme.md' }).click(), { task: 'Build the widget', pane: 'readme.md' })
   await step(() => page.getByRole('button', { name: 'Task graph', exact: true }).click(), { view: 'Task graph', task: 'Build the widget', pane: 'readme.md' })
   await step(() => page.getByRole('button', { name: 'Chat', exact: true }).click(), { view: 'Chat', task: 'Build the widget', pane: 'readme.md' })
@@ -193,15 +196,15 @@ test("a pane's ‹ goes back a step, not out of everything", async ({ page }) =>
   await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
   await page.getByRole('button', { name: /^Files/ }).click()
   await page.locator('.asset-row', { hasText: 'notes.md' }).click()
-  await page.locator('section.viewer [aria-label="Close"]').click()
+  await page.locator('section.viewer .back-btn').click()
   await page.locator('.asset-row', { hasText: 'readme.md' }).click()
   await at(page, { task: 'Build the widget', pane: 'readme.md' })
   // The viewer's ‹: where it was opened from (the task, the viewer closed)…
   await page.locator('section.viewer .back-btn').click()
   await at(page, { task: 'Build the widget', pane: null })
-  // …then the browser's back reopens the file before, whose ‹ goes back again.
-  await page.goBack()
-  await at(page, { task: 'Build the widget', pane: 'notes.md' })
+  // …and the browser's forward undoes that step.
+  await page.goForward()
+  await at(page, { task: 'Build the widget', pane: 'readme.md' })
   await page.locator('section.viewer .back-btn').click()
   await at(page, { task: 'Build the widget', pane: null })
   // The task panel's ‹: the thread as it was before the task opened.
@@ -221,9 +224,9 @@ test('views, projects and closing a pane are steps too; the first page is not le
   await at(page, { thread: 'Widgets' })
   await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
   await at(page, { task: 'Build the widget' })
-  await page.locator('.task-panel [aria-label="Close task"]').click()
+  await page.locator('.task-panel .back-btn').click()
   await at(page, { task: null })
-  await page.goBack()
+  await page.goForward()
   await at(page, { task: 'Build the widget' })
   await page.reload()
   // A reload keeps the open panes.
@@ -307,5 +310,18 @@ test('the same view leaves a pane open beside it on a wide screen', async ({ pag
   await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
   await page.locator('.side-menu').getByRole('button', { name: 'Task graph', exact: true }).click()
   await expect(page.locator('.task-panel')).toBeVisible()
+})
+
+test('other work posted in a task activity goes straight to its thread', async ({ page }) => {
+  await open(page)
+  await page.route('**/api/tasks/task-a/messages', (route) => route.request().method() === 'POST'
+    ? route.fulfill({ json: { message: null, routed: { intent: 'task', threadId: 't2', threadTitle: 'Ideas', reason: '' } } })
+    : route.fulfill({ json: { messages: [] } }))
+  await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
+  const note = page.getByPlaceholder('Ask for a change…')
+  await note.fill('Something else entirely')
+  await note.press('Enter')
+  await expect(page.locator('.task-panel')).toHaveCount(0)
+  await expect(thread_(page)).toHaveText('Ideas')
 })
 

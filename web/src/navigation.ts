@@ -14,7 +14,7 @@ import type { ViewerTarget } from './components/Viewer'
  * instead, so back never stops on a place the reader did not choose.
  */
 
-export type View = 'home' | 'chat' | 'feed' | 'library' | 'graph'
+export type View = 'home' | 'chat' | 'feed' | 'library' | 'ideas' | 'graph'
 export type Overlay = 'costs' | 'guide' | 'users' | 'skills' | null
 
 export interface Place {

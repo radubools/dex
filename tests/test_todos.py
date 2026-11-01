@@ -362,7 +362,7 @@ async def test_ideation_always_runs_in_the_power_thread(manager, project, db):
 
 
 async def test_a_thread_merely_starting_with_power_is_not_the_power_thread(manager, project, db):
-    await manager.graph.resolve_thread(project, "Power · design", create=True)
+    await ThreadStore(db).create("Power · design", project)
     first = await manager.todos.discovery(project)
     assert (await ThreadStore(db).get(first.thread_id)).title == "Power"
 
@@ -528,9 +528,9 @@ async def test_tasks_earn_the_chat_and_ideation_tags(manager, project, config):
     earned = await manager.tasks.latest_by_package(project)
     assert earned[chat.slug][3] == ["intent:task", "origin:chat"]
     assert earned[split_run.slug][3] == ["intent:task", "origin:chat"]
-    assert earned[a.slug][3] == ["intent:task", "origin:ideation"]
-    assert earned[idea.slug][3] == ["intent:task", "origin:ideation"]
-    assert earned[ideation.slug][3] == ["intent:task", "origin:ideation"]
+    assert earned[a.slug][3] == ["intent:skill", "origin:ideation"]
+    assert earned[idea.slug][3] == ["intent:skill", "origin:ideation"]
+    assert earned[ideation.slug][3] == ["intent:skill", "origin:ideation"]
     assert earned[plain.slug][3] == ["intent:task"]
     assert not (chat.output_dir(config.assets_dir, project) / "manifest.json").exists()
 

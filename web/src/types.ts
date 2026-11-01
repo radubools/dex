@@ -123,6 +123,8 @@ export type ThreadMessage = {
   data: Partial<Plan> & {
     tasks?: (PlannedTask | Task)[]
     guideChanged?: boolean
+    /** A plan of one task from someone's message: it needed no Run. */
+    autoStarted?: boolean
     project?: string
     /**
      * The run that wrote this message, when one did. A design turn is a task
@@ -169,6 +171,8 @@ export type ThreadSummary = {
   project: string | null
   kind: ThreadKind
   intent: Intent
+  /** The skill it is tied to: that skill's work goes here. */
+  skill?: string | null
   createdAt: number
   updatedAt: number
   messageCount: number

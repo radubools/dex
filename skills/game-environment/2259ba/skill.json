@@ -6,5 +6,6 @@
   "requires": [
     "PIL",
     "numpy"
-  ]
+  ],
+  "thread": "Scenery"
 }

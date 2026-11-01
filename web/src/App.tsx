@@ -1,7 +1,7 @@
-import { Suspense, lazy, useCallback, useMemo, useEffect, useReducer, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
-  can, confirmPlan, logout, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
+  can, confirmPlan, logout, projectSkills, tieThread, createProject, createThread, deleteThread, getHealth, getMe, getSettings,
   getTask, getTaskEvents, getThread, listPackages, listProjects, listTasks, listThreads,
   markProjectViewed, markThreadViewed,
   openStream,
@@ -11,7 +11,7 @@ import {
 } from './api'
 import { initialState, reduce, type TaskView } from './store'
 import { notifyAssetChanged } from './assetChanges'
-import type { Health, Intent, PlannedTask, Project, Routed, TaskGraphNode, ThreadSummary } from './types'
+import type { Health, PlannedTask, Project, Routed, ThreadSummary } from './types'
 import { Chat } from './components/Chat'
 import { Composer } from './components/Composer'
 import { ProjectPicker } from './components/ProjectPicker'
@@ -53,25 +53,11 @@ const VIEWS = [
   { key: 'chat' as const, icon: '💬', label: 'Chat' },
   { key: 'feed' as const, icon: '📺', label: 'Review feed' },
   { key: 'library' as const, icon: '📚', label: 'Library' },
+  // Ideation's log and proposals, for a project with the Power skill (design/24).
+  { key: 'ideas' as const, icon: '💡', label: 'Ideas' },
   // The live task graph: what runs, what waits, and on what (design/18).
   { key: 'graph' as const, icon: '🕸', label: 'Task graph' },
 ]
-
-const INTENTS: { key: Intent | null; label: string }[] = [
-  { key: null, label: 'All' }, { key: 'design', label: 'Design' },
-  { key: 'skill', label: 'Skills' }, { key: 'task', label: 'Tasks' },
-]
-const INTENT_KEY = 'dex.threads.intent'
-
-/** A viewer's convenience, so it lives in the browser, and may not be there. */
-function rememberedIntent(): Intent | null {
-  try {
-    const saved = localStorage.getItem(INTENT_KEY)
-    return INTENTS.find((i) => i.key === saved)?.key ?? null
-  } catch {
-    return null
-  }
-}
 
 const CHAT_OPEN_KEY = 'dex.menu.chat'
 
@@ -96,7 +82,7 @@ function urlState(): {
     thread: params.get('thread'),
     // The bare address is the prompt screen; a thread in it is that thread.
     view:
-      view === 'feed' || view === 'library' || view === 'graph' ? view : params.get('thread') ? 'chat' : 'home',
+      view === 'feed' || view === 'library' || view === 'ideas' || view === 'graph' ? view : params.get('thread') ? 'chat' : 'home',
   }
 }
 
@@ -121,7 +107,6 @@ export default function App() {
   const restored = useRef<Place | null>(navState()?.place ?? null).current
   const [state, dispatch] = useReducer(reduce, initialState)
   const [threads, setThreads] = useState<ThreadSummary[]>([])
-  const [intent, setIntent] = useState<Intent | null>(rememberedIntent)
   const mainThread = threads.find((t) => t.kind === 'main')
   const [chatOpen, setChatOpen] = useState(rememberedChatOpen)
   const pickChatOpen = (open: boolean) => {
@@ -132,21 +117,8 @@ export default function App() {
       // Not kept, then: it still works until the page closes.
     }
   }
-  const pickIntent = (next: Intent | null) => {
-    setIntent(next)
-    try {
-      if (next) localStorage.setItem(INTENT_KEY, next)
-      else localStorage.removeItem(INTENT_KEY)
-    } catch {
-      // Not kept, then: it still works until the page closes.
-    }
-  }
-  const showsNode = useMemo(() => {
-    if (!intent) return undefined
-    const byThread = new Map(threads.map((t) => [t.id, t.intent]))
-    return (node: TaskGraphNode) => (node.threadId ? byThread.get(node.threadId) : 'task') === intent
-  }, [intent, threads])
   const [threadId, setThreadId] = useState<string | null>(urlState().thread)
+  const openThread = threads.find((t) => t.id === threadId)
   const [health, setHealth] = useState<Health | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
   /** Who the caller is. null while the first /api/auth/me is in flight. */
@@ -339,6 +311,22 @@ export default function App() {
     listPackages(project)
       .then(({ packages }) => setHasPackages(packages.length > 0))
       .catch(() => {})
+  }, [project])
+
+  const [enabledSkills, setEnabledSkills] = useState<string[]>([])
+  useEffect(() => {
+    if (!project) return
+    let live = true
+    projectSkills(project)
+      .then((r) => {
+        if (!live) return
+        const names = r.skills.map((s) => s.name)
+        setEnabledSkills(names)
+        // A link or a project switch can land on Ideas where there are none.
+        if (!names.includes('power')) setView((current) => (current === 'ideas' ? 'home' : current))
+      })
+      .catch(() => live && setEnabledSkills([]))
+    return () => { live = false }
   }, [project])
 
   // Threads belong to a project, so switching project reloads the list.
@@ -574,6 +562,7 @@ export default function App() {
     go()
     leavePanes()
     setThreadId(thread.id)
+    setView('chat')
     setActiveTaskId(null)
     setViewing(null)
     setDrawerOpen(false)
@@ -702,8 +691,8 @@ export default function App() {
         <nav className="side-menu" aria-label="Main menu">
           {menuItem('🏠', 'Home', view === 'home', () => showView('home'))}
           {hasPackages && menuItem('📚', 'Library', view === 'library', () => showView('library'))}
+          {enabledSkills.includes('power') && menuItem('💡', 'Ideas', view === 'ideas', () => showView('ideas'))}
           {menuItem('🕸', 'Task graph', view === 'graph', () => showView('graph'))}
-          <NotificationsButton notices={notices} onOpen={openNotice} />
           {menuItem('📖', 'Guide', showGuide, () => showPane('guide'))}
           <button
             className={`menu-item ${view === 'chat' ? 'on' : ''}`}
@@ -724,23 +713,14 @@ export default function App() {
           {chatOpen && (
         <div className="thread-list">
         <button className="thread-new" onClick={() => void newThread()}>＋ New thread</button>
-        <div className="intent-filter" role="group" aria-label="Show threads and tasks for">
-          {INTENTS.map(({ key, label }) => (
-            <button key={label} className={intent === key ? 'on' : ''} aria-pressed={intent === key} onClick={() => pickIntent(key)}>
-              {label}
-            </button>
-          ))}
-        </div>
           {(() => {
-            // Main stays whatever the filter: it is where to post.
-            const matching = threads.filter((t) => t.kind === 'main' || !intent || t.intent === intent)
-            const design = [...matching.filter((t) => t.kind === 'main'), ...matching.filter((t) => t.kind === 'project_design')]
-            const chats = matching.filter((t) => t.kind === 'chat')
+            const design = [...threads.filter((t) => t.kind === 'main'), ...threads.filter((t) => t.kind === 'project_design')]
+            const chats = threads.filter((t) => t.kind === 'chat')
             const row = (thread: ThreadSummary) => (
               <div key={thread.id} className={`thread-row ${thread.id === threadId ? 'on' : ''}`}>
                 <button
                   className="thread-open"
-                  title={[thread.taskIds.length > 0 && `${thread.taskIds.length} tasks`, thread.costUsd && `$${thread.costUsd.toFixed(2)}`].filter(Boolean).join(' · ') || undefined}
+                  title={[thread.skill, thread.taskIds.length > 0 && `${thread.taskIds.length} tasks`, thread.costUsd && `$${thread.costUsd.toFixed(2)}`].filter(Boolean).join(' · ') || undefined}
                   onClick={() => {
                     go()
                     leavePanes()
@@ -832,6 +812,7 @@ export default function App() {
       </aside>
 
       {drawerOpen && <div className="scrim" onClick={() => setDrawerOpen(false)} />}
+      <NotificationsButton notices={notices} onOpen={openNotice} />
 
       <main className="main">
         <header className="topbar">
@@ -842,13 +823,14 @@ export default function App() {
         </span>
         </header>
 
-        {view === 'library' && project ? (
+        {(view === 'library' || view === 'ideas') && project ? (
           <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading library…</p>}>
             <PackageLibrary
-              key={project}
+              key={`${project}:${view}`}
               project={project}
-              liveTags={state.tags[project]}
-              liveSizes={state.sizes[project]}
+              side={view === 'ideas' ? 'ideas' : 'assets'}
+              liveTags={view === 'library' ? state.tags[project] : undefined}
+              liveSizes={view === 'library' ? state.sizes[project] : undefined}
               onOpen={openViewer}
               openPath={viewing?.kind === 'asset' ? viewing.path : undefined}
             />
@@ -857,7 +839,6 @@ export default function App() {
           <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading task graph…</p>}>
             <TaskGraph
               project={project}
-              shows={showsNode}
               changes={graphChanges}
               activeTaskId={activeTaskId}
               onOpenTask={(node) => {
@@ -903,6 +884,21 @@ export default function App() {
           </Suspense>
         ) : (
           <>
+        {/* Which skill's work this thread holds: routing and tasks follow it. */}
+        {openThread?.kind === 'chat' && mayDesign && enabledSkills.length > 0 && (
+          <label className="thread-tie">
+            Skill
+            <select
+              value={openThread.skill ?? ''}
+              onChange={(e) => {
+                void tieThread(openThread.id, e.target.value || null).then(() => refreshThreads())
+              }}
+            >
+              <option value="">None</option>
+              {enabledSkills.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+        )}
         {threadError && (
           <div className="load-error">
             Could not load this conversation: {threadError}
@@ -982,11 +978,6 @@ export default function App() {
             setActiveTaskId(task.id)
             setViewing(null)
           }}
-          onClose={() => {
-            go()
-            setActiveTaskId(null)
-            setViewing(null)
-          }}
         />
       )}
 
@@ -1014,8 +1005,8 @@ export default function App() {
                     view={view}
                     onOpen={openViewer}
                     onBack={() => {}}
-                    onClose={() => {}}
                     onQueued={(taskId, messages) => dispatch({ type: 'queued', taskId, messages })}
+                    onRouted={followRouted}
                     onTasks={(tasks) => dispatch({ type: 'tasks', tasks })}
                     // A resume or re-run is the package's newest run now, so
                     // the tab follows it rather than the attempt it replaced.
@@ -1094,10 +1085,7 @@ export default function App() {
         <UserAdmin
           projects={projects}
           me={me.user}
-          onClose={() => {
-            go()
-            setShowUsers(false)
-          }}
+          onClose={() => back(() => setShowUsers(false))}
         />
       )}
       {/* Gated the same way and for the same reason: the endpoint refuses a
@@ -1107,10 +1095,7 @@ export default function App() {
         <Suspense fallback={null}>
           <SkillAdmin
             projects={projects}
-            onClose={() => {
-              go()
-              setShowSkills(false)
-            }}
+            onClose={() => back(() => setShowSkills(false))}
           />
         </Suspense>
       )}

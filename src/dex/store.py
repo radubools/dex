@@ -88,16 +88,21 @@ class ThreadStore:
         self.db = db
 
     async def create(
-        self, title: str | None = None, project: str | None = None, kind: str = "chat"
+        self, title: str | None = None, project: str | None = None, kind: str = "chat",
+        skill: str | None = None,
     ) -> Thread:
         default = "Project design" if kind == "project_design" else "New thread"
-        thread = Thread(title=(title or default)[:80], project=project, kind=kind)
+        thread = Thread(title=(title or default)[:80], project=project, kind=kind, skill=skill)
         await self.db.pool.execute(
-            """INSERT INTO threads (id, title, created_at, updated_at, project, kind)
-               VALUES ($1, $2, to_timestamp($3), to_timestamp($4), $5, $6)""",
-            thread.id, thread.title, thread.created_at, thread.updated_at, project, kind,
+            """INSERT INTO threads (id, title, created_at, updated_at, project, kind, skill)
+               VALUES ($1, $2, to_timestamp($3), to_timestamp($4), $5, $6, $7)""",
+            thread.id, thread.title, thread.created_at, thread.updated_at, project, kind, skill,
         )
         return thread
+
+    async def tie(self, thread_id: str, skill: str | None) -> None:
+        """Tie a thread to a skill, or untie it."""
+        await self.db.pool.execute("UPDATE threads SET skill = $2 WHERE id = $1", thread_id, skill)
 
     async def viewed(self, thread_id: str) -> str | None:
         """Records that the thread was opened, and its project with it
@@ -122,7 +127,7 @@ class ThreadStore:
         updated; or, `by_viewed`, the last opened first (`last_viewed_at`),
         then the never-opened ones, newest first."""
         rows = await self.db.pool.fetch(
-            """SELECT t.id, t.title, t.project, t.kind,
+            """SELECT t.id, t.title, t.project, t.kind, t.skill,
                       extract(epoch from t.created_at)::float8 AS created_at,
                       extract(epoch from t.updated_at)::float8 AS updated_at,
                       (SELECT count(*) FROM messages m WHERE m.thread_id = t.id) AS message_count,
@@ -148,6 +153,7 @@ class ThreadStore:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 task_ids=list(row["task_ids"] or []),
+                skill=row["skill"],
                 messages=[],
                 message_count=row["message_count"],
                 project=row["project"],
@@ -158,7 +164,7 @@ class ThreadStore:
 
     async def get(self, thread_id: str) -> Thread | None:
         row = await self.db.pool.fetchrow(
-            """SELECT id, title, project, kind,
+            """SELECT id, title, project, kind, skill,
                       extract(epoch from created_at)::float8 AS created_at,
                       extract(epoch from updated_at)::float8 AS updated_at
                FROM threads WHERE id = $1""",
@@ -182,6 +188,7 @@ class ThreadStore:
             updated_at=row["updated_at"],
             project=row["project"],
             kind=row["kind"],
+            skill=row["skill"],
             task_ids=[r["id"] for r in task_ids],
             messages=[
                 ThreadMessage(
@@ -333,7 +340,7 @@ class TaskStore:
         rows = await self.db.pool.fetch(
             """SELECT DISTINCT ON (coalesce(output_slug, slug))
                       coalesce(output_slug, slug) AS package, tasks.id, tasks.title,
-                      th.kind AS thread_kind, th.title AS thread_title,
+                      th.kind AS thread_kind, th.skill AS thread_skill,
                       count(c.task_id) OVER package AS counted,
                       sum(c.code_lines) OVER package AS code_lines,
                       sum(c.asset_lines) OVER package AS asset_lines,
@@ -352,7 +359,7 @@ class TaskStore:
         )
         return {
             row["package"]: (row["id"], row["title"], row["last_activity"],
-                             [f"intent:{intent_of(row['thread_kind'], row['thread_title'])}"]
+                             [f"intent:{intent_of(row['thread_kind'], row['thread_skill'])}"]
                              + ["origin:chat"] * row["from_chat"] + ["origin:ideation"] * row["from_ideation"]
                              + (size_tags(int(row["code_lines"]), int(row["asset_lines"])) if row["counted"] else []))
             for row in rows

@@ -203,6 +203,16 @@ test('(c) clicking a notice marks it read at the click and opens its task', asyn
   await expect(page.locator('.notif-badge')).toHaveText('1')
 })
 
+test('a plan that started by itself waits on nobody', async ({ page }) => {
+  await open(page)
+  await emit(page, {
+    type: 'thread_message', threadId: 't2',
+    message: { id: 'p9', role: 'dex', kind: 'plan', text: 'One task.', data: { autoStarted: true, tasks: [{ title: 'One', problem: '', slug: 'one' }] }, ts: now },
+  })
+  await expect(page.locator('.notif-badge')).toHaveCount(0)
+  await expect(hud(page)).toHaveCount(0)
+})
+
 test('(c) a plan waiting on approval opens its thread', async ({ page }) => {
   await open(page)
   await emit(page, {

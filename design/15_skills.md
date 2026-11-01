@@ -91,6 +91,12 @@ part to get right first.
 
 ---
 
+## Its thread
+
+`skill.json` may say which thread the skill's work goes in (`"thread": "Music"`), and
+`"base": true` for one other skills build on. Neither is part of the version. See
+[26](26_intent_routing.md#threads-tied-to-skills).
+
 ## Versions
 
 Every skill carries a **5–6 character content hash**, and a version is a

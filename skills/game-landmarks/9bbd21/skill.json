@@ -7,5 +7,6 @@
     "PIL",
     "numpy",
     "pytest"
-  ]
+  ],
+  "thread": "Landmarks"
 }

@@ -26,7 +26,7 @@ beside `ask_user`:
 |---|---|
 | `project_threads` | Lists the project's threads (asset work has one per kind of asset). |
 | `find_tasks(query, thread?)` | Finds existing tasks by words in title, slug, package or brief: one entry per package, its latest attempt. |
-| `start_task(thread, title, brief, slug?, create_thread?)` | Starts a new task in a thread of the same project. The thread records who asked. |
+| `start_task(title, brief, slug, skill?, thread?)` | Starts a new task in the thread of the skill that makes it (design/26), or an existing thread named, of the same project. The thread records who asked. |
 | `continue_task(task, message)` | Asks an existing task for a change: a follow-up note to its latest attempt (`queue_message`), which becomes a new attempt in the same package. |
 | `task_status(tasks?)` | Where tasks stand now: state, done, package directory, summary or error. |
 | `wait_for_tasks(tasks?, wait_s?)` | Waits up to `wait_s` (≤ 300 s) in the turn, then parks the task as **blocked** (below). |
@@ -45,7 +45,7 @@ Refused, with the reason returned to the agent:
   or through others, or on its own package;
 - **too deep**: a task `MAX_DEPTH` (3) levels below a waiter may not start more;
 - **too many**: one task may start or continue at most `MAX_DEPS` (50);
-- another project, an unknown thread (unless `create_thread`), an empty brief.
+- another project, an unknown thread, a skill with no thread, an empty brief.
 
 ### Asset work always goes to its own task, in its own thread
 

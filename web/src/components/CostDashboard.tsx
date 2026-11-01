@@ -122,7 +122,6 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
       <header className="viewer-bar">
         <button className="back-btn" onClick={onBack ?? onClose} aria-label="Back">‹</button>
         <span className="viewer-path">Cost</span>
-        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>
 
       <div className="viewer-body">

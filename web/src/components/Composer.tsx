@@ -49,7 +49,7 @@ export function Composer({
         value={draft}
         rows={1}
         enterKeyHint="send"
-        placeholder={placeholder ?? 'Describe what you want generated…'}
+        placeholder={placeholder ?? 'Ask for anything…'}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           // Shift+Return is the only way to get a newline; plain Return sends.

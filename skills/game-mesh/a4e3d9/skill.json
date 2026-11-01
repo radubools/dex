@@ -6,5 +6,7 @@
   "requires": [
     "PIL",
     "numpy"
-  ]
+  ],
+  "thread": "Models",
+  "base": true
 }

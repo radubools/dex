@@ -77,6 +77,7 @@ erDiagram
     }
     threads {
         text id PK
+        text skill
         text title
         text project FK "CASCADE"
         text kind "chat or project_design"

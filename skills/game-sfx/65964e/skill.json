@@ -8,5 +8,6 @@
     "numpy",
     "pytest",
     "scipy"
-  ]
+  ],
+  "thread": "Sound effects"
 }

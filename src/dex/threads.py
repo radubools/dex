@@ -39,18 +39,13 @@ ThreadKind = Literal["chat", "project_design", "main"]
 
 Intent = Literal["design", "skill", "task"]
 
-#: Chat threads for the project at large: they hold no one kind of asset.
-GENERAL_THREADS = ("Chats", "Power")
 
-
-def intent_of(kind: str | None, title: str | None) -> Intent:
-    """What a thread is for, so what its tasks are for (design/26). Never stored:
-    the thread a message lands in decides it, and old threads have one too."""
+def intent_of(kind: str | None, skill: str | None) -> Intent:
+    """What a thread is for, so what its tasks are for (design/26). Worked out from
+    what a thread is, never guessed from its name."""
     if kind == "project_design":
         return "design"
-    if kind is None or kind == "main" or title in GENERAL_THREADS:
-        return "task"
-    return "skill"
+    return "skill" if skill else "task"
 
 
 @dataclass
@@ -68,6 +63,12 @@ class Thread:
     #: thread shapes the project's guide; a `chat` thread plans and runs tasks.
     project: str | None = None
     kind: ThreadKind = "chat"
+    #: The skill this thread is tied to: its work comes here (design/26).
+    skill: str | None = None
+
+    @property
+    def intent(self) -> Intent:
+        return intent_of(self.kind, self.skill)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -79,7 +80,8 @@ class Thread:
             "taskIds": list(self.task_ids),
             "project": self.project,
             "kind": self.kind,
-            "intent": intent_of(self.kind, self.title),
+            "intent": self.intent,
+            "skill": self.skill,
         }
 
     def to_json(self) -> dict[str, Any]:

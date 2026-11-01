@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from .bus import EventBus
 from . import widgets
-from .deps import Refused
+from .deps import POWER_SKILL, Refused
 
 #: An order-of-magnitude tag: `code-lines:2c` or `asset-lines:1a` (changes.py).
 SIZE_TAG = re.compile(r"(code|asset)-lines:[0-6][ca]")
@@ -50,7 +50,7 @@ from .db import Database, import_json_threads
 from . import animation
 from . import designer, local_sources, skills, surveyor, uploads
 from .feed import ReviewStore, discover
-from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread
+from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread, tie_threads
 from .router import Route, route_message
 from .projects import ProjectStore
 from .models import Event, TaskState
@@ -124,6 +124,8 @@ class SubmitRequest(BaseModel):
     #: An existing package this rewrites; it writes into that directory rather
     #: than creating one beside it.
     updates: str | None = None
+    #: The skill that makes it, when a plan named one: it runs in that skill's thread.
+    skill: str = ""
     #: A package this task fills alongside its siblings. Unlike `updates` it
     #: need not exist yet. Ignored when `updates` is set: that one names a
     #: directory known to be there.
@@ -194,6 +196,10 @@ class IdeationRequest(BaseModel):
 
 class IdeationSwitch(BaseModel):
     enabled: bool
+
+
+class ThreadSkillRequest(BaseModel):
+    skill: str | None = None
 
 
 class ThreadMessageRequest(BaseModel):
@@ -549,6 +555,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         finally:
             planning_threads.discard(thread_id)
             bus.publish(Event(type="thread_busy", data={"threadId": thread_id, "busy": False}))
+
+    routed_turns: set[asyncio.Task[None]] = set()
 
     CHAT_ATTEMPTS = 3
 
@@ -1317,14 +1325,14 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 return await _follow_up(origin, route, body.text, note)
             if route is not None and route.new_task:
                 attached = uploads.resolve(sources, body.uploads)
-                if route.thread_id or route.new_thread:
+                if route.thread_id or route.skill:
                     origin, moved = await _move_to(origin, route, body.text, attached)
                 else:
                     await publish_message(origin.id, ThreadMessage(role="user", kind="text", text=body.text))
                     origin = await threads.get(origin.id)
                     moved = {"intent": route.intent, "threadId": origin.id, "threadTitle": origin.title,
                              "reason": route.reason}
-                await _turn(origin, body.text, note, attached)
+                _after_reply(_turn(origin, body.text, note, attached))
                 return {"message": None, "routed": moved}
         message = await tasks.queue_message(task_id, note)
         if message is None:
@@ -1411,6 +1419,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                         body.message, config, existing, model,
                         project=project_slug, guide=projects.read_guide(project_slug),
                         project_files=_project_files(config, project_slug),
+                            skills=_planner_skills(project_slug),
                     )
 
             plan: Plan = await _with_retries("planning", attempt)
@@ -1439,21 +1448,49 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         attached = uploads.resolve(
             sources, body.uploads + [u for t in body.tasks for u in t.uploads]
         )
+        return {"tasks": await _start_planned(body.thread_id, project, body.tasks, attached)}
+
+    # --------------------------------------------------------------- threads
+
+    def _declared(project: str) -> dict[str, str]:
+        """Each enabled skill's thread title, for those that keep one."""
+        found = skills.thread_skills(config.workspace, config.project_dir(project))
+        return {name: skill.thread for name, skill in found.items()}
+
+    def _planner_skills(project: str) -> list[str]:
+        return [f"{name}: its thread is {title}" for name, title in sorted(_declared(project).items())]
+
+    async def _thread_of(row: Any, origin: Any, project: str) -> str | None:
+        """Where a plan's row runs: its skill's thread, or where it was planned."""
+        skill = getattr(row, "skill", "")
+        if not skill or (origin is not None and origin.skill == skill):
+            return origin.id if origin else None
+        try:
+            return (await tasks.graph.skill_thread(project, skill))["id"]
+        except Refused:
+            return origin.id if origin else None
+
+    async def _start_planned(thread_id: str | None, project: str, planned: list[Any], attached: list[Any]) -> list[dict[str, Any]]:
+        """Queue a plan's rows, each in its skill's thread, and say so in each thread."""
+        sources = config.project_datasets(project)
+        origin = await threads.get(thread_id) if thread_id else None
+        targets = [await _thread_of(t, origin, project) for t in planned]
+        by_id = {t: await threads.get(t) for t in set(targets) if t}
         created = [
             await tasks.submit(
                 uploads.with_sources(t.problem, attached, sources),
-                t.title, t.slug, body.thread_id, project=project,
+                t.title, t.slug, target, project=project,
                 # Rewriting a package means writing into its directory, not
                 # beside it — and so does joining siblings in a shared one. The
                 # task still gets a slug of its own for identity.
                 output_slug=t.updates or t.package or None,
-                scope=t.scope,
+                scope="power" if target and by_id[target].skill == POWER_SKILL else t.scope,
                 # What the operator's own material contributed to this task.
                 # It came from the survey, through the plan, and is kept on the
                 # task so the Files tab can show the input beside the output.
                 anchor=t.anchor,
             )
-            for t in body.tasks
+            for t, target in zip(planned, targets, strict=True)
         ]
         # The slug a task ends up with is not the slug the plan asked for: a
         # collision makes `slugify` append a suffix, so a plan row for
@@ -1461,22 +1498,20 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         # for is what lets the plan card find its own tasks again, instead of
         # showing them as never started and offering to run them a second time.
         payload = [
-            {**task.to_json(config.assets_dir), "plannedSlug": planned.slug or task.slug}
-            for planned, task in zip(body.tasks, created, strict=True)
+            {**task.to_json(config.assets_dir), "plannedSlug": row.slug or task.slug}
+            for row, task in zip(planned, created, strict=True)
         ]
-        if body.thread_id and await threads.get(body.thread_id):
-            await publish_message(
-                body.thread_id,
-                ThreadMessage(
-                    role="dex",
-                    kind="tasks",
-                    text=f"Started {len(created)} task{'s' if len(created) != 1 else ''}.",
-                    data={"tasks": payload},
-                ),
-            )
-        return {"tasks": payload}
-
-    # --------------------------------------------------------------- threads
+        started = lambda rows, said="": ThreadMessage(  # noqa: E731
+            role="dex", kind="tasks", data={"tasks": rows},
+            text=f"{said}Started {len(rows)} task{'s' if len(rows) != 1 else ''}.",
+        )
+        if origin is not None:
+            await publish_message(origin.id, started(payload))
+        for target, thread in by_id.items():
+            if origin is None or target != origin.id:
+                rows = [row for row, at in zip(payload, targets, strict=True) if at == target]
+                await publish_message(target, started(rows, f"From {origin.title}. " if origin else ""))
+        return payload
 
     async def publish_message(thread_id: str, message: ThreadMessage) -> None:
         await threads.append(thread_id, message)
@@ -1493,6 +1528,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         access.check(chosen)
         await ensure_design_thread(db, projects, chosen)
         await ensure_main_thread(db, chosen)
+        await tie_threads(db, config, chosen)
         costs = await threads.costs_by_thread()
         return {
             "project": chosen,
@@ -1559,6 +1595,19 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     async def unhide_thread(thread_id: str) -> dict[str, bool]:
         return {"ok": await threads.unhide(thread_id)}
 
+    @app.put("/api/threads/{thread_id}/skill", dependencies=thread_guard)
+    async def tie_thread(thread_id: str, body: ThreadSkillRequest, access: Access = Depends(access_dep)) -> dict[str, Any]:
+        """Tie a thread to a skill the project has on, or untie it with none."""
+        access.require(CAP_DESIGN)
+        thread = await threads.get(thread_id)
+        if thread is None or thread.kind != "chat":
+            raise HTTPException(409, "only a chat thread can be tied to a skill")
+        if body.skill and body.skill not in skills.read_enabled(config.project_dir(thread.project)).skills:
+            raise HTTPException(409, f"{body.skill} is not enabled in this project")
+        await threads.tie(thread_id, body.skill or None)
+        fresh = await threads.get(thread_id)
+        return {"thread": fresh.summary()}
+
     @app.post("/api/threads/{thread_id}/messages", dependencies=thread_guard)
     async def post_message(
         thread_id: str, body: ThreadMessageRequest, access: Access = Depends(access_dep)
@@ -1601,8 +1650,22 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             if route.task_id:
                 return await _follow_up(thread, route, body.text, prompt)
             thread, moved = await _move_to(thread, route, body.text, attached)
-        reply = await _turn(thread, body.text, prompt, attached)
-        return {**reply, "routed": moved} if moved else reply
+        if moved:
+            _after_reply(_turn(thread, body.text, prompt, attached))
+            return {"routed": moved}
+        return await _turn(thread, body.text, prompt, attached)
+
+    def _after_reply(turn: Awaitable[Any]) -> None:
+        """Planning takes minutes, and whoever posted is being taken to the thread now.
+        It reports in the thread as it always does: busy, then the plan or the error."""
+        async def run() -> None:
+            try:
+                await turn
+            except Exception:
+                log.exception("a routed turn failed")
+        task = asyncio.create_task(run())
+        routed_turns.add(task)
+        task.add_done_callback(routed_turns.discard)
 
     async def _route(thread: Any, text: str, access: Access, on_task: Any = None) -> Route | None:
         """Where a message belongs, or None for where it is. A failure leaves it there."""
@@ -1612,6 +1675,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         route = await route_message(
             text, config, here=thread, threads=listed, tasks=recent,
             skills=sorted(skills.read_enabled(config.assets_dir / project).skills),
+            declared=_declared(project),
             guide=projects.read_guide(project),
             model=await SettingsStore(db).model_for(project, config.planner_model), on_task=on_task,
         )
@@ -1640,16 +1704,15 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
     async def _move_to(origin: Any, route: Route, text: str, attached: list[Any]) -> tuple[Any, dict[str, Any]]:
         """The message belongs in another thread: it is posted there, and said so here."""
-        if route.thread_id:
-            target = await threads.get(route.thread_id)
-        else:
-            target = await threads.create(route.new_thread, project=origin.project)
+        thread_id = route.thread_id or (await tasks.graph.skill_thread(origin.project, route.skill))["id"]
+        target = await threads.get(thread_id)
         await publish_message(target.id, ThreadMessage(
             role="user", kind="text", text=text,
             data={"attachments": [u.name for u in attached]} if attached else {},
         ))
-        moved = await _route_note(origin, target.id, target.title, route)
-        return await threads.get(target.id), moved
+        # Read again: the message may just have named it.
+        target = await threads.get(target.id)
+        return target, await _route_note(origin, target.id, target.title, route)
 
     async def _turn(thread: Any, text: str, prompt: str, attached: list[Any]) -> dict[str, Any]:
         """What a message does in the thread it ended up in."""
@@ -1665,7 +1728,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 thread, text, [u.name for u in attached],
                 surveyor.urls_in(text),
             )
-        return await _plan_turn(thread, prompt)
+        return await _plan_turn(thread, prompt, attached=attached)
 
 
     async def _survey_turn(
@@ -1747,6 +1810,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 config.project_datasets(task.project),
             ),
             survey=survey.render(),
+            attached=uploads.resolve(config.project_datasets(task.project), payload["attachments"]),
             # This plan *is* the escalation's result. Escalating again would
             # start a second pre-planning task over the same request, and a
             # third over that one.
@@ -1799,10 +1863,16 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     PLAN_BATCHES = 10
 
     async def _plan_turn(
-        thread: Any, text: str, survey: str = "", may_escalate: bool = True
+        thread: Any, text: str, survey: str = "", may_escalate: bool = True,
+        attached: list[Any] | None = None,
     ) -> dict[str, Any]:
         with _planning(thread.id):
-            return await _plan_turn_inner(thread, text, survey, may_escalate)
+            reply = await _plan_turn_inner(thread, text, survey, may_escalate)
+        # A plan only gets here from a person's message.
+        plan = reply.get("planned")
+        if plan is not None and reply["message"]["data"]["autoStarted"]:
+            await _start_planned(thread.id, thread.project or config.default_project, plan.tasks, attached or [])
+        return {k: v for k, v in reply.items() if k != "planned"}
 
     async def _plan_turn_inner(
         thread: Any, text: str, survey: str = "", may_escalate: bool = True
@@ -1825,6 +1895,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                             request, config, sorted(taken), model,
                             project=project_slug, guide=guide, survey=survey,
                             project_files=_project_files(config, project_slug),
+                            skills=_planner_skills(project_slug),
                         )
 
                 plan = await _with_retries("planning", attempt)
@@ -1869,7 +1940,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 role="dex",
                 kind="plan" if plan.tasks else "text",
                 text=plan.needs_clarification or plan.notes,
-                data={**plan.to_json(), "batch": batch},
+                # The operator asked for exactly this one thing: nothing to choose.
+                data={**plan.to_json(), "batch": batch,
+                      "autoStarted": batch == 1 and len(plan.tasks) == 1 and not plan.remaining.strip()},
             )
             await publish_message(thread.id, reply)
             if first is None:
@@ -1899,7 +1972,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             )
 
         assert first is not None and first_reply is not None
-        return {"plan": first.to_json(), "message": first_reply.to_json()}
+        return {"plan": first.to_json(), "message": first_reply.to_json(), "planned": first}
 
     # ---------------------------------------------------------------- events
 

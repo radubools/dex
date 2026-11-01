@@ -124,7 +124,6 @@ export function GuideEditor({ project, onClose, onBack }: { project: string; onC
         <button className="ghost-btn small accent" disabled={!dirty || busy} onClick={save}>
           Save
         </button>
-        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </header>
 
       <nav className="guide-picker">

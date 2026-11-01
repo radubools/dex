@@ -56,8 +56,8 @@ async def test_start_task_lands_in_the_named_thread_and_records_the_dependency(m
     assert any(t == ids["Backgrounds and scenery"] and "Story" in text for t, text in manager.posted)
     with pytest.raises(Refused, match="no thread"):
         await manager.graph.spawn(parent, thread="Music", title="x", brief="y")
-    made = await manager.graph.spawn(parent, thread="Music", title="x", brief="y", create_thread=True)
-    assert made.thread_id not in ids.values()
+    with pytest.raises(Refused, match="no thread"):
+        await manager.graph.spawn(parent, skill="game-music", title="x", brief="y")
 
 
 async def test_continue_task_follows_the_chain_until_its_follow_up_is_done(manager, db):

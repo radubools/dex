@@ -23,6 +23,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from . import skills
 from .models import Event, Task, TaskState
 from .store import DepStore, ThreadStore
 from .threads import ThreadMessage
@@ -36,6 +37,9 @@ log = logging.getLogger(__name__)
 MAX_DEPS = 50
 #: The project thread power tasks run in, made the first time one is asked for.
 POWER_THREAD = "Power"
+POWER_SKILL = "power"
+#: Where game chats live: a conversation with players, never tied to a skill.
+CHATS_THREAD = "Chats"
 #: How deep the graph may go: a task this many levels below a waiter may not start more.
 MAX_DEPTH = 3
 #: Claim order (tasks.priority, highest first): a task woken because what it
@@ -71,12 +75,13 @@ class Dependencies:
         self.store = DepStore(manager.db)
         self.threads = ThreadStore(manager.db)
         self._waker: asyncio.Task[None] | None = None
+        self._tying = asyncio.Lock()
 
     # ------------------------------------------------------------ lookups
 
     async def project_threads(self, project: str) -> list[dict[str, Any]]:
         rows = await self.m.db.pool.fetch(
-            """SELECT th.id, th.title, th.kind,
+            """SELECT th.id, th.title, th.kind, th.skill,
                       (SELECT count(*) FROM tasks t WHERE t.thread_id = th.id) AS tasks
                  FROM threads th WHERE th.project = $1 AND NOT th.hidden
                 ORDER BY th.updated_at DESC""",
@@ -84,9 +89,32 @@ class Dependencies:
         )
         return [dict(r) for r in rows]
 
-    async def resolve_thread(self, project: str, ref: str, *, create: bool = False,
-                             exact: bool = False) -> dict[str, Any]:
-        """A thread of `project` by id or title (exact, then a unique prefix); made when asked."""
+    async def skill_thread(self, project: str, skill: str) -> dict[str, Any]:
+        """The thread a skill's work goes in, tied to it. This is the only way dex
+        makes a thread: when a skill that declares one needs it and has none.
+
+        A skill may have several (players and enemies are both characters): its
+        busiest is the one, unless someone chose.
+        """
+        async with self._tying:
+            rows = await self.project_threads(project)
+            tied = [t for t in rows if t["skill"] == skill]
+            if tied:
+                return max(tied, key=lambda t: t["tasks"])
+            declared = skills.thread_skills(self.m.config.workspace, self.m.config.project_dir(project)).get(skill)
+            title = declared.thread if declared else POWER_THREAD if skill == POWER_SKILL else ""
+            if not title:
+                raise Refused(f"{skill!r} has no thread in this project. Threads: "
+                              + ", ".join(t["title"] for t in rows))
+            named = next((t for t in rows if t["title"].lower() == title.lower() and t["skill"] is None), None)
+            if named is not None:
+                await self.threads.tie(named["id"], skill)
+                return {**named, "skill": skill}
+            made = await self.threads.create(title, project, skill=skill)
+            return {"id": made.id, "title": made.title, "kind": made.kind, "skill": skill, "tasks": 0}
+
+    async def resolve_thread(self, project: str, ref: str, *, exact: bool = False) -> dict[str, Any]:
+        """A thread of `project` by id or title (exact, then a unique prefix)."""
         ref = (ref or "").strip()
         if not ref:
             raise Refused("name the thread to start the task in (its title or id)")
@@ -100,11 +128,8 @@ class Dependencies:
             return prefix[0]
         if len(prefix) > 1:
             raise Refused(f"{ref!r} matches several threads: " + ", ".join(t["title"] for t in prefix))
-        if not create:
-            raise Refused(f"no thread {ref!r} in this project; pass create_thread to make it. "
-                          "Threads: " + ", ".join(t["title"] for t in rows))
-        made = await self.threads.create(ref, project)
-        return {"id": made.id, "title": made.title, "kind": made.kind, "tasks": 0}
+        raise Refused(f"no thread {ref!r} in this project. Name the `skill` for work a skill makes: "
+                      "dex keeps its thread. Threads: " + ", ".join(t["title"] for t in rows))
 
     async def resolve_task(self, project: str, ref: str) -> Task:
         """A task of `project` by id, slug or package name: the latest attempt of its chain."""
@@ -187,14 +212,20 @@ class Dependencies:
             except Exception:
                 log.exception("could not post to thread %s", thread_id)
 
-    async def spawn(self, waiter: Task, *, thread: str, title: str, brief: str,
-                    slug: str | None = None, create_thread: bool = False) -> Task:
-        """Start a new task in a thread of the waiter's project; the waiter depends on it."""
+    async def spawn(self, waiter: Task, *, title: str, brief: str, thread: str = "", skill: str = "",
+                    slug: str | None = None) -> Task:
+        """Start a new task in its skill's thread, or one named; the waiter depends on it."""
         if not (brief or "").strip():
             raise Refused("the brief is empty")
         project = waiter.project or self.m.config.default_project
         await self._check(waiter)
-        th = await self.resolve_thread(project, thread, create=create_thread)
+        named = await self.resolve_thread(project, thread) if thread else None
+        if skill:
+            th = named if named and named["skill"] == skill else await self.skill_thread(project, skill)
+        elif named:
+            th = named
+        else:
+            raise Refused("name the `skill` that makes this, or the `thread` it belongs in")
         if slug:
             await self._check_thread(project, slug, th)
         # It runs as the task that asked for it does (end-to-end tests on or off).
@@ -218,7 +249,7 @@ class Dependencies:
             raise Refused("a power task does its own code changes: it starts no tasks")
         project = waiter.project or self.m.config.default_project
         await self._check(waiter)
-        th = await self.resolve_thread(project, POWER_THREAD, create=True)
+        th = await self.skill_thread(project, POWER_SKILL)
         child = await self.m.submit(brief, title=title, slug=f"power-{title}"[:60], thread_id=th["id"],
                                     project=project, scope="power", options=inherited(waiter))
         await self.store.add(waiter.id, child.id, "started")

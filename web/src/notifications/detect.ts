@@ -269,7 +269,7 @@ export class Detector {
       open.plans = []
       return effects
     }
-    if (message.kind === 'plan' && (message.data?.tasks?.length ?? 0) > 0) {
+    if (message.kind === 'plan' && (message.data?.tasks?.length ?? 0) > 0 && !message.data?.autoStarted) {
       const key = `plan:${message.id}`
       open.plans.push(key)
       const n = message.data.tasks!.length
