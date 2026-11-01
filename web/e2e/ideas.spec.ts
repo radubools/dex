@@ -39,6 +39,7 @@ async function open(page: Page, available = true, stream = '', extra?: typeof pa
     else if (p === '/api/health') body = { ok: true, workspace: '', assetsDir: '', model: 'test', concurrency: 1, manim: true, autoApprove: false, authenticated: true, running: 0, queued: 0 }
     else if (p === '/api/settings') body = { settings: { auto_approve: false }, costs: { day: 0, week: 0, month: 0, all_time: 0 }, tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0, visible: 0, counted: 0, with_cost: 0 }, models: [], efforts: [] }
     else if (p === '/api/tasks') body = { tasks: [] }
+    else if (p === '/api/dag') body = { project: 'alpha', nodes: [], edges: [] }
     else if (p === '/api/tasks/idea-a') body = { task: proposal }
     else if (p === '/api/tasks/idea-a/approval') body = { tasks: [{ ...proposal, approval: 'rejected', canReject: false }] }
     else if (p === '/api/projects') body = { projects: [{ slug: 'alpha', name: 'Alpha', description: '', createdAt: now, updatedAt: now, threads: 0, tasks: 1 }], default: 'alpha' }

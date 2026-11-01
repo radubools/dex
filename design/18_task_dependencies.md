@@ -197,22 +197,21 @@ returns from, with the graph still on screen, the open task outlined and the
 drawing refitted to the narrower column. It refetches when the event stream reports
 a change to the graph (`task_created`, `task_state`, `task_dependency`,
 `task_message_delivered`; several close together make one fetch), and every
-half minute in case the stream is down. A drawing counts as done only once it
-is on screen, and the app's re-renders (one per streamed event) never
-interrupt it, so a busy project can no longer leave the view blank. It draws
-Mermaid flowcharts, one per group of connected tasks, drawn left to right: the
+half minute in case the stream is down. dagre lays out each group of connected
+tasks and the boxes are plain HTML. Mermaid took about a second to draw 213 nodes
+and froze the page while it did; this takes a few tens of milliseconds, and the
+app's re-renders (one per streamed event) leave it alone. Groups run left to right: the
 task that asked (a chat, say) on the left, an edge running right from it to
-each task it waits on. A task's children fill columns of at most ten, newest
-at the top, and the rest go in further columns to the right (invisible links
-from the child in the same row one column back, so a chat that started forty
-tasks is a 10 × 4 grid rather than one long line). Such a task's arrows carry
-no label, dashed for an asked-for change: a label is a layout step of its own
-and knocks the grid's rows out of line. Mermaid's layout still staggers the
-rows a little and orders each column itself. Groups stack newest first, by when their asking task
+each task it waits on. More than ten children that wait on nothing else are one
+framed block, in columns of at most ten, newest at the top, with one arrow to it: to
+dagre the block is one big node, because links to hold a grid took ten times as long.
+Groups stack newest first, by when their asking task
 last started, so they keep their place while their tasks move. Tasks with no
 dependencies share one column at the end, newest at the top. Every diagram
-is drawn at one scale, the one that fits the widest. Nodes are coloured by
+is drawn at one scale, the one that fits the widest, down to 0.6: past that it scrolls sideways. Nodes are coloured by
 state, and each names its thread. Clicking a node opens the task beside the graph.
+A status dropdown above the diagrams narrows them to the tasks in any number of
+states, with each request that started one, and only the arrows between what is left.
 
 ## Improvement opportunities
 

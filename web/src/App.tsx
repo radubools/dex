@@ -25,6 +25,7 @@ const SkillAdmin = lazy(() =>
   import('./components/SkillAdmin').then((m) => ({ default: m.SkillAdmin })),
 )
 import { TaskPanel } from './components/TaskPanel'
+import { TaskGraph } from './components/TaskGraph'
 import { NotificationsButton, useNotifications, type Notice } from './notifications'
 import type { ViewerTarget } from './components/Viewer'
 import { canGoBack, navState, record, type Overlay, type Place, type View } from './navigation'
@@ -32,9 +33,6 @@ import { useSplit, useViewport } from './split'
 
 // highlight.js (and, for markdown, mermaid) only load when something is opened.
 const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })))
-const TaskGraph = lazy(() =>
-  import('./components/TaskGraph').then((m) => ({ default: m.TaskGraph })),
-)
 const CostDashboard = lazy(() =>
   import('./components/CostDashboard').then((m) => ({ default: m.CostDashboard })),
 )
@@ -836,7 +834,6 @@ export default function App() {
             />
           </Suspense>
         ) : view === 'graph' && project ? (
-          <Suspense fallback={<p className="muted" style={{ padding: 16 }}>Loading task graph…</p>}>
             <TaskGraph
               project={project}
               changes={graphChanges}
@@ -858,7 +855,6 @@ export default function App() {
                 setView('chat')
               }}
             />
-          </Suspense>
         ) : view === 'home' ? (
           <div className="home">
             <div className="home-card">

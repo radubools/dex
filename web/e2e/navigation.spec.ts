@@ -30,6 +30,7 @@ const messages: Record<string, unknown[]> = {
 
 /** The task graph's nodes (none unless a test sets them). */
 let dag: unknown[] = []
+let dagEdges: unknown[] = []
 /** Someone signed in who may manage users, which shows Skills and Users. */
 let admin = false
 
@@ -62,7 +63,7 @@ function answer(url: URL): unknown {
   }
   if (p === '/api/packages') return { packages: admin ? [{ slug: 'widget', displayName: 'Widget', files: 1, path: 'alpha/widget', tags: [], taskId: null, lastActivity: null }] : [] }
   if (p === '/api/feed') return { project: 'alpha', projects: ['alpha'], topics: [] }
-  if (p === '/api/dag') return { project: 'alpha', nodes: dag, edges: [] }
+  if (p === '/api/dag') return { project: 'alpha', nodes: dag, edges: dagEdges }
   if (/^\/api\/projects\/[^/]+\/skills$/.test(p)) return { skills: [] }
   if (/\/guide$/.test(p)) return { project: project('alpha', 'Alpha'), path: 'AGENTS.md', text: '# Alpha guide' }
   if (p === '/api/assets') {
@@ -176,10 +177,10 @@ test('the task graph is a main view; a task clicked in it opens beside it', asyn
     await page.locator('.thread-open', { hasText: 'Ideas' }).click()
     await page.getByRole('button', { name: 'Task graph', exact: true }).click()
     await expect(page).toHaveURL(/view=graph/)
-    await page.locator('.task-graph-group g.node').first().click()
+    await page.locator('.graph-node').first().click()
     await at(page, { view: 'Task graph', thread: 'Widgets', task: 'Build the widget', pane: null })
     await expect(page.locator('section.task-graph')).toBeVisible()
-    await expect(page.locator('.task-graph-group g.node.open')).toHaveCount(1)
+    await expect(page.locator('.graph-node.open')).toHaveCount(1)
     await page.goBack()
     await at(page, { view: 'Task graph', thread: 'Ideas', task: null })
   } finally {
@@ -325,3 +326,52 @@ test('other work posted in a task activity goes straight to its thread', async (
   await expect(thread_(page)).toHaveText('Ideas')
 })
 
+
+test('the task graph narrows to any number of statuses', async ({ page }) => {
+  const node = (id: string, title: string, state: string, kind?: string) =>
+    ({ id, title, state, kind, attempt: 1, threadId: 't1', threadTitle: 'Widgets', createdAt: now, finishedAt: null })
+  dag = [
+    node('r', 'The request', 'running', 'request'),
+    node('a', 'Running one', 'running'), node('b', 'Failed one', 'failed'), node('c', 'Queued one', 'queued'),
+  ]
+  dagEdges = [{ from: 'r', to: 'a', kind: 'planned' }, { from: 'r', to: 'b', kind: 'planned' }]
+  await open(page)
+  await page.getByRole('button', { name: 'Task graph', exact: true }).click()
+  const nodes = page.locator('.graph-node')
+  await expect(nodes).toHaveCount(4)
+  const filter = page.locator('.task-graph-filters summary')
+  await expect(filter).toHaveText('All statuses')
+  await filter.click()
+  await page.getByRole('checkbox', { name: /failed/ }).check()
+  await expect(filter).toHaveText('failed')
+  await expect(nodes).toHaveCount(2)
+  await expect(page.locator('.task-graph-canvas')).toContainText('The request')
+  await expect(page.locator('.task-graph-canvas')).not.toContainText('Running one')
+  await page.getByRole('checkbox', { name: /queued/ }).check()
+  await expect(filter).toHaveText('2 statuses')
+  await expect(nodes).toHaveCount(3)
+  await page.getByRole('button', { name: 'All statuses' }).click()
+  await expect(nodes).toHaveCount(4)
+  dag = []
+  dagEdges = []
+})
+
+test('more than ten tasks from one request are a block with one arrow', async ({ page }) => {
+  const node = (id: string, state: string, kind?: string) =>
+    ({ id, title: id, state, kind, attempt: 1, threadId: 't1', threadTitle: 'Widgets', createdAt: now, finishedAt: null })
+  const ids = Array.from({ length: 12 }, (_, k) => `task-${k}`)
+  dag = [node('r', 'running', 'request'), ...ids.map((id) => node(id, 'queued'))]
+  dagEdges = ids.map((to) => ({ from: 'r', to, kind: 'planned' }))
+  try {
+    await open(page)
+    await page.getByRole('button', { name: 'Task graph', exact: true }).click()
+    await expect(page.locator('.graph-node')).toHaveCount(13)
+    await expect(page.locator('.task-graph-block')).toHaveCount(1)
+    await expect(page.locator('.task-graph-board svg > path')).toHaveCount(1)
+    const x = await page.locator('.graph-node.queued').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().x))
+    expect(new Set(x).size).toBe(2)
+  } finally {
+    dag = []
+    dagEdges = []
+  }
+})
