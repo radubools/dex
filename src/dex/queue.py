@@ -317,6 +317,30 @@ class TaskManager:
             "The previous attempt has finished. The operator has since asked for:\n\n"
             f"{notes}"
         )
+        # A finished task's closing summary is its compaction: what it did and
+        # the files it changed (runner.py). With Compact on, the follow-up starts
+        # a fresh session from that rather than resuming the whole conversation.
+        # An attempt that did not succeed has no trustworthy last word, so the
+        # follow-up resumes its full session, as it does when there is no
+        # summary at all or Compact is off. A summary from before they listed
+        # files still serves. A chat or a design turn is a conversation and
+        # always resumes.
+        summary = (
+            await self.tasks.summary(task.id)
+            if task.state is TaskState.SUCCEEDED and not task.is_chat and not task.is_design
+            and await self.settings.compact_follow_ups()
+            else None
+        )
+        compacted = bool(summary and summary.strip())
+        if compacted:
+            note = (
+                "## Follow-up\n\n"
+                "The previous attempt has finished. This is a fresh session: in place "
+                "of its conversation, here is what it reported when it finished. Start "
+                "from that, and read the files it names before you change them.\n\n"
+                f"### What the previous attempt reported\n\n{summary.strip()}\n\n"
+                f"### The operator has since asked for\n\n{notes}"
+            )
         if task.is_chat:
             # A game chat is a conversation: the player answered.
             note = "## The player replied\n\n" + "\n\n".join(bodies)
@@ -333,9 +357,9 @@ class TaskManager:
             project=task.project,
             attempt=task.attempt + 1,
             parent_id=task.id,
-            session_id=task.session_id,
+            session_id=None if compacted else task.session_id,
             output_slug=task.output_slug or task.slug,
-            resumed_from=task.session_id,
+            resumed_from=None if compacted else task.session_id,
             # Without this a continued design turn came back as an ordinary
             # package task: it took the generation prompt, lost the design
             # tools, and built a package directory for a conversation.

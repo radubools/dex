@@ -280,6 +280,8 @@ export type Settings = {
   chat_concurrency: number
   /** Tasks may ask about promoting a helper into a project's utils/. */
   utility_proposals: boolean
+  /** A follow-up on a succeeded task starts from its summary, not its whole session. */
+  compact_follow_ups: boolean
   model: string | null
   /** How hard a task thinks before acting; null defers to the deployment. */
   effort: string | null

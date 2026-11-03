@@ -221,6 +221,8 @@ class SettingsRequest(BaseModel):
     chat_concurrency: int | None = Field(default=None, ge=1, le=MAX_WORKERS)
     #: Whether tasks may propose promoting a helper into a project's `utils/`.
     utility_proposals: bool | None = None
+    #: A follow-up on a succeeded task starts from its summary (compaction).
+    compact_follow_ups: bool | None = None
     #: One of EFFORT_IDS, or "" to fall back to the deployment default.
     effort: Literal["low", "medium", "high", "xhigh", "max", ""] | None = None
     model: str | None = None
@@ -828,6 +830,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 SEQUENTIAL_CONCURRENCY if body.utility_proposals else PARALLEL_CONCURRENCY,
             )
             await tasks.rebalance()
+        if body.compact_follow_ups is not None:
+            await settings.set(SettingsStore.COMPACT_FOLLOW_UPS, body.compact_follow_ups)
         if body.effort is not None:
             # "" clears the override rather than storing an invalid effort.
             await settings.set(SettingsStore.EFFORT, body.effort or None)

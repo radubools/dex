@@ -228,6 +228,19 @@ export function SettingsMenu({
             />
           </label>
 
+          <label className="menu-row toggle">
+            <span>
+              Compact follow-ups
+              <small>A note on a task that succeeded starts a fresh session from its summary and changed files, not the whole conversation</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings?.compact_follow_ups ?? false}
+              onChange={(e) => patch({ compact_follow_ups: e.target.checked })}
+            />
+          </label>
+
           <div className="menu-row">
             <span>
               Tasks at once
