@@ -280,6 +280,10 @@ export type Settings = {
   chat_concurrency: number
   /** Tasks may ask about promoting a helper into a project's utils/. */
   utility_proposals: boolean
+  /** A typed message may be moved to where the router thinks it belongs. */
+  auto_route?: boolean
+  /** A succeeded task's follow-up starts from a compacted session. */
+  auto_compact?: boolean
   model: string | null
   /** How hard a task thinks before acting; null defers to the deployment. */
   effort: string | null

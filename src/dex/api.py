@@ -251,6 +251,7 @@ class SettingsRequest(BaseModel):
     utility_proposals: bool | None = None
     #: Whether a typed message may be moved where the router says it belongs.
     auto_route: bool | None = None
+    auto_compact: bool | None = None
     #: One of EFFORT_IDS, or "" to fall back to the deployment default.
     effort: Literal["low", "medium", "high", "xhigh", "max", ""] | None = None
     model: str | None = None
@@ -860,6 +861,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await tasks.rebalance()
         if body.auto_route is not None:
             await settings.set(SettingsStore.AUTO_ROUTE, body.auto_route)
+        if body.auto_compact is not None:
+            await settings.set(SettingsStore.AUTO_COMPACT, body.auto_compact)
         if body.effort is not None:
             # "" clears the override rather than storing an invalid effort.
             await settings.set(SettingsStore.EFFORT, body.effort or None)

@@ -203,6 +203,10 @@ RESUME_NUDGE = (
     "session has just been resumed. Carry on from where you stopped: look at what "
     "is already in your task directory, then continue the work your brief asks for."
 )
+#: Sent first to a follow-up's resumed session when auto-compact is on: the
+#: agent's own slash command, which replaces the history with its summary.
+COMPACT = "/compact"
+
 #: Put in front of the brief when a resumed session could not run at all.
 FRESH_AFTER_LOST_SESSION = (
     "Note: this task ran before and was interrupted; its earlier agent session "
@@ -1166,6 +1170,10 @@ class TaskRunner:
                 log.exception("could not clear the wake note of %s", self.task.id)
             brief_prompt = f"{brief_prompt}\n\n{note}"
 
+        # A follow-up to a task that succeeded starts from the summary of its
+        # session rather than the whole of it, when the operator chose so.
+        compact = await self._compacts(options.model, resume_session, woken)
+
         # Taken before the agent runs, so what it wrote can be told apart from
         # what it inherited: a resumed attempt continues its parent's package,
         # and siblings sharing one open onto a directory that already has files
@@ -1177,6 +1185,8 @@ class TaskRunner:
         try:
             async with asyncio.timeout(self.config.task_timeout_s):
                 async with self._client(options) as client:
+                    if compact:
+                        await self._compact(client)
                     await client.query(prompt)
                     await self._converse(client)
                     # A session resumed after it was cut off mid-turn (a server
@@ -1279,6 +1289,35 @@ class TaskRunner:
 
                 shutil.rmtree(leftover, ignore_errors=True)
                 self._skill_work_dir = None
+
+    async def _compacts(self, model: str | None, session: str | None, woken: bool) -> bool:
+        """Whether this run compacts the session it resumes first: a new
+        follow-up attempt (not a pause or a wake) of a task that succeeded, on
+        Claude, with auto-compact on."""
+        if (not session or woken or self.task.is_chat or self.task.turns
+                or not self.task.parent_id or antigravity.is_agy(model) or opencode.is_oc(model)):
+            return False
+        if not await self.settings.auto_compact():
+            return False
+        parent = await self.store.get(self.task.parent_id)
+        return parent is not None and parent.state is TaskState.SUCCEEDED
+
+    async def _compact(self, client: Any) -> None:
+        """Compact the resumed session, so the follow-up starts from its
+        summary. A compaction that fails leaves the session whole."""
+        self.emit("text", text="The previous attempt succeeded; compacting its session to a summary first.")
+        try:
+            await client.query(COMPACT)
+            async for message in client.receive_response():
+                # Its result is not a turn of this task: only a failure is told.
+                if isinstance(message, ResultMessage) and message.is_error:
+                    self.emit("text", text=f"Compaction failed ({message.result or 'no reason given'}); "
+                                           "continuing with the whole session.")
+                elif isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                    self.emit("text", text="Compacted: this attempt starts from the summary.")
+        except Exception as exc:
+            log.exception("could not compact the session of %s", self.task.id)
+            self.emit("text", text=f"Compaction failed ({type(exc).__name__}); continuing with the whole session.")
 
     def _resumable(self, model: str | None, session: str) -> bool:
         """Whether the agent this model runs on can resume `session`: OpenCode

@@ -315,6 +315,19 @@ One delta anywhere proves the deltas are coming.
 mid-run, that is the only handle on the work the agent has already done, and it
 is what `resume` needs.
 
+### Auto-compact for follow-ups
+
+A follow-up attempt (a message to a finished task) resumes its parent's whole
+session. With "Auto-compact follow-ups" on in Settings (`auto_compact`, off by
+default), a follow-up to a task that **succeeded** sends `/compact` to the
+resumed session before its brief, so it starts from the agent's own summary of
+that work rather than all of it. Only then: a pause or a wake resuming its own
+row, a chat, a parent that failed or was cancelled, or a session on
+Antigravity or OpenCode resumes whole. The compaction's result is not a turn
+of the task (it would count as one, and the empty-resume checks rely on the
+count); a compaction that fails is said in the panel and the session goes on
+whole.
+
 ### Reporting never kills the run
 
 `_observe()` wraps translation: a malformed message, a pricing error, or a

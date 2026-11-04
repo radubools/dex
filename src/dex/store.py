@@ -1255,6 +1255,9 @@ class SettingsStore:
     #: Whether a typed message may be moved to the task or thread the router
     #: finds for it (design/26). Off: it stays where it was typed.
     AUTO_ROUTE = "auto_route"
+    #: Whether a follow-up attempt of a task that succeeded compacts the
+    #: session it resumes, starting from its summary rather than all of it.
+    AUTO_COMPACT = "auto_compact"
     MODEL = "model"
     #: How long a task may think before acting. None defers to DEX_EFFORT, so
     #: an operator who never touches it keeps whatever the deployment set.
@@ -1282,6 +1285,8 @@ class SettingsStore:
         # Off until chosen: a message moved somewhere else was a surprise
         # more often than a help.
         AUTO_ROUTE: False,
+        # Off until chosen: a follow-up keeps everything its session knew.
+        AUTO_COMPACT: False,
         MODEL: None,
         EFFORT: None,
         ANIMATION_SPEED: 1.0,
@@ -1329,6 +1334,10 @@ class SettingsStore:
     async def auto_route(self) -> bool:
         """Whether messages are routed (design/26), or stay where typed."""
         return bool(await self.get(self.AUTO_ROUTE, False))
+
+    async def auto_compact(self) -> bool:
+        """Whether a successful task's follow-up starts from a compacted session."""
+        return bool(await self.get(self.AUTO_COMPACT, False))
 
     async def utility_proposals(self) -> bool:
         """Whether a task may ask about promoting a helper into `utils/`."""

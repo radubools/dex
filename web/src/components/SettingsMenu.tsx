@@ -241,6 +241,19 @@ export function SettingsMenu({
             />
           </label>
 
+          <label className="menu-row toggle">
+            <span>
+              Auto-compact follow-ups
+              <small>A follow-up to a task that succeeded starts from a summary of its session instead of all of it</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings?.auto_compact === true}
+              onChange={(e) => patch({ auto_compact: e.target.checked })}
+            />
+          </label>
+
           <div className="menu-row">
             <span>
               Tasks at once
