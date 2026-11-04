@@ -586,8 +586,9 @@ class AgyClient:
         self._messages.put_nowait(ResultMessage(
             subtype="error" if error else "success", duration_ms=took, duration_api_ms=took,
             is_error=error is not None, num_turns=self._steps, session_id=self.conversation or "",
-            # On the subscription: nothing is billed per call.
-            total_cost_usd=0.0, usage=_claude_usage(usage),
+            # `agy` reports no dollars; the runner's estimate at the public
+            # list price (pricing.SUBSCRIPTION_PRICES) stands instead.
+            total_cost_usd=None, usage=_claude_usage(usage),
             result=error if error and error != "interrupted" else response,
         ))
 

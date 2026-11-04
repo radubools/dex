@@ -17,8 +17,28 @@ with what to do.
 Only tasks run on it. Planning, routing and design-chat calls are single
 Claude calls (`api._planning_model`), and a survey stays on Claude because its
 four-tool limit is enforced by Claude's CLI (`allowed_tools`). Claude's usage
-windows never hold Antigravity work (`usage.counts_for`). A run costs nothing
-per call: its result says 0, and its tokens are counted as for Claude.
+windows never hold Antigravity work (`usage.counts_for`). `agy` reports no
+dollars, so its result carries no total and each call is priced at the model's
+public list price (`pricing.SUBSCRIPTION_PRICES`, by family, effort suffix
+dropped), the same table OpenCode falls back on for a model its plan gives no
+price. Its tokens are counted as for Claude.
+
+The prices were collected once, on 3 November 2026, from aggregators quoting
+Google's and Anthropic's rate sheets, and are edited by hand:
+
+| Family | Input / output per 1M | Cache read | Changes |
+|---|---|---|---|
+| Gemini 4 Argon | $2 / $10 | $0.10 | $4 / $20 from 1 Dec 2026 |
+| Gemini 3.8 Flash | $0.75 / $3.75 | $0.075 (assumed 10%) | $1.50 / $7.50 from 1 Jan 2027 |
+| Claude Opus 5.5 | $4 / $20 | $0.40 | |
+| Claude Sonnet 5.5 | $2 / $10 | $0.20 | |
+| Claude Haiku 5.5 | $0.10 / $0.50 | $0.01 | |
+| GPT-OSS 120B | $0.09 / $0.36 (Vertex AI) | | |
+
+Sources: [eesel on Argon](https://www.eesel.ai/blog/gemini-4-argon-pricing),
+[morphllm's Gemini table](https://www.morphllm.com/gemini-api-pricing),
+[Apidog on Sonnet 5.5](https://apidog.com/blog/claude-sonnet-5-5-pricing/),
+[cloudprice on GPT-OSS](https://cloudprice.net/models/openai-gpt-oss-120b).
 
 ## How a run works
 
@@ -92,5 +112,7 @@ never touches its tokens.
   panel words those from their arguments.
 - **An interrupt restarts the process**, since `agy` cannot stop a turn and
   keep running.
+- **Prices are a hand-kept table.** Nothing refreshes them; a new model
+  family is priced at dex's default until it is added.
 - **Its usage limits are not watched.** A Google plan limit fails the task
   rather than pausing it as a Claude window does.

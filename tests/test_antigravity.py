@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 from types import SimpleNamespace
 
+import pytest
 from claude_agent_sdk import (
     AssistantMessage,
     PermissionResultAllow,
@@ -110,7 +111,7 @@ def test_the_stream_reads_as_claude_sdk_messages() -> None:
     assert outcome.is_error and outcome.content == "denied by hook"
     result = messages[-1]
     assert isinstance(result, ResultMessage) and not result.is_error
-    assert (result.result, result.total_cost_usd, result.usage["output_tokens"]) == ("Hello", 0.0, 2)
+    assert (result.result, result.total_cost_usd, result.usage["output_tokens"]) == ("Hello", None, 2)
 
 
 def test_a_failed_turn_is_an_error_result() -> None:
@@ -145,7 +146,7 @@ def test_install_writes_the_agent_and_its_plugin(tmp_path, monkeypatch) -> None:
     assert (tmp_path / "dex" / "dex-plugin" / "agy_mcp.py").exists()
 
 
-def test_each_model_call_reports_its_tokens_at_no_cost() -> None:
+def test_each_model_call_reports_its_tokens_at_the_list_price() -> None:
     client = _client(None)
     client._in_turn = True
     client.conversation = "c3"
@@ -156,8 +157,10 @@ def test_each_model_call_reports_its_tokens_at_no_cost() -> None:
     assert call.content == [] and call.message_id == "agy-c3-1"
     assert call.usage["input_tokens"] == 900 and call.usage["cache_read_input_tokens"] == 5000
     from dex import pricing
-    assert pricing.estimate(call.model, call.usage) == 0.0
-    assert pricing.estimate("claude-opus-5-5", call.usage) > 0
+    # `agy` reports no dollars: the family's public price, cache reads included.
+    input_price, output_price, read_price, _ = pricing.subscription_rates(call.model)
+    assert pricing.estimate(call.model, call.usage) == pytest.approx(
+        (900 * input_price + 5000 * read_price + 40 * output_price) / 1e6)
 
 
 def test_reasoning_comes_from_the_transcript(tmp_path, monkeypatch) -> None:

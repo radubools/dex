@@ -34,6 +34,8 @@ MODELS = [
               {"tier": {"type": "context", "size": 256000}, "input": 1.2, "output": 4.8,
                "cache": {"read": 0.12, "write": 1.5}}]},
     {"id": "mimo-v2.5", "name": "MiMo V2.5", "variants": [], "cost": []},
+    {"id": "beam-free", "name": "Beam Free", "variants": [],
+     "cost": [{"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}]},
 ]
 
 
@@ -81,6 +83,24 @@ def test_tokens_are_priced_at_the_plans_rates() -> None:
     small = {"input_tokens": 1000, "output_tokens": 1000}
     assert pricing.estimate("oc:qwen3.7-plus", small) == pytest.approx((0.4 + 1.6) * 1000 / 1e6)
     assert not counts_for("five_hour", "oc:qwen3.8-flash")
+
+
+def test_without_a_price_of_their_own_models_take_the_public_list_price() -> None:
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_read_input_tokens": 1_000_000}
+    # Antigravity reports no dollars: its family's price, effort dropped,
+    # with the date a price changes.
+    assert pricing.subscription_rates("agy:gemini-4-argon-high", "2026-11-03") == (2.0, 10.0, 0.10, 0.0)
+    assert pricing.subscription_rates("agy:gemini-4-argon-high", "2026-12-01") == (4.0, 20.0, 0.20, 0.0)
+    assert pricing.subscription_rates("agy:claude-sonnet-5-5-medium")[:2] == (2.0, 10.0)
+    assert pricing.subscription_rates("agy:mystery-1") is None
+    assert pricing.estimate("agy:gpt-oss-120b-medium", usage) == pytest.approx(0.09 + 0.36)
+    # OpenCode gives no price for this one: the family's.
+    assert pricing.estimate("oc:gemini-4-argon", usage) > 0
+    # Free on the plan, and no public price: free.
+    assert pricing.estimate("oc:beam-free", usage) == 0
+    # No price anywhere: dex's default, rather than nothing.
+    assert pricing.estimate("oc:mimo-v2.5", usage) == pytest.approx(5.0 + 25.0)
+
 
 
 def test_api_keys_never_reach_opencode(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -177,12 +177,15 @@ def _model(model_id: str) -> dict[str, Any] | None:
     return next((m for m in models() if m["id"] == bare), None)
 
 
-def rates(model_id: str, prompt_tokens: int = 0) -> tuple[float, float, float, float]:
+def rates(model_id: str, prompt_tokens: int = 0) -> tuple[float, float, float, float] | None:
     """(input, output, cache read, cache write) in dollars per million tokens,
     at the plan's list price for a prompt this long: a model priced in
-    tiers charges a long prompt at the tier it reaches."""
+    tiers charges a long prompt at the tier it reaches. None when the plan
+    gives the model no price."""
     model = _model(model_id) or {}
     tiers = [t for t in model.get("cost") or [] if isinstance(t, dict)]
+    if not tiers:
+        return None
     chosen = next((t for t in tiers if not t.get("tier")), tiers[0] if tiers else {})
     for tier in tiers:
         size = (tier.get("tier") or {}).get("size")

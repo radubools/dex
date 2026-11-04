@@ -10,6 +10,7 @@ Prices are US dollars per million tokens.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 #: model id -> (input, output)
@@ -31,14 +32,43 @@ DEFAULT_PRICE = (5.0, 25.0)
 CACHE_READ_MULTIPLIER = 0.1
 CACHE_WRITE_MULTIPLIER = 1.25
 
+#: Public list prices for the models the subscription CLIs serve, which
+#: report no dollars of their own: Antigravity (`agy:`) never does, and
+#: OpenCode (`oc:`) when its model list gives none. Collected once, by hand,
+#: on 2026-11-03 (sources in design/27); a price announced to change carries
+#: the date it changes. model family -> [(from, (input, output, cache read,
+#: cache write))], dollars per million tokens, oldest first.
+SUBSCRIPTION_PRICES: dict[str, list[tuple[str, tuple[float, float, float, float]]]] = {
+    # $2/$10 introductory until 30 November, $4/$20 after; cache reads 95% off.
+    "gemini-4-argon": [("", (2.0, 10.0, 0.10, 0.0)), ("2026-12-01", (4.0, 20.0, 0.20, 0.0))],
+    # $0.75/$3.75 introductory until 31 December, doubling after.
+    "gemini-3.8-flash": [("", (0.75, 3.75, 0.075, 0.0)), ("2027-01-01", (1.50, 7.50, 0.15, 0.0))],
+    "claude-opus-5-5": [("", (4.0, 20.0, 0.40, 5.0))],
+    "claude-sonnet-5-5": [("", (2.0, 10.0, 0.20, 2.5))],
+    "claude-haiku-5-5": [("", (0.10, 0.50, 0.01, 0.125))],
+    "gpt-oss-120b": [("", (0.09, 0.36, 0.0, 0.0))],
+}
+
+
+def subscription_rates(model: str, today: str | None = None) -> tuple[float, float, float, float] | None:
+    """The list price for a subscription CLI's model, by family: the model id
+    without its prefix and its effort (`agy:gemini-4-argon-high` is
+    `gemini-4-argon`), longest family first. None for a family not listed."""
+    bare = model.split(":", 1)[-1]
+    families = [f for f in SUBSCRIPTION_PRICES if bare == f or bare.startswith(f + "-") or bare.startswith(f + "#")]
+    if not families:
+        return None
+    today = today or date.today().isoformat()
+    dated = SUBSCRIPTION_PRICES[max(families, key=len)]
+    return [rates for start, rates in dated if start <= today][-1]
+
 
 def price_for(model: str | None) -> tuple[float, float]:
     if not model:
         return DEFAULT_PRICE
-    if model.startswith("agy:"):
-        # Antigravity runs on the Google subscription: nothing per token
-        # (design/27), whichever model it serves, Claude's included.
-        return (0.0, 0.0)
+    if model.startswith(("agy:", "oc:")):
+        rates = subscription_rates(model)
+        return rates[:2] if rates else DEFAULT_PRICE
     if model in PRICES:
         return PRICES[model]
     # Tolerate dated snapshots and provider prefixes: match the longest key
@@ -55,13 +85,20 @@ def estimate(model: str | None, usage: dict[str, float] | None) -> float:
     cached_read = float(usage.get("cache_read_input_tokens") or 0)
     cached_write = float(usage.get("cache_creation_input_tokens") or 0)
     output = float(usage.get("output_tokens") or 0)
-    if model and model.startswith("oc:"):
-        # OpenCode Go prices each model, cache included, and counts its
-        # limits in those dollars (design/28).
-        from . import opencode
+    if model and model.startswith(("agy:", "oc:")):
+        # The CLIs report no dollars. OpenCode Go prices each model, cache
+        # included, and counts its limits in those dollars (design/28); else,
+        # and for Antigravity, the public list price (SUBSCRIPTION_PRICES).
+        rates = None
+        if model.startswith("oc:"):
+            from . import opencode
 
-        input_price, output_price, read_price, write_price = opencode.rates(
-            model, int(plain + cached_read + cached_write))
+            rates = opencode.rates(model, int(plain + cached_read + cached_write))
+        if not rates or not any(rates):
+            # Priced at nothing (a free model) stays at nothing unless the
+            # family has a public price; no price at all falls to the default.
+            rates = subscription_rates(model) or rates or (*DEFAULT_PRICE, 0.0, 0.0)
+        input_price, output_price, read_price, write_price = rates
         return (plain * input_price + cached_read * read_price + cached_write * write_price
                 + output * output_price) / 1_000_000
     input_price, output_price = price_for(model)
