@@ -86,20 +86,6 @@ REFUSED = re.compile(r"^(question|subagent|skill|browser.*|opencode_.*)$")
 #: How long a run may print nothing at all before it counts as stalled.
 STARTUP_TIMEOUT_S = 150.0
 
-#: A provider's passing failure ("Upstream request failed: [api_error] Upstream
-#: response was not valid JSON", an overload, a rate limit, a dropped
-#: connection): the turn is tried again on the same session, up to
-#: UPSTREAM_RETRIES times, waiting RETRY_BASE_S and doubling each time.
-RETRYABLE = re.compile(
-    r"upstream|api_error|overloaded|rate.?limit|too many requests|\b(429|500|502|503|504|529)\b"
-    r"|timed? ?out|ECONNRESET|socket hang up|temporarily|unavailable", re.I)
-UPSTREAM_RETRIES = 5
-RETRY_BASE_S = 5.0
-
-#: What a retried turn is told, on the session that holds the turn so far.
-CARRY_ON = ("The model provider failed in the middle of your last step, and it has been retried. "
-            "Carry on from where you stopped; do not repeat work already done.")
-
 #: OpenCode's code tool: a sandbox from which the model calls MCP tools
 #: (`tools.dex.ask_user(...)`). Each call it makes comes to the gate itself,
 #: so it runs unasked and the panel shows those calls, not it.
@@ -410,8 +396,6 @@ class OpencodeClient:
         self._shown: set[str] = set()
         self._calls: dict[str, int] = {}
         self._announced = False
-        #: Provider failures this turn has tried again after.
-        self._retries = 0
         #: How the turn's process is started, for a start that stalls.
         self._launch: tuple[list[str], dict[str, str]] = ([], {})
 
@@ -475,7 +459,6 @@ class OpencodeClient:
         self._in_turn, self._interrupted = True, False
         self._turn_started, self._steps = time.time(), 0
         self._error, self._response, self._turn_usage = None, [], {}
-        self._retries = 0
         env = _env()
         env.update({k: v for k, v in (self.options.env or {}).items() if not API_KEY_PATTERN.search(k)})
         env.update({"OPENCODE_CONFIG_DIR": str(HOME), "OPENCODE_CONFIG_CONTENT": self._config(),
@@ -681,21 +664,6 @@ class OpencodeClient:
         await self._count_the_rest()
         if code != 0 and not self._error:
             self._error = (stderr[-1] if stderr else "") or f"OpenCode exited ({code})"
-        if self._error and RETRYABLE.search(self._error) and self._retries < UPSTREAM_RETRIES:
-            self._retries += 1
-            delay = RETRY_BASE_S * 2 ** (self._retries - 1)
-            self.notice(f"{self._error.strip()} - trying again in {delay:.0f}s "
-                        f"({self._retries} of {UPSTREAM_RETRIES}).")
-            await asyncio.sleep(delay)
-            if self._interrupted or proc is not self._proc:
-                return
-            self._error = None
-            args, env = self._launch
-            if self.session:
-                # The session holds the turn so far: it carries on from there.
-                self._launch = (self._args(CARRY_ON), env)
-            self._proc = await self._start()
-            return await self._run(self._proc)
         self._finish_turn(error=self._error)
 
     async def _count_the_rest(self) -> None:

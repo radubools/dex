@@ -116,11 +116,10 @@ plan's models.
   and each step shows it.
 - **An orphaned run works until its next tool call**, text and reasoning
   included, before it finds dex gone.
-- **Only OpenCode retries.** A provider's passing failure (an upstream
-  error, an overload, a rate limit, a dropped connection: `RETRYABLE`) is
-  tried again on the same session, told to carry on, up to five times after
-  5, 10, 20, 40 and 80 seconds; the task panel says each one. Antigravity's
-  runs do not retry yet, and a message that merely looks transient (anything
-  "unavailable") is retried too.
+- **Only connection failures are retried.** For every provider, the runner
+  (`CONNECTION_ERROR`, `_converse`) tries a turn that failed on the
+  connection again on the same session, told to carry on, up to five times
+  after 5, 10, 20, 40 and 80 seconds. Overloads and other provider errors
+  still fail the task, and limits still pause it.
 - **Its limits are not watched.** A Go limit fails the task rather than
   pausing it.

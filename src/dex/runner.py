@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import importlib.util
 import json
 import os
@@ -175,6 +176,26 @@ E2E_OFF = (
     "ignore what `story.done` says about them. Every other check still applies: validate "
     "the package, read the outline, look at the previews. The game installs it untested "
     "(`--allow-untested`).\n"
+)
+
+#: A turn that failed on the connection to the model, not on anything the
+#: model did: a dropped or refused connection, a timeout, or a gateway that
+#: lost the reply ("Upstream response was not valid JSON"). Retried on the same
+#: session, for every provider, CONNECTION_RETRIES times, waiting
+#: RETRY_BASE_S and doubling each time. Limits, overloads and the rest fail.
+CONNECTION_ERROR = re.compile(
+    r"connection (error|reset|refused|closed|aborted|lost)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE"
+    r"|socket hang up|network (error|is unreachable)|fetch failed|timed? ?out"
+    r"|upstream (request failed|response was not valid|connect)",
+    re.I,
+)
+CONNECTION_RETRIES = 5
+RETRY_BASE_S = 5.0
+
+#: What a retried turn is told: the session holds the turn up to the failure.
+CARRY_ON = (
+    "The connection to the model failed in the middle of your last step, and has been "
+    "restored. Carry on from where you stopped; do not repeat work already done."
 )
 
 RESUME_NUDGE = (
@@ -1483,6 +1504,7 @@ class TaskRunner:
             self.emit("task_message_delivered", count=len(held), startedTaskId=self.task.id)
         due = 1  # turns still to finish: the opening prompt
         interrupted: asyncio.Event | None = None
+        retries = 0
 
         async def feed() -> None:
             nonlocal due, interrupted
@@ -1513,6 +1535,16 @@ class TaskRunner:
                     # that is the interrupt, not a failure, so it is not reported.
                     interrupted.set()
                     due = max(0, due - 1)
+                    continue
+                if (isinstance(message, ResultMessage) and message.is_error
+                        and CONNECTION_ERROR.search(message.result or "") and retries < CONNECTION_RETRIES):
+                    # The connection failed, not the work: the same turn goes on.
+                    retries += 1
+                    delay = RETRY_BASE_S * 2 ** (retries - 1)
+                    self.emit("text", text=f"{(message.result or '').strip()} - trying again in "
+                                           f"{delay:.0f}s ({retries} of {CONNECTION_RETRIES}).")
+                    await asyncio.sleep(delay)
+                    await client.query(CARRY_ON)
                     continue
                 self._observe(message)
                 if not isinstance(message, ResultMessage):
