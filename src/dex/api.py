@@ -1680,6 +1680,18 @@ def create_app(config: Config = CONFIG) -> FastAPI:
 
         access.require(CAP_DESIGN if thread.kind == "project_design" else CAP_RUN_TASKS)
 
+        # A game's Chats thread: typed in dex, it is the same conversation as in
+        # the game, so it starts a chat task, which starts and waits on whatever
+        # it needs (design/18), and is not routed or planned.
+        from .game_chat import ChatMessage, chats_entry, start_chat  # noqa: PLC0415
+
+        if (entry := chats_entry(config, thread)) is not None:
+            sources = config.project_datasets(thread.project)
+            text = uploads.with_sources(body.text, uploads.resolve(sources, body.uploads), sources)
+            task = await start_chat(config, tasks, threads, publish_message, entry, thread_id,
+                                    ChatMessage(text=text))
+            return {"chat": task.to_json(config.assets_dir)}
+
         # The transcript keeps what was typed; the model is given the paths as
         # well. Putting the paths in the transcript would make every reread of
         # the conversation carry a wall of absolute paths.

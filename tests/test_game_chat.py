@@ -374,3 +374,22 @@ def test_the_e2e_switch_off_reaches_the_chat_its_follow_ups_and_its_pull(client)
     follow = wait_state(client, r["chatId"], {"succeeded", "running", "queued"})
     latest = client.get(f"/api/tasks/{follow['chat']['taskId']}").json()["task"]
     assert latest["attempt"] == 2 and latest["options"] == {"e2e": True}
+
+
+def test_a_message_typed_in_dex_into_the_chats_thread_starts_a_chat(client, monkeypatch):
+    """Not routed, not planned: the same chat task the game would start, which
+    starts and waits on what it needs, with no plan to confirm."""
+    routed = []
+    monkeypatch.setattr("dex.api.route_message", lambda *a, **k: routed.append(a) or None)
+    t = client.thread_id
+    r = client.post(f"/api/threads/{t}/messages", json={"text": "Make a quick DSA algorithm"})
+    assert r.status_code == 200, r.text
+    chat = r.json()["chat"]
+    assert chat["scope"] == "chat" and not routed
+    wait_state(client, chat["id"], {"succeeded"})
+    chats = client.get(f"/api/game-chat/ml/threads/{t}/chats", headers=AUTH).json()["chats"]
+    assert [c["chatId"] for c in chats] == [chat["id"]]
+    thread = client.get(f"/api/threads/{t}").json()
+    messages = thread.get("messages") or thread.get("thread", {}).get("messages", [])
+    assert [m["kind"] for m in messages][-2:] == ["text", "tasks"]
+    assert not any(m["kind"] in ("plan", "routed") for m in messages)

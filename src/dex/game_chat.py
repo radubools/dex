@@ -83,6 +83,57 @@ def game_root(config: Config, project: str | None) -> Path | None:
     return Path(root).expanduser().resolve() if root else None
 
 
+def chats_entry(config: Config, thread: Any) -> dict[str, Any] | None:
+    """The game whose Chats thread this is, as the game chat's routes see it, or None.
+
+    A message typed into it in dex is the same conversation as one typed in
+    the game, so it starts a chat task too (`start_chat`), rather than being
+    routed and planned like a message in any other thread.
+    """
+    entry = load_settings(config).get(thread.project or "")
+    if not entry or thread.kind != "chat":
+        return None
+    configured = entry.get("threadId")
+    if configured != thread.id and (configured or thread.title != CHATS_TITLE):
+        return None
+    return {"project": thread.project, **entry}
+
+
+async def start_chat(
+    config: Config, tasks: Any, threads: Any, publish_message: Any,
+    entry: dict[str, Any], thread_id: str, body: ChatMessage,
+) -> Task:
+    """A new chat (or a todos run) in a game's Chats thread, from the game or from dex.
+
+    The chat is a `chat` task: it answers, and starts and waits on the tasks
+    that make what is asked for (design/18), with no plan to confirm.
+    """
+    text = body.text.strip()
+    story = body.context.story
+    rel = context_file() if story else None
+    # The chat runs as the switch says, and so does every task it starts.
+    options = {"e2e": body.context.e2e}
+    title = (body.title or text.splitlines()[0])[:80]
+    if body.todo:
+        task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"todos-{title}"[:60],
+                                  thread_id=thread_id, project=entry["project"], scope="todos",
+                                  options={**options, "todo": True})
+    else:
+        task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"chat-{title}"[:60],
+                                  thread_id=thread_id, project=entry["project"], scope="chat",
+                                  options=options)
+    if story:
+        save_context(task.output_dir(config.assets_dir, config.default_project), rel, story)
+    # The thread records what was typed; the snapshot is for the agent.
+    await publish_message(thread_id, ThreadMessage(role="user", kind="text", text=text))
+    await threads.touch(thread_id)
+    await publish_message(thread_id, ThreadMessage(
+        role="dex", kind="tasks", text=f"Started a chat: {task.title}",
+        data={"tasks": [task.to_json(config.assets_dir)]},
+    ))
+    return task
+
+
 def _bearer(request: Request) -> str:
     header = request.headers.get("authorization", "")
     return header[7:].strip() if header.lower().startswith("bearer ") else ""
@@ -473,23 +524,7 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         # The chat runs as the switch says, and so does every task it starts.
         options = {"e2e": body.context.e2e}
         if not body.chatId or body.todo:
-            title = (body.title or text.splitlines()[0])[:80]
-            if body.todo:
-                task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"todos-{title}"[:60],
-                                          thread_id=thread_id, project=entry["project"], scope="todos",
-                                          options={**options, "todo": True})
-            else:
-                task = await tasks.submit(chat_brief(entry, body, rel), title=title, slug=f"chat-{title}"[:60],
-                                          thread_id=thread_id, project=entry["project"], scope="chat",
-                                          options=options)
-            if story:
-                save_context(task.output_dir(config.assets_dir, config.default_project), rel, story)
-            # The thread records what the player typed; the snapshot is for the agent.
-            await note(thread_id, text)
-            await publish_message(thread_id, ThreadMessage(
-                role="dex", kind="tasks", text=f"Started a chat: {task.title}",
-                data={"tasks": [task.to_json(config.assets_dir)]},
-            ))
+            task = await start_chat(config, tasks, threads, publish_message, entry, thread_id, body)
             return {"chatId": task.id, "taskId": task.id, "delivered": "started"}
 
         members = await chain(entry, body.chatId)
