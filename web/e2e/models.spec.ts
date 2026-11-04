@@ -14,6 +14,8 @@ const models = [
   { id: 'oc:glm-5.3', label: 'GLM-5.3', note: 'OpenCode Go subscription', provider: 'opencode', available: true },
 ]
 
+const costs = { day: 0, week: 0, month: 0, all_time: 0 }
+
 async function open(page: Page, saved: Record<string, unknown>) {
   await page.route('**/api/**', (route) => {
     const p = new URL(route.request().url()).pathname
@@ -21,8 +23,8 @@ async function open(page: Page, saved: Record<string, unknown>) {
       p === '/api/auth/me' ? { state: 'open', user: null, googleEnabled: false, passwordEnabled: false }
       : p === '/api/health' ? { ok: true, workspace: '', assetsDir: '', model: 'claude-opus-5-5', concurrency: 1 }
       : p === '/api/settings' && route.request().method() === 'PUT'
-        ? { settings: { ...saved, ...route.request().postDataJSON() } }
-      : p === '/api/settings' ? { settings: saved, costs: { day: 0, week: 0, month: 0, all_time: 0 },
+        ? { settings: Object.assign(saved, route.request().postDataJSON()), costs }
+      : p === '/api/settings' ? { settings: saved, costs,
           tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0, visible: 0, counted: 0, with_cost: 0 },
           models, efforts: [], project: 'alpha', defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }
       : p === '/api/projects' ? { projects: [], default: null }
