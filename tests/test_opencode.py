@@ -270,3 +270,49 @@ def test_a_session_resumes_only_on_the_agent_that_kept_it(tmp_path: Path, monkey
     assert runner._resumable("claude-opus-5-5", claude_session)
     assert not runner._resumable("claude-opus-5-5", "ses_abc")
     assert not runner._resumable("claude-opus-5-5", "agy-conv")
+
+
+def _fake_runs(tmp_path: Path, failures: int) -> str:
+    """A run that reports an upstream failure `failures` times, then answers."""
+    count = tmp_path / "runs"
+    error = '{"type":"error","sessionID":"ses_3","error":{"name":"APIError","data":{"message":"Upstream request failed: [api_error] Upstream response was not valid JSON"}}}'
+    done = '{"type":"text","sessionID":"ses_3","part":{"text":"done"}}'
+    return (f'n=$(cat {count} 2>/dev/null || echo 0); echo $((n+1)) > {count}; '
+            f"if [ $n -lt {failures} ]; then echo '{error}'; exit 1; else echo '{done}'; fi")
+
+
+def _run_fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failures: int) -> tuple[list, list]:
+    monkeypatch.setattr(opencode, "RETRY_BASE_S", 0.01)
+    notices: list[str] = []
+
+    async def run() -> list:
+        client = _client(None)
+        client.cwd = tmp_path
+        client.notice = notices.append
+        client._in_turn = True
+        client._launch = (["sh", "-c", _fake_runs(tmp_path, failures)], dict(opencode.os.environ))
+        # A retry carries on the session: the fake ignores what it is told.
+        client._args = lambda prompt: client._launch[0]
+
+        async def nothing() -> None:
+            return None
+
+        client._count_the_rest = nothing
+        client._proc = await client._start()
+        await client._run(client._proc)
+        return _drain(client)
+
+    return asyncio.run(run()), notices
+
+
+def test_an_upstream_failure_is_tried_again_with_backoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out, notices = _run_fake(tmp_path, monkeypatch, failures=2)
+    assert out[-1].result == "done" and not out[-1].is_error
+    assert [n.split(" - ")[1] for n in notices] == ["trying again in 0s (1 of 5).", "trying again in 0s (2 of 5)."]
+
+
+def test_an_upstream_failure_gives_up_after_five_tries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out, notices = _run_fake(tmp_path, monkeypatch, failures=99)
+    assert len(notices) == 5
+    assert out[-1].is_error and "Upstream response was not valid JSON" in out[-1].result
+    assert (tmp_path / "runs").read_text().strip() == "6"
