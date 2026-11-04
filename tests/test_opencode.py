@@ -224,3 +224,49 @@ def test_a_turn_runs_the_model_at_its_effort_and_resumes_the_session() -> None:
     assert args[-2:] == ["--", "hello"] and "--session" not in args
     client.session = "ses_9"
     assert args != client._args("again") and "ses_9" in client._args("again")
+
+
+def test_a_run_that_prints_nothing_is_started_once_more(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(opencode, "STARTUP_TIMEOUT_S", 0.5)
+    marker = tmp_path / "started"
+    # Stalls the first time; the second time it says one thing and ends.
+    script = (f'if [ -e {marker} ]; then echo \'{{"type":"text","sessionID":"ses_2","part":{{"text":"ok"}}}}\'; '
+              f"else touch {marker}; sleep 30; fi")
+    notices = []
+
+    async def run() -> list:
+        client = _client(None)
+        client.cwd = tmp_path
+        client.notice = notices.append
+        client._in_turn = True
+        client._launch = (["sh", "-c", script], dict(opencode.os.environ))
+
+        async def nothing() -> None:
+            return None
+
+        client._count_the_rest = nothing
+        client._proc = await client._start()
+        await client._run(client._proc)
+        return _drain(client)
+
+    out = asyncio.run(run())
+    assert notices == ["OpenCode did not start; starting it again."]
+    assert out[-1].result == "ok" and not out[-1].is_error
+
+
+def test_a_session_resumes_only_on_the_agent_that_kept_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dex import antigravity
+    from dex.runner import TaskRunner
+
+    monkeypatch.setattr(antigravity, "gemini_home", lambda: tmp_path)
+    (tmp_path / "antigravity-cli" / "brain" / "agy-conv").mkdir(parents=True)
+    runner = TaskRunner.__new__(TaskRunner)
+    runner.task = SimpleNamespace(is_survey=False)
+    claude_session = "d37466bc-0203-4bc6-8a9d-c0563a3e67b8"
+    assert runner._resumable("oc:qwen3.8-flash", "ses_abc")
+    assert not runner._resumable("oc:qwen3.8-flash", claude_session)
+    assert runner._resumable("agy:gemini-4-argon-high", "agy-conv")
+    assert not runner._resumable("agy:gemini-4-argon-high", claude_session)
+    assert runner._resumable("claude-opus-5-5", claude_session)
+    assert not runner._resumable("claude-opus-5-5", "ses_abc")
+    assert not runner._resumable("claude-opus-5-5", "agy-conv")

@@ -1119,6 +1119,17 @@ class TaskRunner:
             prompt += E2E_OFF
             self.emit("text", text="End-to-end tests are off for this task.")
 
+        # A session another agent kept (a Claude task continued on OpenCode,
+        # say) cannot be resumed by this one: a fresh session gets the whole
+        # brief, told that earlier work is already in the directory.
+        if resume_session and not self._resumable(options.model, resume_session):
+            self.emit("text", text="The previous session was another agent's; starting a fresh session on the same package.")
+            import dataclasses
+
+            options = dataclasses.replace(options, resume=None)
+            resume_session = None
+            prompt = FRESH_AFTER_LOST_SESSION + prompt
+
         # Woken after waiting on other tasks (deps.py): the session already has
         # the brief, so it is told only how they went. A fresh session (the old
         # one lost) gets the brief and the news together.
@@ -1247,6 +1258,19 @@ class TaskRunner:
 
                 shutil.rmtree(leftover, ignore_errors=True)
                 self._skill_work_dir = None
+
+    def _resumable(self, model: str | None, session: str) -> bool:
+        """Whether the agent this model runs on can resume `session`: OpenCode
+        keeps `ses_…` ids, Antigravity conversations it has on disk, Claude
+        the rest."""
+        if (antigravity.is_agy(model) or opencode.is_oc(model)) and self.task.is_survey:
+            model = self.config.planner_model  # a survey runs on Claude (`_client`)
+        on_agy = (antigravity.gemini_home() / "antigravity-cli" / "brain" / session).is_dir()
+        if opencode.is_oc(model):
+            return session.startswith("ses_")
+        if antigravity.is_agy(model):
+            return on_agy
+        return not session.startswith("ses_") and not on_agy
 
     def _client(self, options: ClaudeAgentOptions) -> Any:
         """The agent for this task's model: Claude, Antigravity on its CLI

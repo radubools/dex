@@ -41,6 +41,19 @@ The session id is the task's session; a follow-up turn resumes it with
 `--session`. dex's appended system prompt goes in front of the first message.
 An interrupt ends the process; the session stays.
 
+A task continued on another agent than the one that kept its session (a
+Claude task asked for a change while OpenCode is the model, say) cannot resume
+it: OpenCode only takes its own `ses_…` ids. `TaskRunner._resumable` tells
+the three apart (OpenCode's prefix, Antigravity's conversations on disk,
+Claude the rest), and such a task starts a fresh session with the whole brief,
+told that its earlier work is in the directory.
+
+A run whose dex server went away (a reload) has nobody to answer its gate:
+at its next tool call the plugin finds nothing listening and ends the run
+(Antigravity's hook does the same), so it cannot go on working beside the
+session dex resumes. A run that prints nothing at all for 150 seconds is
+killed and started once more.
+
 ## Permissions
 
 dex's own config directory, `~/.dex/opencode` (`OPENCODE_CONFIG_DIR`, so the
@@ -94,8 +107,16 @@ plan's models.
   server's event stream (`opencode serve`) would give deltas.
 - **Thinking tokens read zero** on the Go models tried: the provider does not
   report them, though their reasoning text arrives.
-- **A changed plugin stalls the next start.** The first OpenCode start after
-  the gate's file changes can hang before its server answers, so `install`
-  loads the config once whenever it rewrites it (`_warm`).
+- **Starts sometimes stall.** A few OpenCode starts hung before their server
+  answered, printing nothing, right after the gate's file changed; it could
+  not be reproduced later. `install` loads the config after a change
+  (`_warm`) and a silent run is restarted once (`STARTUP_TIMEOUT_S`).
+- **Calls from one code-tool run share its output.** When the model calls
+  two of dex's tools in one `execute`, OpenCode reports one result for both,
+  and each step shows it.
+- **An orphaned run works until its next tool call**, text and reasoning
+  included, before it finds dex gone.
+- **Upstream errors fail the task.** A Go provider's bad response ("Upstream
+  response was not valid JSON") is not retried.
 - **Its limits are not watched.** A Go limit fails the task rather than
   pausing it.

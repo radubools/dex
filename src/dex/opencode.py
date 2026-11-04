@@ -83,6 +83,9 @@ API_KEY_PATTERN = re.compile(r"(_API_KEY|_AUTH_TOKEN|^HF_TOKEN)$")
 #: the gate with no question to the operator.
 REFUSED = re.compile(r"^(question|subagent|skill|browser.*|opencode_.*)$")
 
+#: How long a run may print nothing at all before it counts as stalled.
+STARTUP_TIMEOUT_S = 150.0
+
 #: OpenCode's code tool: a sandbox from which the model calls MCP tools
 #: (`tools.dex.ask_user(...)`). Each call it makes comes to the gate itself,
 #: so it runs unasked and the panel shows those calls, not it.
@@ -393,6 +396,8 @@ class OpencodeClient:
         self._shown: set[str] = set()
         self._calls: dict[str, int] = {}
         self._announced = False
+        #: How the turn's process is started, for a start that stalls.
+        self._launch: tuple[list[str], dict[str, str]] = ([], {})
 
     @property
     def model_ref(self) -> str:
@@ -460,12 +465,17 @@ class OpencodeClient:
                     "DEX_OC_GATE": self._bridge.url("gate"),
                     # OpenCode takes its directory from PWD, not the process's.
                     "PWD": str(self.cwd)})
-        self._proc = await asyncio.create_subprocess_exec(
-            *self._args(prompt), cwd=str(self.cwd), env=env, start_new_session=True,
+        self._launch = (self._args(prompt), env)
+        self._proc = await self._start()
+        self._runner = asyncio.create_task(self._run(self._proc), name="dex-opencode-run")
+
+    async def _start(self) -> asyncio.subprocess.Process:
+        args, env = self._launch
+        return await asyncio.create_subprocess_exec(
+            *args, cwd=str(self.cwd), env=env, start_new_session=True,
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=64 * 1024 * 1024,
         )
-        self._runner = asyncio.create_task(self._run(self._proc), name="dex-opencode-run")
 
     async def interrupt(self) -> None:
         """Stop the turn under way: the process ends, the session stays."""
@@ -603,7 +613,7 @@ class OpencodeClient:
             data = error.get("data") if isinstance(error.get("data"), dict) else {}
             self._error = str(data.get("message") or error.get("message") or error.get("name") or event)
 
-    async def _run(self, proc: asyncio.subprocess.Process) -> None:
+    async def _run(self, proc: asyncio.subprocess.Process, *, retried: bool = False) -> None:
         stderr: list[str] = []
 
         async def read_stderr() -> None:
@@ -618,7 +628,26 @@ class OpencodeClient:
 
         reading = asyncio.create_task(read_stderr())
         assert proc.stdout is not None
-        while line := await proc.stdout.readline():
+        try:
+            # OpenCode has been seen to stall before its server answers, with
+            # nothing printed, now and then; a run that says nothing at all
+            # for this long is started once more.
+            first = await asyncio.wait_for(proc.stdout.readline(), STARTUP_TIMEOUT_S)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            await proc.wait()
+            reading.cancel()
+            if retried or self._interrupted or proc is not self._proc:
+                self._error = self._error or f"OpenCode printed nothing for {STARTUP_TIMEOUT_S:.0f}s"
+                if proc is self._proc and not self._interrupted:
+                    self._finish_turn(error=self._error)
+                return
+            self.notice("OpenCode did not start; starting it again.")
+            self._proc = await self._start()
+            return await self._run(self._proc, retried=True)
+        lines = [first] if first else []
+        while line := (lines.pop() if lines else await proc.stdout.readline()):
             try:
                 event = json.loads(line)
             except ValueError:

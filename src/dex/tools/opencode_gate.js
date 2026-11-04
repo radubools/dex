@@ -27,6 +27,12 @@ export default {
         })
         decision = await response.json()
       } catch (error) {
+        if (String(error).includes("ECONNREFUSED") || error?.code === "ConnectionRefused") {
+          // Nothing listens for this task any more (the dex server restarted
+          // under it, and resumes the task in a session of its own): this
+          // run has nobody to answer to, so it ends here.
+          process.exit(1)
+        }
         decision = { decision: "deny", reason: `dex could not decide on this call: ${error}` }
       }
       if (!decision || decision.decision !== "allow") {

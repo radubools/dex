@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import urllib.request
 
@@ -29,6 +30,11 @@ def main() -> None:
         with urllib.request.urlopen(request, timeout=24 * 3600) as response:
             decision = json.loads(response.read() or b"{}")
     except Exception as exc:  # noqa: BLE001 -- every failure is a denial
+        if isinstance(getattr(exc, "reason", exc), ConnectionRefusedError):
+            # Nothing listens for this task any more (the dex server restarted
+            # under it, and resumes the task in a session of its own): the
+            # `agy` run that asked, and this hook, end here.
+            os.killpg(os.getpgid(0), signal.SIGTERM)  # agy runs in a session of its own
         decision = {"decision": "deny", "reason": f"dex could not decide on this call: {exc}"}
     sys.stdout.write(json.dumps(decision))
 
