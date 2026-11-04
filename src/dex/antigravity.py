@@ -211,16 +211,23 @@ def _path(args: dict[str, Any], *keys: str, cwd: Path) -> str | None:
 
 
 def claude_shape(name: str | None, args: dict[str, Any], cwd: Path) -> tuple[str, dict[str, Any]]:
-    """An `agy` tool call as (Claude tool name, Claude-shaped input).
+    """An `agy` tool call as (Claude tool name, Claude-shaped input), with the
+    model's own one-line summary of it as `description` when it wrote one.
 
     The hook and the stream name some tools differently (`view_file` against
     `read_file`, `write_to_file` against `write_file`): both are covered.
     """
     args = args if isinstance(args, dict) else {}
+    claude, shaped = _shape(name, args, cwd)
+    summary = args.get("toolSummary") or args.get("Description")
+    if summary and not claude.startswith("mcp__") and isinstance(shaped, dict):
+        shaped = {**shaped, "description": str(summary)}
+    return claude, shaped
+
+
+def _shape(name: str | None, args: dict[str, Any], cwd: Path) -> tuple[str, dict[str, Any]]:
     if name == "run_command":
         shaped: dict[str, Any] = {"command": str(args.get("CommandLine") or "")}
-        if args.get("toolSummary"):
-            shaped["description"] = args["toolSummary"]
         if args.get("Cwd"):
             shaped["cwd"] = _path(args, "Cwd", cwd=cwd)
         return "Bash", shaped
@@ -232,6 +239,9 @@ def claude_shape(name: str | None, args: dict[str, Any], cwd: Path) -> tuple[str
                         "old_string": args.get("TargetContent", ""),
                         "new_string": args.get("ReplacementContent", ""),
                         **({"replace_all": True} if args.get("AllowMultiple") else {})}
+    if name == "edit_file":
+        return "Edit", {"file_path": _path(args, "Path", "TargetFile", cwd=cwd),
+                        "old_string": args.get("Target", ""), "new_string": args.get("Replacement", "")}
     if name == "multi_replace_file_content":
         chunks = args.get("ReplacementChunks") or []
         return "MultiEdit", {"file_path": _path(args, "TargetFile", "Path", cwd=cwd), "edits": [
@@ -394,6 +404,8 @@ class AgyClient:
         self._transcript_at = 0
         self._thoughts: dict[int, str] = {}
         self._unshown: list[int] = []
+        #: Steps the stream has announced, waiting for the gate's whole call.
+        self._held: dict[str, tuple[str | None, dict[str, Any]]] = {}
         #: Each call as the gate saw it, by tool id, for the stream to show.
         self._gated: dict[str, tuple[str, dict[str, Any]]] = {}
 
@@ -502,8 +514,13 @@ class AgyClient:
             return {"decision": "allow", "reason": "dex policy: a command it allowed"}
         name, shaped = claude_shape(call.get("name"), args, self.cwd)
         tool_id = self._tool_id(payload.get("stepIdx"))
-        # The stream leaves a write's content out; the hook is given it.
+        # The stream gives a call's bare arguments only: no content, no summary.
+        # The hook is given all of it, just before the call runs, so a step
+        # the stream announced is shown from here; one it has not, when it does.
         self._gated[tool_id] = (name, shaped)
+        if self._held.pop(tool_id, None) is not None:
+            self._close_block()
+            self._tool_use(tool_id, None, {})
         context = ToolPermissionContext(signal=None, suggestions=[], tool_use_id=tool_id,
                                         title=str(args.get("toolSummary") or name))
         decision = await self.decide(name, shaped, context)
@@ -515,7 +532,9 @@ class AgyClient:
                 # Confined, rewritten: what runs is what the policy allowed.
                 return {"decision": "allow", "reason": "dex policy",
                         "overwrite": {"CommandLine": updated["command"]}}
-            if {k: v for k, v in updated.items() if k in shaped} != shaped:
+            # The summary is only for the panel: the policy may drop it.
+            asked = {k: v for k, v in shaped.items() if k != "description"}
+            if {k: v for k, v in updated.items() if k in asked} != asked:
                 return {"decision": "deny", "reason": "dex would only allow this changed, which it cannot do here"}
         return {"decision": "allow", "reason": "dex policy"}
 
@@ -662,9 +681,18 @@ class AgyClient:
         name = step.get("tool_name") or info.get("name")
         params = info.get("parameters") or {}
         tool_id = self._tool_id(step.get("step_index"))
-        if tool_id not in self._open_tools and state in ("ACTIVE", "DONE", "ERROR"):
-            self._close_block()
-            self._tool_use(tool_id, name, params)
+        if tool_id not in self._open_tools:
+            if tool_id in self._gated or state in ("DONE", "ERROR"):
+                # Gated already, or finished with no gate seen: shown now, from
+                # what the stream said when it started if it says less now.
+                held = self._held.pop(tool_id, None)
+                if held is not None:
+                    name, params = name or held[0], params or held[1]
+                self._close_block()
+                self._tool_use(tool_id, name, params)
+            elif state == "ACTIVE":
+                # Held for the gate, which follows at once with the whole call.
+                self._held[tool_id] = (name, params)
         if state in ("DONE", "ERROR"):
             error = info.get("error") or {}
             self._tool_result(tool_id, str(error.get("message") if state == "ERROR" else info.get("output") or ""),

@@ -178,3 +178,44 @@ def test_reasoning_comes_from_the_transcript(tmp_path, monkeypatch) -> None:
     client._handle({"event": "step_update", "step_update": {"step_index": 3, "state": "DONE",
                     "step_type": "agent_response", "usage": {"thinking_tokens": 0}}})
     assert not [m for m in _drain(client) if isinstance(m, AssistantMessage) and m.content]
+
+
+def test_a_step_waits_for_the_gate_to_show_the_whole_call() -> None:
+    async def decide(name, data, context):
+        return PermissionResultAllow()
+
+    client = _client(decide)
+    client._in_turn = True
+    client.conversation = "c5"
+    step = lambda state, **info: {"event": "step_update", "step_update": {  # noqa: E731
+        "step_index": 4, "state": state, "step_type": "tool", "tool_name": "write_file",
+        "tool_info": {"parameters": {"Path": "/work/task/a.md"}, **info}}}
+    # The stream announces it with the path only: nothing is shown yet.
+    client._handle(step("ACTIVE"))
+    assert not [m for m in _drain(client) if isinstance(m, AssistantMessage)]
+    # The gate has the content and the model's summary: the step shows with both.
+    asyncio.run(client._gate({"stepIdx": 4, "toolCall": {"name": "write_to_file", "args": {
+        "TargetFile": "/work/task/a.md", "CodeContent": "# Hi", "Description": "Write the intro"}}}))
+    client._handle(step("DONE", output="ok"))
+    messages = _drain(client)
+    (tool,) = [m.content[0] for m in messages if isinstance(m, AssistantMessage)]
+    assert tool.input == {"file_path": "/work/task/a.md", "content": "# Hi", "description": "Write the intro"}
+    assert any(isinstance(m, UserMessage) for m in messages)
+
+
+def test_a_step_the_gate_never_saw_still_shows_when_it_ends() -> None:
+    client = _client(None)
+    client._in_turn = True
+    client._handle({"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "step_type": "tool",
+                    "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/work/task/a.md"}}}})
+    client._handle({"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "step_type": "tool",
+                    "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/work/task/a.md"}, "output": "1 line"}}})
+    kinds = [type(m).__name__ for m in _drain(client)]
+    assert kinds == ["AssistantMessage", "UserMessage"]
+
+
+def test_edit_file_and_summaries() -> None:
+    assert claude_shape("edit_file", {"Path": "b.txt", "Target": "WORLD", "Replacement": "THERE"}, CWD) == (
+        "Edit", {"file_path": "/work/task/b.txt", "old_string": "WORLD", "new_string": "THERE"})
+    assert claude_shape("run_command", {"CommandLine": "wc -c a", "toolSummary": "Count bytes"}, CWD)[1][
+        "description"] == "Count bytes"

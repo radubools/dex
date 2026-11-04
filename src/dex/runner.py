@@ -2048,10 +2048,42 @@ def _trim_input(data: dict[str, Any], limit: int = 600) -> dict[str, Any]:
     return out
 
 
+def _line(value: Any, limit: int = 120) -> str:
+    """The first line of a value, short enough for a step's title."""
+    text = str(value or "").strip().splitlines()[0] if str(value or "").strip() else ""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _count(value: Any) -> int:
+    """How many items a list argument holds, even when it arrived as its repr."""
+    if isinstance(value, list):
+        return len(value)
+    import ast
+
+    parsed = None
+    for parse in (json.loads, ast.literal_eval):
+        try:
+            parsed = parse(value) if isinstance(value, str) else None
+            break
+        except (ValueError, SyntaxError):
+            continue
+    return len(parsed) if isinstance(parsed, list) else 1
+
+
 def _tool_title(name: str, data: dict[str, Any]) -> str:
+    """A step's one line in the task panel: what it is doing, in words.
+
+    The agent's own summary of the call comes first wherever it gave one (a
+    Bash `description`; Antigravity writes one for commands and file writes).
+    Otherwise it is said from the arguments: the file, the pattern, the
+    question, the query, never the bare tool name when its input says more.
+    """
+    if data.get("description"):
+        return _line(data["description"])
     path = data.get("file_path") or data.get("path")
     stem = Path(str(path)).name if path else ""
-    match name:
+    tool = name.split("__")[-1] if name.startswith("mcp__") else name
+    match tool:
         case "Read":
             return f"Read {stem}"
         case "Write":
@@ -2059,8 +2091,42 @@ def _tool_title(name: str, data: dict[str, Any]) -> str:
         case "Edit" | "MultiEdit":
             return f"Edit {stem}"
         case "Bash":
-            return str(data.get("description") or data.get("command", "run command"))[:120]
+            return _line(data.get("command") or "run command")
         case "Glob" | "Grep":
-            return f"Search {data.get('pattern', '')}"
+            where = f" in {stem}" if stem and name == "Grep" else ""
+            return _line(f"Search {data.get('pattern', '')}{where}")
+        case "WebFetch":
+            url = str(data.get("url") or "")
+            return _line(f"Fetch {url.split('://', 1)[-1]}" if url else "Fetch a page")
+        case "WebSearch":
+            return _line(f"Search the web: {data.get('query', '')}")
+        case "ToolSearch":
+            return "Load tools"
+        case "TaskStop":
+            return "Stop a background command"
+        case "ask_user":
+            return _line(f"Ask: {data.get('question', '')}")
+        case "log_idea":
+            return _line(f"Idea: {data.get('text', '')}")
+        case "add_todos":
+            n = _count(data.get("todos"))
+            return f"Add {n} todo{'s' if n != 1 else ''}"
+        case "query_database":
+            return _line(f"Query: {' '.join(str(data.get('sql', '')).split())}")
+        case "find_tasks":
+            return _line(f"Find tasks: {data.get('query', '')}")
+        case "start_task":
+            return _line(f"Start {data.get('title') or data.get('slug') or 'a task'}")
+        case "start_power_task":
+            return _line(f"Start a power task: {_line(data.get('brief'), 90)}")
+        case "continue_task":
+            return _line(f"Message {data.get('task', 'a task')}: {data.get('message', '')}")
+        case "wait_for_tasks":
+            n = _count(data.get("tasks"))
+            return f"Wait for {n} task{'s' if n != 1 else ''}"
+        case "task_status":
+            return "Check how tasks stand"
+        case "link_local_source":
+            return _line(f"Link {data.get('path', 'a directory')}")
         case _:
-            return name.split("__")[-1] if name.startswith("mcp__") else name
+            return tool.replace("_", " ").capitalize() if name.startswith("mcp__") else name
