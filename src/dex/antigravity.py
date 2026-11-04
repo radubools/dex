@@ -52,6 +52,7 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
+    ThinkingBlock,
     ToolPermissionContext,
     ToolResultBlock,
     ToolUseBlock,
@@ -388,6 +389,11 @@ class AgyClient:
         self._index = 0
         self._open_tools: set[str] = set()
         self._announced = False
+        #: How far the conversation's transcript has been read, and the
+        #: reasoning steps still to show (step index -> found yet).
+        self._transcript_at = 0
+        self._thoughts: dict[int, str] = {}
+        self._unshown: list[int] = []
         #: Each call as the gate saw it, by tool id, for the stream to show.
         self._gated: dict[str, tuple[str, dict[str, Any]]] = {}
 
@@ -552,6 +558,8 @@ class AgyClient:
         if not self._in_turn:
             return
         self._in_turn = False
+        self._show_reasoning()
+        self._unshown.clear()
         self._close_block()
         for tool_id in [*self._open_tools]:
             self._tool_result(tool_id, "", ok=error is None)
@@ -563,6 +571,39 @@ class AgyClient:
             total_cost_usd=0.0, usage=_claude_usage(usage),
             result=error if error and error != "interrupted" else response,
         ))
+
+    def _transcript(self) -> Path:
+        return (gemini_home() / "antigravity-cli" / "brain" / str(self.conversation)
+                / ".system_generated" / "logs" / "transcript.jsonl")
+
+    def _show_reasoning(self) -> None:
+        """Each finished step's reasoning, from the conversation's transcript.
+
+        `agy` streams no reasoning, only its token count, but writes a summary
+        of it per model step to the transcript it keeps. Read from where the
+        last read stopped, and shown as a finished thinking block, which the
+        runner puts in the panel's reasoning step as it does for Claude's.
+        """
+        if not self._unshown or not self.conversation:
+            return
+        try:
+            with self._transcript().open("rb") as transcript:
+                transcript.seek(self._transcript_at)
+                for line in transcript:
+                    if not line.endswith(b"\n"):
+                        break  # still being written: read it next time
+                    self._transcript_at += len(line)
+                    with contextlib.suppress(ValueError, TypeError):
+                        entry = json.loads(line)
+                        if entry.get("thinking"):
+                            self._thoughts[int(entry.get("step_index") or 0)] = str(entry["thinking"]).strip()
+        except OSError:
+            return
+        for index in [i for i in self._unshown if i in self._thoughts]:
+            self._unshown.remove(index)
+            self._messages.put_nowait(AssistantMessage(
+                content=[ThinkingBlock(thinking=self._thoughts.pop(index), signature="")],
+                model=PREFIX + str(self.model)))
 
     def _handle(self, message: dict[str, Any]) -> None:
         kind = message.get("event")
@@ -604,6 +645,16 @@ class AgyClient:
             if state == "DONE":
                 self._close_block()
                 self._steps += 1
+                if (step.get("usage") or {}).get("thinking_tokens"):
+                    self._unshown.append(int(step.get("step_index") or 0))
+                    self._show_reasoning()
+                if step.get("usage"):
+                    # Each model call's tokens, as Claude reports them per
+                    # message: the runner files them by hour and skill
+                    # (task_usage), which the cost dashboard reads.
+                    self._messages.put_nowait(AssistantMessage(
+                        content=[], model=PREFIX + str(self.model), usage=_claude_usage(step["usage"]),
+                        message_id=f"agy-{self.conversation}-{step.get('step_index')}"))
             return
         if kind != "tool":
             return

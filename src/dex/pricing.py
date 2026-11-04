@@ -35,6 +35,10 @@ CACHE_WRITE_MULTIPLIER = 1.25
 def price_for(model: str | None) -> tuple[float, float]:
     if not model:
         return DEFAULT_PRICE
+    if model.startswith("agy:"):
+        # Antigravity runs on the Google subscription: nothing per token
+        # (design/27), whichever model it serves, Claude's included.
+        return (0.0, 0.0)
     if model in PRICES:
         return PRICES[model]
     # Tolerate dated snapshots and provider prefixes: match the longest key

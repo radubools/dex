@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import json
 from types import SimpleNamespace
 
 from claude_agent_sdk import (
@@ -14,6 +15,7 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     SystemMessage,
+    ThinkingBlock,
     UserMessage,
 )
 
@@ -141,3 +143,38 @@ def test_install_writes_the_agent_and_its_plugin(tmp_path, monkeypatch) -> None:
     hooks = (tmp_path / "dex" / "dex-plugin" / "hooks.json").read_text()
     assert "PreToolUse" in hooks and "agy_hook.py" in hooks
     assert (tmp_path / "dex" / "dex-plugin" / "agy_mcp.py").exists()
+
+
+def test_each_model_call_reports_its_tokens_at_no_cost() -> None:
+    client = _client(None)
+    client._in_turn = True
+    client.conversation = "c3"
+    client._handle({"event": "step_update", "step_update": {"step_index": 1, "state": "DONE",
+                    "step_type": "agent_response", "usage": {"input_tokens": 900, "output_tokens": 40,
+                                                             "thinking_tokens": 12, "cache_read_tokens": 5000}}})
+    (call,) = [m for m in _drain(client) if isinstance(m, AssistantMessage)]
+    assert call.content == [] and call.message_id == "agy-c3-1"
+    assert call.usage["input_tokens"] == 900 and call.usage["cache_read_input_tokens"] == 5000
+    from dex import pricing
+    assert pricing.estimate(call.model, call.usage) == 0.0
+    assert pricing.estimate("claude-opus-5-5", call.usage) > 0
+
+
+def test_reasoning_comes_from_the_transcript(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path))
+    client = _client(None)
+    client._in_turn = True
+    client.conversation = "c7"
+    logs = client._transcript()
+    logs.parent.mkdir(parents=True)
+    logs.write_text(json.dumps({"step_index": 0, "type": "USER_INPUT"}) + "\n"
+                    + json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "thinking": "Count the primes first."}) + "\n")
+    client._handle({"event": "step_update", "step_update": {"step_index": 1, "state": "DONE",
+                    "step_type": "agent_response", "usage": {"output_tokens": 3, "thinking_tokens": 40}}})
+    thoughts = [b.thinking for m in _drain(client) if isinstance(m, AssistantMessage)
+                for b in m.content if isinstance(b, ThinkingBlock)]
+    assert thoughts == ["Count the primes first."]
+    # Read once: a later step does not show it again.
+    client._handle({"event": "step_update", "step_update": {"step_index": 3, "state": "DONE",
+                    "step_type": "agent_response", "usage": {"thinking_tokens": 0}}})
+    assert not [m for m in _drain(client) if isinstance(m, AssistantMessage) and m.content]
