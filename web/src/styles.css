@@ -1817,7 +1817,30 @@ body.resizing iframe { pointer-events: none; }
 .sheet-body table { border-collapse: collapse; font-size: 12px; }
 .sheet-body td, .sheet-body th {
   border: 1px solid var(--line); padding: 3px 8px; white-space: nowrap;
+  max-width: 48ch; overflow: hidden; text-overflow: ellipsis; text-align: left;
 }
+.table-view { height: 100%; }
+.table-view .sheet-body { flex: 1; min-height: 0; }
+.table-view thead th { position: sticky; top: 0; background: var(--panel, var(--bg)); }
+.table-row-number { color: var(--muted); text-align: right !important; }
+td.clipped { cursor: pointer; }
+td.clipped:hover { color: var(--accent); }
+.cell-modal-scrim {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.cell-modal {
+  display: flex; flex-direction: column; width: min(760px, 100%); max-height: 100%;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.cell-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere;
+}
+.cell-modal-body { padding: 14px; overflow: auto; }
+.cell-modal-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.table-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.table-count { margin-left: auto; }
 
 /* ------------------------------------------------------------- the survey */
 /* Where a planned task's work is, and the pass that worked it out. */

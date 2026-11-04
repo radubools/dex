@@ -300,7 +300,7 @@ export function TaskPanel({
             {view.queued.length > 0 && (
               <div className="queued-notes">
                 <div className="card-kind">
-                  Queued · {live ? 'sent when this task stops' : 'sending…'}
+                  Queued · {live ? 'sent when this task runs' : 'sending…'}
                 </div>
                 {view.queued.map((m) => (
                   <div key={m.id} className="queued-note">{m.body}</div>
@@ -335,10 +335,10 @@ export function TaskPanel({
 }
 
 /**
- * Chat inside a task. What you type is queued rather than sent: interrupting a
- * run mid-flight would discard work in progress, so notes are held and become
- * the brief for the task's next attempt once it stops. dex may decide it is other
- * work and take it elsewhere (design/26).
+ * Chat inside a task. What you type goes to the run straight away, stopping its
+ * turn; a task with no run yet gets it when one starts, and a finished one starts
+ * its next attempt. dex may decide it is other work and take it elsewhere
+ * (design/26).
  */
 function TaskComposer({
   taskId,
@@ -394,7 +394,7 @@ function TaskComposer({
         rows={1}
         value={draft}
         enterKeyHint="send"
-        placeholder={live ? 'Queue a note for when this finishes…' : 'Ask for a change…'}
+        placeholder={live ? 'Message this task…' : 'Ask for a change…'}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -404,7 +404,7 @@ function TaskComposer({
         }}
       />
       <button type="submit" className="send-btn" disabled={!draft.trim() || busy}>
-        {live ? 'Queue' : 'Send'}
+        Send
       </button>
     </form>
   )

@@ -39,6 +39,8 @@ class QuietClient:
         return
         yield  # pragma: no cover - never reached, makes this a generator
 
+    receive_messages = receive_response
+
 
 def agent_that(write) -> type:
     """A client that writes while the run is open, as a real agent would."""

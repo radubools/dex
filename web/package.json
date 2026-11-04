@@ -17,8 +17,7 @@
     "mermaid": "^11.17.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "three": "^0.185.1",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

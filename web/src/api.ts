@@ -199,7 +199,7 @@ export const listTasks = () => request<{ tasks: Task[] }>('/api/tasks').then((r)
 export const getTaskMessages = (id: string) =>
   request<{ messages: TaskMessage[] }>(`/api/tasks/${id}/messages`).then((r) => r.messages)
 
-/** Held while the task runs; delivered as the brief for its next attempt. */
+/** Goes to the running task at once; a finished one starts its next attempt with it. */
 export const sendTaskMessage = (id: string, text: string, uploads: string[] = []) =>
   post<{ message: TaskMessage | null; routed?: Routed }>(`/api/tasks/${id}/messages`, { text, uploads })
 
@@ -435,6 +435,32 @@ export const getTaskEvents = (id: string) =>
   request<{ taskId: string; events: DexEvent[] }>(`/api/tasks/${id}/events`).then(
     (r) => r.events,
   )
+
+/** One page of a data file, as `dex/tables.py` cuts it. */
+export type TablePage = {
+  columns: string[]
+  rows: string[][]
+  total: number
+  offset: number
+  limit: number
+  /** Only a spreadsheet has these. */
+  sheets?: string[]
+  sheet?: string | null
+}
+
+export const readTable = (url: string, page: { offset: number; limit: number; sheet?: string | null; full?: boolean }) =>
+  request<TablePage>(
+    `${url}&offset=${page.offset}&limit=${page.limit}${page.sheet ? `&sheet=${encodeURIComponent(page.sheet)}` : ''}${page.full ? '&full=true' : ''}`,
+  )
+
+export const assetTableUrl = (path: string) => `/api/assets/table?path=${encodeURIComponent(path)}`
+
+export const sourceTableUrl = (project: string, name: string) =>
+  `/api/datasets/table?project=${encodeURIComponent(project)}&name=${encodeURIComponent(name)}`
+
+/** Where a package's HTML file can be framed: see `/api/assets/page`. */
+export const assetPageUrl = (path: string) =>
+  request<{ url: string }>(`/api/assets/page?path=${encodeURIComponent(path)}`).then((r) => r.url)
 
 export const assetUrl = (path: string) =>
   `/api/assets/raw?path=${encodeURIComponent(path)}&t=${encodeURIComponent(token)}`

@@ -315,6 +315,8 @@ class Client:
         return
         yield  # pragma: no cover
 
+    receive_messages = receive_response
+
 
 async def test_a_run_that_waits_ends_blocked_not_failed_and_resumes_with_the_news(manager, db, config, monkeypatch):
     await threads(db)

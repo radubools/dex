@@ -99,3 +99,8 @@ async def test_the_latest_answer_wins(db):
         "Stop the batch after chapter 9 or finish all 31?", ["All 31", "Stop at 9"],
         project="traduceri",
     ) == "All 31"
+
+
+async def test_settings_list_past_a_marker_that_is_not_a_setting(db):
+    await db.pool.execute("""INSERT INTO settings (key, value) VALUES ('threads_tied:x', 'true'::jsonb)""")
+    assert (await SettingsStore(db).all())["threads_tied:x"] is True

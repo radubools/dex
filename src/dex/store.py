@@ -1291,7 +1291,9 @@ class SettingsStore:
 
     async def all(self) -> dict[str, Any]:
         rows = await self.db.pool.fetch("SELECT key, value FROM settings")
-        settings = {row["key"]: Database.load(row["value"]).get("v") for row in rows}
+        # A migration's marker (`threads_tied:<project>`) is a bare value, not a setting.
+        loaded = {row["key"]: Database.load(row["value"]) for row in rows}
+        settings = {key: value.get("v") if isinstance(value, dict) else value for key, value in loaded.items()}
         for key, value in self.DEFAULTS.items():
             settings.setdefault(key, value)
         return settings

@@ -87,13 +87,18 @@ class AssetWatcher:
             for change, raw in changes:
                 await self._handle(change, raw)
 
+    def _named(self, raw: str) -> Path:
+        """A reported path as dex names it: a symlinked assets root reports its target."""
+        path, real = Path(raw), self.config.assets_dir.resolve()
+        return self.config.assets_dir / path.relative_to(real) if path.is_relative_to(real) else path
+
     async def _handle(self, change: Change, raw: str) -> None:
         """Report one filesystem change as an asset event.
 
         Split out from the watch loop so it can be exercised directly: the loop
         itself never returns, which left this logic effectively untested.
         """
-        path = Path(raw)
+        path = self._named(raw)
         if not is_artifact(path):
             return
         try:

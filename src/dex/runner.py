@@ -154,10 +154,11 @@ def is_auth_error(message: str) -> bool:
     return "not logged in" in lowered or "authentication_failed" in lowered or "please run /login" in lowered
 
 
-def chat_interjection(text: str) -> str:
-    """A message the player typed while a chat task was working, as its next turn."""
+def chat_interjection(text: str, chat: bool = True) -> str:
+    """A message someone typed while a task was working, as its next turn."""
+    sender = "The player just sent this message from the game" if chat else "The operator just sent this message"
     return (
-        "The player just sent this message from the game while you were working "
+        f"{sender} while you were working "
         "(your previous step was interrupted to hand it to you). Take it into "
         "account, then carry on with whatever still makes sense:\n\n" + text.strip()
     )
@@ -1145,19 +1146,15 @@ class TaskRunner:
             async with asyncio.timeout(self.config.task_timeout_s):
                 async with self._client(options) as client:
                     await client.query(prompt)
-                    if self.task.is_chat:
-                        await self._converse(client)
-                    else:
+                    await self._converse(client)
+                    # A session resumed after it was cut off mid-turn (a server
+                    # restart, a pause for capacity) can answer with an empty
+                    # turn: nothing ran. Nudge it once to carry on.
+                    if resume_session and self.task.turns == 0 and not self.task.is_chat:
+                        self.emit("text", text="The resumed session did not run; asking it to carry on.")
+                        await client.query(RESUME_NUDGE)
                         async for message in client.receive_response():
                             self._observe(message)
-                        # A session resumed after it was cut off mid-turn (a
-                        # server restart, a pause for capacity) can answer with
-                        # an empty turn: nothing ran. Nudge it once to carry on.
-                        if resume_session and self.task.turns == 0:
-                            self.emit("text", text="The resumed session did not run; asking it to carry on.")
-                            await client.query(RESUME_NUDGE)
-                            async for message in client.receive_response():
-                                self._observe(message)
                 # Still nothing: that session cannot go on. Start a fresh one on
                 # the same package, told that earlier work is already there.
                 if (resume_session and self.task.turns == 0 and not self.task.is_chat
@@ -1437,17 +1434,25 @@ class TaskRunner:
         return (root,) if root else ()
 
     async def _converse(self, client: ClaudeSDKClient) -> None:
-        """Run a chat task: its turns, plus whatever the player types meanwhile.
+        """Run a task: its turns, plus whatever a person types meanwhile.
 
-        Each message from the player (`task.inbox`, filled by the game-chat
-        API) interrupts the turn under way and goes to the same session as the
-        next turn, so the agent takes it into account at once rather than
-        after finishing what it was doing. The run ends when a turn finishes
+        Each message (`task.inbox`, filled by the game chat and the task's
+        activity chat) interrupts the turn under way and goes to the same
+        session as the next turn, so the agent takes it into account at once
+        rather than after finishing what it was doing. What was held for this
+        task before it started goes first. The run ends when a turn finishes
         with nothing left in the inbox; anything typed after that point is
         held as a follow-up note and starts the next attempt.
         """
         inbox: asyncio.Queue[str] = asyncio.Queue()
         self.task.inbox = inbox
+        notes = TaskMessageStore(self.store.db)
+        options = await notes.pending_options(self.task.id)
+        if held := await notes.take(self.task.id):
+            inbox.put_nowait("\n\n".join(held))
+            self.task.options = {**(self.task.options or {}), **options}
+            await self.store.set_options(self.task.id, self.task.options)
+            self.emit("task_message_delivered", count=len(held), startedTaskId=self.task.id)
         due = 1  # turns still to finish: the opening prompt
         interrupted: asyncio.Event | None = None
 
@@ -1458,14 +1463,19 @@ class TaskRunner:
                 # Stop the turn under way and wait for it to wind down, so its
                 # result is not taken for the new turn's.
                 interrupted = asyncio.Event()
+                # What the agent was waiting for an answer to is dropped: this
+                # message is what it gets instead.
+                for waiting in list(self.task.pending.values()):
+                    waiting.cancel()
                 with contextlib.suppress(Exception):
                     await client.interrupt()
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(interrupted.wait(), timeout=20)
                 interrupted = None
                 due += 1
-                self.emit("text", text="The player sent a message: taking it into account.")
-                await client.query(chat_interjection(text))
+                who = "player" if self.task.is_chat else "operator"
+                self.emit("text", text=f"The {who} sent a message: taking it into account.")
+                await client.query(chat_interjection(text, chat=self.task.is_chat))
 
         feeder = asyncio.create_task(feed(), name=f"dex-chat-inbox-{self.task.slug}")
         try:

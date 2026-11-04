@@ -175,6 +175,7 @@ flowchart TB
 | `web_sources` | Fetching a URL, and the guard that refuses most of them |
 | `surveyor` | The survey's tool surface, and when a message gets one |
 | `uploads` | Material the operator supplies, in `datasets/<project>/` |
+| `tables` | One page of a data file or spreadsheet, for the viewer's tables |
 | `local_sources` | Linking a directory from elsewhere on the machine, read-only |
 | `skills` | A project's helpers and widgets, versioned and shareable |
 | `locks` | Lock, read, write, release: thread and file locks for shared state (skills, port leases) |

@@ -6,6 +6,7 @@ slug of its own, so anything keyed on the slug looks in the wrong place.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -148,3 +149,14 @@ async def test_an_added_event_for_a_vanished_file_is_treated_as_a_deletion(manag
     assert task.artifacts == [], "a file that is gone must not be re-added"
     # The UI keys off this field, so it has to say what is true of the file.
     assert seen[0].data["change"] == "deleted"
+
+
+async def test_a_symlinked_assets_root_is_named_as_dex_names_it(manager, config, tmp_path):
+    """The watcher reports a link's target, which is outside the root as dex spells it."""
+    target = tmp_path / "volume"
+    target.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(target)
+    watcher = AssetWatcher(replace(config, assets_dir=linked), manager.bus, manager)
+    assert watcher._named(str(target.resolve() / "ml" / "pkg" / "a.md")) == linked / "ml" / "pkg" / "a.md"
+    assert watcher._named("/elsewhere/a.md") == Path("/elsewhere/a.md")

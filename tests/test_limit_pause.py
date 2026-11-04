@@ -41,6 +41,8 @@ class LimitedClient:
             is_error=True, num_turns=1, session_id="sess-abc", result=LIMIT_TEXT,
         )
 
+    receive_messages = receive_response
+
 
 class RefusedAtStart:
     """The CLI's raw path: the refusal arrives raised, not yielded."""
@@ -59,6 +61,8 @@ class RefusedAtStart:
 
     async def receive_response(self):
         yield SystemMessage(subtype="init", data={"session_id": "sess-abc"})
+
+    receive_messages = receive_response
 
 
 def package_task(**fields) -> Task:

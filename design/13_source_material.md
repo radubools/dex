@@ -19,7 +19,8 @@ it uses for generated assets, so a PDF can be read without leaving dex.
 | `src/dex/permissions.py` | The dataset directory as an `extra_writable` root |
 | `web/src/components/Attachments.tsx` | The `+` button and the chips beneath a composer |
 | `web/src/components/SourceView.tsx` | Rendering one source by type |
-| `web/src/components/OfficeDoc.tsx` | `.docx` and `.xlsx`, converted in the browser |
+| `web/src/components/OfficeDoc.tsx` | `.docx`, converted in the browser |
+| `web/src/components/TableView.tsx`, `src/dex/tables.py` | Data files and spreadsheets a page at a time; also the assets' viewer |
 
 ---
 
@@ -235,7 +236,7 @@ flowchart TD
     E -->|png jpg svg …| IMG["img"]
     E -->|mp4 wav …| MED["video / audio"]
     E -->|docx| DOC["mammoth → HTML"]
-    E -->|xlsx ods csv| SHEET["SheetJS → table, one tab per sheet"]
+    E -->|xls xlsx ods csv jsonl| SHEET["tables.py → a page of rows, one tab per sheet"]
     E -->|md| MD["the markdown renderer"]
     E -->|txt json code| TXT["highlighted text"]
     E -->|anything else| DL["a named download"]
@@ -256,22 +257,40 @@ embedding page's DOM.
 
 ### Office formats are converted, not framed
 
-No browser renders `.docx` or `.xlsx`. Both are converted in the browser and
-both libraries are heavy, so `SourceView` loads them lazily — they arrive only
-when such a file is actually opened, and never sit in the main bundle.
+No browser renders a `.docx`. It is converted in the browser by mammoth (~390
+kB, a small fixed tag set from the document's own styles), which `SourceView`
+loads lazily, so it never sits in the main bundle. A pre-2007 binary `.doc` is
+a different container that mammoth does not read, and falls through to a
+download.
 
-| | Library | Chunk | Note |
-|---|---|---|---|
-| `.docx` | mammoth | ~390 kB | Emits a small fixed tag set from the document's own styles |
-| `.xlsx` `.ods` `.csv` | SheetJS | ~490 kB | One tab per sheet |
+### Data files come a page at a time
 
-SheetJS is installed **from `cdn.sheetjs.com`, not npm**. The registry copy is
-frozen at 0.18.5 and carries two unfixed advisories (prototype pollution,
-ReDoS); the vendor publishes fixes only from their own CDN. The dependency line
-is a URL on purpose.
+`.csv`, `.tsv`, `.jsonl`, list-shaped `.json`, `.xls`, `.xlsx`, `.xlsm`, `.xlsb` and `.ods` open in
+`TableView`, here and in the assets' viewer: 100, 200 or 500 rows, first,
+previous, next and last, and a tab per sheet. These files can be far larger
+than a browser should be handed, so the server cuts the pages
+(`src/dex/tables.py`). A text file is scanned once for where every hundredth
+row starts; python-calamine, a task dependency, reads spreadsheets, whose last
+few sheets are kept. Cells stop at 5,000 characters; one that doesn't fit opens
+whole in a modal (`CellModal`), pretty-printed if it is JSON and rendered if it
+looks like markdown. A spreadsheet's or CSV's
+first row is its header; JSON Lines takes its columns from the rows on the page.
 
-Pre-2007 binary `.doc` and `.xls` are a different container that neither
-library reads. They fall through to a download, which is honest about it.
+A `.json` joins them when it is a list of objects, every one of them, and stays
+a code view otherwise; the viewer asks the table route and takes a refusal for
+that answer. Nested objects flatten to `a.b` columns, here and in JSON Lines. A
+list stays one cell, because splitting it would change what a row is.
+
+### A package's HTML runs in a sandbox of its own
+
+In the assets' viewer an `.html` file is framed with `sandbox="allow-scripts
+allow-popups"`, so a player or a report works while dex's session stays out of
+reach. A sandboxed page has no origin, so the browser sends it no session
+cookie, and the images and scripts beside it would fail. `/api/assets/page`
+therefore hands out a URL holding a signed, 12-hour capability for that package
+alone. Its responses allow any origin and the HTML repeats the sandbox as a
+header, so opening the URL by itself is sandboxed too. The signing key lives in
+the process: a restart ends them, and reopening the file gets a new one.
 
 ---
 
@@ -303,8 +322,8 @@ in the wrong directory the moment the two differ.
 - **The 64 MB cap is a memory cap, not a policy.** The whole upload is held
   while it is written, so the number is what the process can afford rather than
   what a source might reasonably be. Streaming to disk would let it go.
-- **Legacy `.doc` and `.xls` have no preview**, and the download they fall back
-  to is the same one an unknown format gets — nothing says *why* they cannot be
+- **Legacy `.doc` has no preview**, and the download it falls back
+  to is the same one an unknown format gets — nothing says *why* it cannot be
   shown.
 - **A file attached to a task-level message still renders as raw markdown.**
   `task_messages` has no `data` column, so the `## Sources` block appears in

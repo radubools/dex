@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
-import { assetUrl, decideTodo, getTask, readAsset } from '../api'
+import { assetPageUrl, assetTableUrl, assetUrl, decideTodo, getTask, readAsset } from '../api'
 import type { AssetResponse, SourceAnchor, Task } from '../types'
 import { resolveWidget, resolveWidgets, type WidgetInfo } from '../api'
 import { AnimationPlayer } from './AnimationPlayer'
@@ -10,6 +10,7 @@ import { Diff } from './Diff'
 import { WidgetHost } from './WidgetHost'
 import { useAssetVersion } from '../assetChanges'
 import { SourceView } from './SourceView'
+import { TABLE, TableView, useTabular } from './TableView'
 
 // mermaid + marked are ~600kB; only load them when markdown is opened.
 const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markdown })))
@@ -18,6 +19,8 @@ const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markd
 const IMAGE = new Set(['gif', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'avif', 'mp4', 'webm', 'mov'])
 /** Playable by the browser unaided. `.mid` is not — it needs a synthesiser. */
 const AUDIO = new Set(['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac'])
+/** Rendered in a frame rather than shown as code. */
+const PAGE = new Set(['html', 'htm'])
 
 export type ViewerTarget =
   | { kind: 'asset'; path: string }
@@ -263,8 +266,18 @@ export function AssetView({ path, onReady }: { path: string; onReady?: () => voi
   // file being saved over and over does not reload its viewer as fast as it is
   // written (see assetChanges.ts).
   const version = useAssetVersion(path)
+  // Which widget, if any, this project maps this filename to. Asked on every
+  // open rather than cached: a widget built a moment ago has to work without a
+  // reload, and the answer is one small request.
+  const [widget, setWidget] = useState<WidgetInfo | null>(null)
+  const [widgetFailed, setWidgetFailed] = useState(false)
+  const [resolved, setResolved] = useState(false)
+  const tabular = useTabular(ext === 'json' ? assetTableUrl(path) : null)
+  // These fetch for themselves, and may be binary or too large to read whole.
+  // A widget still gets the text.
+  const fetched = !IMAGE.has(ext) && (!(TABLE.has(ext) || PAGE.has(ext)) || Boolean(widget && !widgetFailed))
   useEffect(() => {
-    if (IMAGE.has(ext)) return
+    if (!fetched) return
     let live = true
     // Only the first load shows "Loading…"; a refresh swaps the content in.
     if (version === 0) setState({ s: 'loading' })
@@ -272,16 +285,10 @@ export function AssetView({ path, onReady }: { path: string; onReady?: () => voi
       .then((asset) => live && setState({ s: 'ok', asset }))
       .catch((err: Error) => live && setState({ s: 'error', message: err.message }))
     return () => { live = false }
-  }, [path, ext, version])
+  }, [path, fetched, version])
 
   const content =
     state.s === 'ok' && 'content' in state.asset ? (state.asset.content as string) : ''
-  // Which widget, if any, this project maps this filename to. Asked on every
-  // open rather than cached: a widget built a moment ago has to work without a
-  // reload, and the answer is one small request.
-  const [widget, setWidget] = useState<WidgetInfo | null>(null)
-  const [widgetFailed, setWidgetFailed] = useState(false)
-  const [resolved, setResolved] = useState(false)
   useEffect(() => {
     let live = true
     setWidget(null)
@@ -301,7 +308,7 @@ export function AssetView({ path, onReady }: { path: string; onReady?: () => voi
   // What a loading placeholder waits for. A widget says so itself (onReady on
   // the host); a built-in viewer is ready once its content is here.
   const builtIn = resolved && (!widget || widgetFailed)
-  const contentHere = IMAGE.has(ext) || AUDIO.has(ext) || state.s !== 'loading'
+  const contentHere = !fetched || AUDIO.has(ext) || state.s !== 'loading' || Boolean(tabular)
   useEffect(() => {
     if (builtIn && contentHere) onReady?.()
   }, [builtIn, contentHere, onReady])
@@ -328,6 +335,11 @@ export function AssetView({ path, onReady }: { path: string; onReady?: () => voi
   }
   if (IMAGE.has(ext)) return <ImageView path={path} version={version} />
   if (AUDIO.has(ext)) return <AudioView path={path} />
+  if (ext === 'json' && tabular === null) return <p className="muted">Loading…</p>
+  if (builtIn && (TABLE.has(ext) || tabular)) {
+    return <TableView url={assetTableUrl(path)} raw={assetUrl(path)} name={path.split('/').pop() ?? path} version={version} />
+  }
+  if (builtIn && PAGE.has(ext)) return <HtmlPage path={path} version={version} />
 
   if (state.s === 'loading') return <p className="muted">Loading…</p>
   if (state.s === 'error') return <p className="error">{state.message}</p>
@@ -441,6 +453,26 @@ function AudioView({ path }: { path: string }) {
  * reader — which told them about an API they cannot call and nothing about
  * their file.
  */
+/**
+ * A package's HTML file, as it looks. dex did not write it, so it runs in a
+ * sandbox with an origin of its own, away from the session; a capability URL is
+ * what lets it load the files beside it (`/api/assets/page`).
+ */
+function HtmlPage({ path, version }: { path: string; version: number }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    assetPageUrl(path)
+      .then((got) => live && setUrl(got))
+      .catch((err: Error) => live && setError(err.message))
+    return () => { live = false }
+  }, [path])
+  if (error) return <p className="error">{error}</p>
+  if (!url) return <p className="muted">Loading…</p>
+  return <iframe key={`${url}#${version}`} className="source-frame" src={url} title={path} sandbox="allow-scripts allow-popups" />
+}
+
 function BinaryView({ path, ext }: { path: string; ext: string }) {
   const name = path.split('/').pop() ?? path
   return (

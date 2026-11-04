@@ -36,6 +36,8 @@ class CapturingClient:
         return
         yield  # pragma: no cover
 
+    receive_messages = receive_response
+
 
 @pytest.fixture
 async def manager(config, db, monkeypatch):

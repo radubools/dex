@@ -1,15 +1,13 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
-import { sourceUrl } from '../api'
+import { sourceTableUrl, sourceUrl } from '../api'
 import type { SourceAnchor } from '../types'
+import { TABLE, TableView, useTabular } from './TableView'
 
 // mermaid + marked are ~600kB; only load them when markdown is opened.
 const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markdown })))
-// The two Office converters are ~550kB together and most sources are not
-// Office files, so neither is in the main bundle.
+// The Word converter is heavy and most sources are not Word files, so it is
+// not in the main bundle.
 const OfficeDoc = lazy(() => import('./OfficeDoc').then((m) => ({ default: m.OfficeDoc })))
-const Spreadsheet = lazy(() =>
-  import('./OfficeDoc').then((m) => ({ default: m.Spreadsheet })),
-)
 
 /**
  * What the browser renders on its own, given the right `content-type` and an
@@ -21,14 +19,13 @@ const IMAGE = new Set(['gif', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'avif'])
 const VIDEO = new Set(['mp4', 'webm', 'mov'])
 const AUDIO = new Set(['wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac'])
 const DOC = new Set(['docx'])
-const SHEET = new Set(['xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv'])
 /**
  * Read as text rather than guessed at. Anything not listed is offered as a
  * download instead of being decoded — a `.zip` rendered as mojibake is worse
  * than an honest "nothing here can show this".
  */
 const TEXT = new Set([
-  'txt', 'text', 'log', 'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'xml',
+  'txt', 'text', 'log', 'json', 'yaml', 'yml', 'toml', 'ini', 'xml',
   'srt', 'vtt', 'css', 'js', 'ts', 'py', 'sh', 'sql', 'tex', 'rtf',
 ])
 
@@ -61,6 +58,7 @@ export function SourceView({
 }) {
   const ext = extOf(name)
   const url = sourceUrl(project, name) + fragmentFor(ext, anchor)
+  const tabular = useTabular(ext === 'json' ? sourceTableUrl(project, name) : null)
 
   if (FRAMED.has(ext)) {
     // The sandbox differs by type, and it has to.
@@ -94,12 +92,9 @@ export function SourceView({
       </Suspense>
     )
   }
-  if (SHEET.has(ext)) {
-    return (
-      <Suspense fallback={<p className="muted">Loading the spreadsheet reader…</p>}>
-        <Spreadsheet url={url} name={name} />
-      </Suspense>
-    )
+  if (ext === 'json' && tabular === null) return <p className="muted">Loading…</p>
+  if (TABLE.has(ext) || tabular) {
+    return <TableView url={sourceTableUrl(project, name)} raw={url} name={name} sheet={anchor?.sheet} />
   }
   if (ext === 'md' || ext === 'markdown' || TEXT.has(ext)) {
     return (

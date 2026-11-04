@@ -419,13 +419,17 @@ sequenceDiagram
     participant DB as task_messages
     participant W as Worker
 
-    O->>M: queue_message(task, "also handle negatives")
-    M->>DB: INSERT (undelivered)
-    alt task already terminal
+    O->>M: send(task, "also handle negatives")
+    alt a run is going
+        M->>W: into its inbox: the turn stops, this is the next one
+    else paused
+        M->>M: end that attempt, then as if finished
+    else queued, blocked or waiting its turn
+        M->>DB: INSERT (undelivered)
+        W->>DB: its run starts: takes the notes as its first interjection
+    else finished
+        M->>DB: INSERT (undelivered)
         M->>M: deliver_messages() now
-    else still running
-        Note over W: run continues untouched
-        W->>M: run finished → deliver_messages()
     end
     M->>DB: take undelivered notes
     M->>M: submit follow-up — attempt+1,<br/>same session, same output dir

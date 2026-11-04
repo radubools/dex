@@ -6,10 +6,13 @@ import re
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import mimetypes
 import os
+import secrets
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -48,7 +51,7 @@ from .identity import (
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation, antigravity
-from . import designer, local_sources, skills, surveyor, uploads
+from . import designer, local_sources, skills, surveyor, tables, uploads
 from .feed import ReviewStore, discover
 from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread, tie_threads
 from .router import Route, route_message
@@ -127,6 +130,10 @@ TEXT_SUFFIXES = {
     ".csv", ".tsv", ".vtt", ".srt", ".xml", ".sql", ".sh", ".ini", ".rst",
     ".abc", ".ly",  # music projects: ABC notation and LilyPond are both text
 }
+
+
+#: How long a framed page can keep loading what is beside it.
+PAGE_TOKEN_S = 12 * 3600
 
 
 # --------------------------------------------------------------- request models
@@ -1169,6 +1176,33 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             raise HTTPException(404, "no such linked source")
         return {"project": chosen, "removed": name}
 
+    async def _table(target: Path, sheet: str | None, offset: int, limit: int, full: bool) -> dict[str, Any]:
+        """A page of a data file. In a thread: the first read of a large one scans it."""
+        if not target.is_file() or not tables.readable(target):
+            raise HTTPException(415, "not a table")
+        try:
+            return await asyncio.to_thread(tables.read_page, target, sheet=sheet, offset=offset, limit=limit, full=full)
+        except tables.Unreadable as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/datasets/table", dependencies=guard)
+    async def source_table(
+        name: str = Query(...),
+        project: str | None = Query(default=None),
+        sheet: str | None = Query(default=None),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=tables.MAX_LIMIT),
+        full: bool = Query(default=False, description="cells whole, for the cell someone opened"),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """One page of an uploaded data file."""
+        chosen = await resolve_project(project)
+        access.check(chosen)
+        found = uploads.resolve(config.project_datasets(chosen), [name])
+        if not found:
+            raise HTTPException(404, "not a file in this project's data")
+        return await _table(found[0].path, sheet, offset, limit, full)
+
     @app.get("/api/datasets/raw", dependencies=guard)
     async def raw_source(
         name: str = Query(...),
@@ -1322,10 +1356,9 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     async def post_task_message(
         task_id: str, body: TaskMessageRequest, access: Access = Depends(access_dep)
     ) -> dict[str, Any]:
-        """Queue a follow-up for a task, unless it is other work (design/26).
+        """Send a message to a task, unless it is other work (design/26).
 
-        It is held while the task runs and delivered when it stops, as the brief
-        for a follow-up attempt.
+        A running task gets it at once; a finished one starts a follow-up attempt.
         """
         # Named in the note itself: the note becomes the follow-up's brief, so
         # this is what puts the paths in front of the agent that reads it.
@@ -1351,7 +1384,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                              "reason": route.reason}
                 _after_reply(_turn(origin, body.text, note, attached))
                 return {"message": None, "routed": moved}
-        message = await tasks.queue_message(task_id, note)
+        message = await tasks.send(task_id, note)
         if message is None:
             raise HTTPException(404, "no such task")
         return {"message": message}
@@ -1660,17 +1693,27 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             ),
         )
         prompt = uploads.with_sources(body.text, attached, sources)
-        with _planning(thread.id):
-            route = await _route(thread, body.text, access)
-        moved: dict[str, Any] = {}
-        if route is not None:
-            if route.task_id:
+        try:
+            with _planning(thread.id):
+                route = await _route(thread, body.text, access)
+            if route is not None and route.task_id:
                 return await _follow_up(thread, route, body.text, prompt)
-            thread, moved = await _move_to(thread, route, body.text, attached)
-        if moved:
-            _after_reply(_turn(thread, body.text, prompt, attached))
-            return {"routed": moved}
-        return await _turn(thread, body.text, prompt, attached)
+            # New work the router found no other home for stays here.
+            if route is not None and (route.thread_id or route.skill):
+                thread, moved = await _move_to(thread, route, body.text, attached)
+                _after_reply(_turn(thread, body.text, prompt, attached))
+                return {"routed": moved}
+            return await _turn(thread, body.text, prompt, attached)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # The page leaves a 5xx to the thread, so the thread has to say it.
+            log.exception("a message to %s failed", thread_id)
+            detail = f"{type(exc).__name__}: {exc}"
+            await publish_message(
+                thread_id, ThreadMessage(role="dex", kind="error", text=f"That message failed: {detail}", data={"detail": detail}),
+            )
+            raise HTTPException(500, detail) from exc
 
     def _after_reply(turn: Awaitable[Any]) -> None:
         """Planning takes minutes, and whoever posted is being taken to the thread now.
@@ -1713,7 +1756,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         """The message is about a task that exists: it goes to that task."""
         task = await tasks.tasks.get(route.task_id)
         owner = await threads.get(task.thread_id) if task.thread_id else None
-        delivered = tasks.say(task.id, prompt) or await tasks.queue_message(task.id, prompt)
+        delivered = await tasks.send(task.id, prompt)
         if owner is not None and owner.id != origin.id:
             await publish_message(owner.id, ThreadMessage(role="user", kind="text", text=text))
         moved = await _route_note(origin, owner.id if owner else origin.id, owner.title if owner else origin.title, route, task)
@@ -2346,6 +2389,56 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             headers={"cache-control": "private, max-age=300"},
         )
 
+    @app.get("/api/assets/table", dependencies=guard)
+    async def asset_table(
+        path: str = Query(...),
+        sheet: str | None = Query(default=None),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=tables.MAX_LIMIT),
+        full: bool = Query(default=False, description="cells whole, for the cell someone opened"),
+        access: Access = Depends(access_dep),
+    ) -> dict[str, Any]:
+        """One page of a data file, for the viewer."""
+        _check_asset_path(access, path)
+        return await _table(_resolve(config, path), sheet, offset, limit, full)
+
+    page_key = secrets.token_bytes(32)
+
+    def _page_signature(scope: str, expires: int) -> str:
+        return hmac.new(page_key, f"{expires}:{scope}".encode(), hashlib.sha256).hexdigest()
+
+    @app.get("/api/assets/page", dependencies=guard)
+    async def asset_page(path: str = Query(...), access: Access = Depends(access_dep)) -> dict[str, str]:
+        """Where the viewer can frame a package's HTML (design/13).
+
+        A sandboxed page has no origin, so what it loads arrives without the
+        session cookie: the URL itself carries the right to read that package.
+        """
+        _check_asset_path(access, path)
+        if not _resolve(config, path).is_file():
+            raise HTTPException(404, "not a file")
+        expires = int(time.time()) + PAGE_TOKEN_S
+        return {"url": f"/api/assets/page/{expires}-{_page_signature(_page_scope(path), expires)}/{path.strip('/')}"}
+
+    @app.get("/api/assets/page/{token}/{path:path}")
+    async def served_page(token: str, path: str) -> FileResponse:
+        """A file of the package the token was signed for, and nothing else."""
+        expires, _, signature = token.partition("-")
+        scope = _page_scope(path)
+        if (
+            not expires.isdigit() or int(expires) < time.time()
+            or not hmac.compare_digest(signature, _page_signature(scope, int(expires)))
+        ):
+            raise HTTPException(403, "this page has expired: open the file again")
+        target = _resolve(config, path)
+        if not target.is_file() or not target.is_relative_to(_resolve(config, scope)):
+            raise HTTPException(404, "not a file")
+        media_type, _ = mimetypes.guess_type(target.name)
+        headers = {"access-control-allow-origin": "*"}
+        if target.suffix.lower() in (".html", ".htm"):
+            headers["content-security-policy"] = "sandbox allow-scripts allow-popups"
+        return FileResponse(target, media_type=media_type or "application/octet-stream", headers=headers)
+
     @app.get("/api/assets/raw", dependencies=guard)
     async def raw_asset(
         path: str = Query(...), access: Access = Depends(access_dep)
@@ -2455,6 +2548,12 @@ def _check_asset_path(access: Access, path: str) -> None:
     if not first or first == "ideas":
         raise HTTPException(status_code=404, detail="not found")
     access.check(first)
+
+
+def _page_scope(path: str) -> str:
+    """The package a path is in: the project and directory, after `ideas/` if there."""
+    parts = [part for part in path.strip("/").split("/") if part]
+    return "/".join(parts[:3 if parts[:1] == ["ideas"] else 2])
 
 
 def _resolve(config: Config, path: str) -> Path:

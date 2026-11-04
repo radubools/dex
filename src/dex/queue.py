@@ -286,12 +286,26 @@ class TaskManager:
             await self.deliver_messages(task_id)
         return message
 
+    async def send(self, task_id: str, body: str) -> dict[str, Any] | None:
+        """A person's message to a task: to its run now, or to the next one at once.
+
+        A paused attempt ends so the message continues it. With no run to
+        reach (queued, blocked) it is held, and the run takes it when it starts.
+        """
+        message = self.say(task_id, body)
+        if message is not None:
+            return message
+        task = await self.tasks.get(task_id)
+        if task is not None and task.state is TaskState.PAUSED:
+            await self.cancel(task_id)
+        return await self.queue_message(task_id, body)
+
     def say(self, task_id: str, body: str) -> dict[str, Any] | None:
-        """Hand a message to a running chat task now: no queueing.
+        """Hand a message to a running task now: no queueing.
 
         The runner interrupts the turn under way and sends it as the next one
-        (`TaskRunner._converse`). None when the task is not a chat that is
-        running here; the caller then queues it as a follow-up note instead.
+        (`TaskRunner._converse`). None when no run here can take it; the caller
+        then queues it as a follow-up note instead.
         """
         task = self.live.get(task_id)
         if task is None or task.inbox is None:

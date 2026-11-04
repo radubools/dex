@@ -38,6 +38,83 @@ async def test_a_note_is_held_while_the_task_runs(manager, db):
     ]
 
 
+async def test_send_hands_a_message_to_any_running_task_at_once(manager, db):
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    await manager.tasks.create(task)
+    task.inbox = asyncio.Queue()
+    manager.live[task.id] = task
+
+    message = await manager.send(task.id, "also handle duplicates")
+
+    assert message["delivered"] is True
+    assert task.inbox.get_nowait() == "also handle duplicates"
+    assert await TaskMessageStore(db).pending(task.id) == []
+
+
+async def test_send_to_a_paused_task_continues_it_now(manager, db):
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    await manager.tasks.create(task)
+    await manager.tasks.set_state(task.id, TaskState.PAUSED)
+
+    await manager.send(task.id, "also handle duplicates")
+
+    assert (await manager.tasks.get(task.id)).state is TaskState.CANCELLED
+    follow_up = next(t for t in await manager.tasks.list() if t.parent_id == task.id)
+    assert "also handle duplicates" in follow_up.problem
+
+
+async def test_send_holds_a_message_for_a_task_with_no_run_yet(manager, db):
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    await manager.tasks.create(task)
+
+    await manager.send(task.id, "also handle duplicates")
+
+    assert [m["body"] for m in await TaskMessageStore(db).pending(task.id)] == ["also handle duplicates"]
+
+
+async def test_a_run_takes_what_was_held_for_it_when_it_starts(config, db):
+    from claude_agent_sdk import ResultMessage
+
+    from dex.runner import TaskRunner, chat_interjection
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+            self.results = asyncio.Queue()
+
+        def finish_turn(self):
+            self.results.put_nowait(ResultMessage(subtype="result", duration_ms=1, duration_api_ms=1,
+                                                  is_error=False, num_turns=1, session_id="s"))
+
+        async def interrupt(self):
+            self.finish_turn()
+
+        async def query(self, text):
+            self.sent.append(text)
+            if len(self.sent) > 1:  # the opening turn is under way until it is interrupted
+                self.finish_turn()
+
+        async def receive_messages(self):
+            while True:
+                yield await self.results.get()
+
+    bus = EventBus(db)
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    runner = TaskRunner(task, config, bus, TaskManager(config, bus, db).tasks, None)
+    await runner.store.create(task)
+    await TaskMessageStore(db).add(task.id, "one", {"e2e": False})
+    await TaskMessageStore(db).add(task.id, "two")
+    runner._observe = lambda message: None
+    client = Client()
+    await client.query("opening")
+
+    await asyncio.wait_for(runner._converse(client), timeout=3)
+
+    assert client.sent == ["opening", chat_interjection("one\n\ntwo", chat=False)]
+    assert task.options["e2e"] is False
+    assert await TaskMessageStore(db).pending(task.id) == []
+
+
 async def test_delivery_starts_a_follow_up_attempt_when_the_task_stops(manager, db):
     task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
     await manager.tasks.create(task)

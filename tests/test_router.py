@@ -207,6 +207,23 @@ def test_a_routed_post_answers_before_planning_ends(client, routed_to, monkeypat
     assert time.time() - started < 1
 
 
+def test_new_work_that_stays_in_its_thread_is_planned_there(client, routed_to, monkeypatch):
+    main_id = thread_of(client, "main")["id"]
+    routed_to(lambda threads, tasks: Route("task", "new work", new_task=True))
+    plan_of(monkeypatch, "ingest")
+    got = client.post(f"/api/threads/{main_id}/messages", json={"text": "run the pipeline"})
+    assert got.status_code == 200 and "routed" not in got.json()
+
+
+def test_a_message_that_cannot_be_handled_says_so_in_the_thread(client, routed_to):
+    main_id = thread_of(client, "main")["id"]
+    routed_to(lambda threads, tasks: Route("skill", "a track", skill="nothing-declares-this"))
+    got = client.post(f"/api/threads/{main_id}/messages", json={"text": "a new track"})
+    assert got.status_code == 500
+    last = client.get(f"/api/threads/{main_id}").json()["thread"]["messages"][-1]
+    assert last["kind"] == "error" and "nothing-declares-this" in last["text"]
+
+
 def plan_of(monkeypatch, *slugs, remaining=""):
     async def fake(*_args, **_kwargs):
         return Plan(tasks=[PlannedTask(title=s, problem=f"Do all of {s}.", slug=s) for s in slugs], remaining=remaining)
