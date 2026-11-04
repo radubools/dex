@@ -95,3 +95,13 @@ test("a project's picker starts on Global, and overrides only when a provider is
   expect((await request).postDataJSON()).toEqual({ project_models: { alpha: '' } })
   await expect(model).toBeDisabled()
 })
+
+test('auto-compact follow-ups starts off and saves when turned on', async ({ page }) => {
+  const menu = await open(page, { model: 'claude-opus-5-5' })
+  const toggle = menu.getByRole('switch', { name: /Auto-compact follow-ups/ })
+  await expect(toggle).not.toBeChecked()
+  const request = page.waitForRequest((r) => r.url().endsWith('/api/settings') && r.method() === 'PUT')
+  await toggle.click()
+  expect((await request).postDataJSON()).toEqual({ auto_compact: true })
+  await expect(toggle).toBeChecked()
+})
