@@ -321,7 +321,10 @@ export function SettingsMenu({
               models={data?.models}
               value={(settings?.[projectModelKey] as string) ?? ''}
               onChange={(model) => patch({ project_models: { [data!.project]: model } })}
-              unset="Use the global model"
+              inherit={(() => {
+                const global = (settings?.model as string) || data?.defaultModel || ''
+                return data?.models?.find((m) => m.id === global)?.label ?? global
+              })()}
             />
           </div>
 
@@ -422,22 +425,28 @@ const PROVIDERS: { id: NonNullable<ModelChoice['provider']>; label: string }[] =
  * Antigravity, OpenCode Go), then one of that provider's models. Switching
  * provider picks its first model that can run here. A model that cannot run on
  * this server (its CLI not installed or not signed in) is listed, disabled,
- * with what to do. `unset` (the default, or the global choice) is offered
- * under every provider.
+ * with what to do.
+ *
+ * The global picker offers `unset` (the deployment default) under every
+ * provider. A project's picker passes `inherit` (the global model's name)
+ * instead: its first provider is "Global", which saves no override, so only a
+ * deliberate provider choice ever overrides the global model.
  */
-function ModelPicker({ label, models, value, onChange, unset, withNote = false }: {
+function ModelPicker({ label, models, value, onChange, unset, inherit, withNote = false }: {
   label: string
   models?: ModelChoice[]
   value: string
   onChange: (model: string) => void
-  unset: string
+  unset?: string
+  inherit?: string
   withNote?: boolean
 }) {
+  const GLOBAL = 'global'
   const providerOf = (id: string) => (models ?? []).find((m) => m.id === id)?.provider ?? 'claude'
   const offered = PROVIDERS.filter((p) => (models ?? []).some((m) => (m.provider ?? 'claude') === p.id))
   // Unset says nothing about a provider: the one last looked at stays shown.
   const [chosen, setChosen] = useState<string>(() => providerOf(value))
-  const provider = value ? providerOf(value) : chosen
+  const provider = value ? providerOf(value) : inherit !== undefined ? GLOBAL : chosen
   useEffect(() => {
     if (value) setChosen(providerOf(value))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -449,6 +458,7 @@ function ModelPicker({ label, models, value, onChange, unset, withNote = false }
         aria-label={`${label}: provider`}
         value={provider}
         onChange={(e) => {
+          if (e.target.value === GLOBAL) return onChange('')
           setChosen(e.target.value)
           const first = (models ?? []).find(
             (m) => (m.provider ?? 'claude') === e.target.value && m.available !== false,
@@ -456,21 +466,28 @@ function ModelPicker({ label, models, value, onChange, unset, withNote = false }
           if (first) onChange(first.id)
         }}
       >
+        {inherit !== undefined && <option value={GLOBAL}>Global</option>}
         {offered.map((p) => (
           <option key={p.id} value={p.id}>
             {p.label}
           </option>
         ))}
       </select>
-      <select aria-label={`${label}: model`} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{unset}</option>
-        {group.map((m) => (
-          <option key={m.id} value={m.id} disabled={m.available === false}>
-            {m.label}
-            {m.available === false ? ` — ${m.unavailable}` : withNote ? ` — ${m.note}` : ''}
-          </option>
-        ))}
-      </select>
+      {provider === GLOBAL ? (
+        <select aria-label={`${label}: model`} value="" disabled>
+          <option value="">Uses the global model{inherit ? ` (${inherit})` : ''}</option>
+        </select>
+      ) : (
+        <select aria-label={`${label}: model`} value={value} onChange={(e) => onChange(e.target.value)}>
+          {unset !== undefined && <option value="">{unset}</option>}
+          {group.map((m) => (
+            <option key={m.id} value={m.id} disabled={m.available === false}>
+              {m.label}
+              {m.available === false ? ` — ${m.unavailable}` : withNote ? ` — ${m.note}` : ''}
+            </option>
+          ))}
+        </select>
+      )}
     </div>
   )
 }
