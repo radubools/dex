@@ -41,7 +41,7 @@ async function open(page: Page, saved: Record<string, unknown>) {
 
 test('models are grouped by subscription, and one that cannot run says why', async ({ page }) => {
   const menu = await open(page, { model: 'agy:gemini-4-argon-high' })
-  const picker = menu.locator('select').filter({ has: page.locator('option', { hasText: /^Default/ }) })
+  const picker = menu.locator('select').filter({ has: page.locator('option', { hasText: 'Default (claude-opus-5-5)' }) })
   await expect(picker).toHaveValue('agy:gemini-4-argon-high')
   await expect(picker.locator('optgroup')).toHaveCount(2)
   await expect(picker.locator('optgroup').nth(0)).toHaveAttribute('label', 'Claude subscription')
