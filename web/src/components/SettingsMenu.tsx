@@ -228,6 +228,19 @@ export function SettingsMenu({
             />
           </label>
 
+          <label className="menu-row toggle">
+            <span>
+              Route messages automatically
+              <small>Move a message to the task or thread it seems to belong in; off keeps it where you typed it</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings?.auto_route === true}
+              onChange={(e) => patch({ auto_route: e.target.checked })}
+            />
+          </label>
+
           <div className="menu-row">
             <span>
               Tasks at once

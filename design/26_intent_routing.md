@@ -18,6 +18,12 @@ flowchart TD
     make --> note
 ```
 
+**Off by default.** Routing moved messages somewhere their writer did not
+expect, so it waits behind a switch in Settings, "Route messages
+automatically" (`auto_route`, off). Off, `_route` answers None without asking
+the router: a message typed in a thread is planned there, and one typed in a
+task's activity goes to that task.
+
 **Three intents.** `design` shapes the project, `skill` is what a skill's thread holds,
 and `task` is everything else. The thread decides (`intent_of`), from its tie. A
 task's intent is its thread's. It is never stored, so old threads and tasks have one

@@ -1252,6 +1252,9 @@ class SettingsStore:
     #: `utils/`. Read at the moment a task is about to ask, so turning it off
     #: silences runs already in flight rather than only the next ones.
     UTILITY_PROPOSALS = "utility_proposals"
+    #: Whether a typed message may be moved to the task or thread the router
+    #: finds for it (design/26). Off: it stays where it was typed.
+    AUTO_ROUTE = "auto_route"
     MODEL = "model"
     #: How long a task may think before acting. None defers to DEX_EFFORT, so
     #: an operator who never touches it keeps whatever the deployment set.
@@ -1276,6 +1279,9 @@ class SettingsStore:
         # On by default: the loop is the point, and an operator who does not
         # want to be asked turns it off once.
         UTILITY_PROPOSALS: True,
+        # Off until chosen: a message moved somewhere else was a surprise
+        # more often than a help.
+        AUTO_ROUTE: False,
         MODEL: None,
         EFFORT: None,
         ANIMATION_SPEED: 1.0,
@@ -1319,6 +1325,10 @@ class SettingsStore:
         """The operator's thinking-effort choice, or None to use the default."""
         value = await self.get(self.EFFORT)
         return str(value) if value else None
+
+    async def auto_route(self) -> bool:
+        """Whether messages are routed (design/26), or stay where typed."""
+        return bool(await self.get(self.AUTO_ROUTE, False))
 
     async def utility_proposals(self) -> bool:
         """Whether a task may ask about promoting a helper into `utils/`."""

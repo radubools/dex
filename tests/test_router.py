@@ -88,6 +88,7 @@ def routed_to(client, monkeypatch):
         async def fake(text, config, *, here, threads, tasks, **_):
             return pick(threads, tasks)
         monkeypatch.setattr("dex.api.route_message", fake)
+    client.put("/api/settings", json={"auto_route": True})
     return answer
 
 
@@ -260,3 +261,19 @@ def test_the_same_task_keeps_the_message(client, routed_to):
     routed_to(lambda threads, tasks: Route("task", task_id=task["id"]))
     got = client.post(f"/api/tasks/{task['id']}/messages", json={"text": "more of it"}).json()
     assert got["message"]["body"] == "more of it"
+
+
+def test_with_routing_off_a_message_stays_where_it_was_typed(client, monkeypatch):
+    asked = []
+
+    async def fake(*args, **kwargs):
+        asked.append(args)
+        return Route("task", thread_id="elsewhere")
+
+    monkeypatch.setattr("dex.api.route_message", fake)
+    assert client.get("/api/settings").json()["settings"]["auto_route"] is False
+    main_id = thread_of(client, "main")["id"]
+    client.post(f"/api/threads/{main_id}/messages", json={"text": "make a bell sound"})
+    assert not asked  # the router is not even asked
+    messages = client.get(f"/api/threads/{main_id}").json()["thread"]["messages"]
+    assert not any(m["kind"] == "routed" for m in messages)
