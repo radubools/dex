@@ -47,7 +47,7 @@ from .identity import (
 )
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
-from . import animation
+from . import animation, antigravity
 from . import designer, local_sources, skills, surveyor, uploads
 from .feed import ReviewStore, discover
 from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread, tie_threads
@@ -80,6 +80,23 @@ MODEL_CHOICES = [
     {"id": "claude-sonnet-5", "label": "Sonnet 5", "note": "faster, cheaper"},
     {"id": "claude-haiku-4-5", "label": "Haiku 4.5", "note": "cheapest"},
 ]
+for _choice in MODEL_CHOICES:
+    _choice.update(provider="claude", available=True)
+
+
+async def _model_choices() -> list[dict[str, Any]]:
+    """Claude's models, then the Antigravity ones the Google plan offers (design/27).
+
+    `agy models` is a subprocess, read at most every ten minutes, and never on
+    the event loop.
+    """
+    return MODEL_CHOICES + await asyncio.to_thread(antigravity.choices)
+
+
+def _planning_model(model: str) -> str | None:
+    """Planning, routing and design turns are single Claude calls: an
+    Antigravity model chosen for tasks leaves them on the planner model (None)."""
+    return None if antigravity.is_agy(model) else model
 
 #: How hard a task thinks before it acts. More effort buys better work on a
 #: hard problem and spends both wall-clock and tokens on an easy one — a
@@ -782,7 +799,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
                 "settings": await settings.all(),
                 "costs": {},
                 "tokens": {},
-                "models": MODEL_CHOICES,
+                "models": await _model_choices(),
                 "efforts": EFFORT_CHOICES,
                 "project": config.project,
                 "defaultModel": config.model,
@@ -793,7 +810,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "settings": await settings.all(),
             "costs": await CostStore(db).totals(),
             "tokens": await CostStore(db).token_totals(),
-            "models": MODEL_CHOICES,
+            "models": await _model_choices(),
             "efforts": EFFORT_CHOICES,
             "defaultEffort": config.effort,
             "project": config.project,
@@ -1411,7 +1428,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         # thirty briefs to edit packages that had never existed.
         existing = sorted(_existing_slugs(config, project_slug))
         try:
-            model = await SettingsStore(db).model_for(project_slug, config.planner_model)
+            model = _planning_model(await SettingsStore(db).model_for(project_slug, config.planner_model))
 
             async def attempt() -> Plan:
                 async with tasks.chat_limiter:
@@ -1677,7 +1694,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             skills=sorted(skills.read_enabled(config.assets_dir / project).skills),
             declared=_declared(project),
             guide=projects.read_guide(project),
-            model=await SettingsStore(db).model_for(project, config.planner_model), on_task=on_task,
+            model=_planning_model(await SettingsStore(db).model_for(project, config.planner_model)), on_task=on_task,
         )
         if route is None or route.intent == "design" and not access.can(CAP_DESIGN):
             return None
@@ -1880,7 +1897,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         project_slug = thread.project or config.default_project
         # Directories only — see the note in `chat_plan`.
         taken = _existing_slugs(config, project_slug)
-        model = await SettingsStore(db).model_for(project_slug, config.planner_model)
+        model = _planning_model(await SettingsStore(db).model_for(project_slug, config.planner_model))
         guide = projects.read_guide(project_slug)
 
         first: Plan | None = None

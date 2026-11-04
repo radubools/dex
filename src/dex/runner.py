@@ -34,7 +34,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import pricing
+from . import antigravity, pricing
 from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
@@ -1143,7 +1143,7 @@ class TaskRunner:
 
         try:
             async with asyncio.timeout(self.config.task_timeout_s):
-                async with ClaudeSDKClient(options=options) as client:
+                async with self._client(options) as client:
                     await client.query(prompt)
                     if self.task.is_chat:
                         await self._converse(client)
@@ -1164,7 +1164,7 @@ class TaskRunner:
                         and self.task.state not in (TaskState.FAILED, TaskState.PAUSED)):
                     self.emit("text", text="The resumed session still did not run; starting a fresh session on the same package.")
                     import dataclasses
-                    async with ClaudeSDKClient(options=dataclasses.replace(options, resume=None)) as client:
+                    async with self._client(dataclasses.replace(options, resume=None)) as client:
                         await client.query(FRESH_AFTER_LOST_SESSION + brief_prompt)
                         async for message in client.receive_response():
                             self._observe(message)
@@ -1250,6 +1250,18 @@ class TaskRunner:
 
                 shutil.rmtree(leftover, ignore_errors=True)
                 self._skill_work_dir = None
+
+    def _client(self, options: ClaudeAgentOptions) -> Any:
+        """The agent for this task's model: Claude, or Antigravity on its CLI (design/27)."""
+        if antigravity.is_agy(options.model) and self.task.is_survey:
+            # A survey is held to its four tools by `allowed_tools`, which only
+            # Claude's CLI enforces: it stays on Claude, on the planner's model.
+            import dataclasses
+
+            options = dataclasses.replace(options, model=self.config.planner_model)
+        if antigravity.is_agy(options.model):
+            return antigravity.AgyClient(options, notice=lambda text: self.emit("text", text=text))
+        return ClaudeSDKClient(options=options)
 
     def _accrue(self, usage: Any, message_id: str | None = None) -> None:
         """Add one message's usage to the rollup and the running estimate.

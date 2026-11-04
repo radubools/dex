@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getIdeation, getSettings, putSettings, setIdeation, setLimitPaused, setPaused, type IdeationStatus } from '../api'
-import type { SettingsResponse } from '../types'
+import type { ModelChoice, SettingsResponse } from '../types'
 import { ServerPicker } from './ServerPicker'
 
 /** Claude's limit windows, named as the CLI names them. */
@@ -270,11 +270,7 @@ export function SettingsMenu({
               onChange={(e) => patch({ model: e.target.value })}
             >
               <option value="">Default ({data?.defaultModel})</option>
-              {data?.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label} — {m.note}
-                </option>
-              ))}
+              <ModelOptions models={data?.models} withNote />
             </select>
           </div>
 
@@ -326,11 +322,7 @@ export function SettingsMenu({
               }
             >
               <option value="">Use the global model</option>
-              {data?.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
+              <ModelOptions models={data?.models} />
             </select>
           </div>
 
@@ -417,5 +409,36 @@ function Stepper({ value, onChange }: { value: number; onChange: (v: number) => 
         +
       </button>
     </div>
+  )
+}
+
+const PROVIDERS: { id: NonNullable<ModelChoice['provider']>; label: string }[] = [
+  { id: 'claude', label: 'Claude subscription' },
+  { id: 'antigravity', label: 'Google subscription (Antigravity)' },
+]
+
+/**
+ * The model choices, grouped by whose subscription runs them. One that cannot
+ * run on this server (Antigravity not installed or not signed in) is listed,
+ * disabled, with what to do.
+ */
+function ModelOptions({ models, withNote = false }: { models?: ModelChoice[]; withNote?: boolean }) {
+  return (
+    <>
+      {PROVIDERS.map((provider) => {
+        const group = (models ?? []).filter((m) => (m.provider ?? 'claude') === provider.id)
+        if (!group.length) return null
+        return (
+          <optgroup key={provider.id} label={provider.label}>
+            {group.map((m) => (
+              <option key={m.id} value={m.id} disabled={m.available === false}>
+                {m.label}
+                {m.available === false ? ` — ${m.unavailable}` : withNote ? ` — ${m.note}` : ''}
+              </option>
+            ))}
+          </optgroup>
+        )
+      })}
+    </>
   )
 }
