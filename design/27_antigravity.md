@@ -82,3 +82,15 @@ in, so a run is always on the subscription.
 Whether Google's terms allow a personal plan to be driven by another program
 is not settled: dex runs the unmodified CLI, locally, for one operator, and
 never touches its tokens.
+
+## Improvement opportunities
+
+- **No live reasoning.** `agy` streams only a step's thinking token count;
+  its summary is read from the conversation's transcript once the step ends.
+- **Reads have no one-liner.** `agy` writes a summary for commands and edits
+  (`toolSummary`, `Description`) but none for reads and searches, so the
+  panel words those from their arguments.
+- **An interrupt restarts the process**, since `agy` cannot stop a turn and
+  keep running.
+- **Its usage limits are not watched.** A Google plan limit fails the task
+  rather than pausing it as a Claude window does.

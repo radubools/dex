@@ -166,6 +166,7 @@ flowchart TB
 | `authn` / `identity` | Who is calling and what they may do |
 | `queue` | Claims tasks, enforces capacity, pause / resume / archive |
 | `runner` | One task through the SDK, translated into events |
+| `antigravity` / `opencode` | Tasks on the Google and OpenCode Go subscriptions, through their CLIs, as SDK messages (27, 28) |
 | `permissions` | What a task may do without asking |
 | `sandbox` | The kernel sandbox that keeps an ideation run's shell commands from changing anything |
 | `prompts` | System prompts and briefs |

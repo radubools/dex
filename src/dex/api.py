@@ -50,7 +50,7 @@ from .identity import (
 )
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
-from . import animation, antigravity
+from . import animation, antigravity, opencode
 from . import designer, local_sources, skills, surveyor, tables, uploads
 from .feed import ReviewStore, discover
 from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread, tie_threads
@@ -88,18 +88,22 @@ for _choice in MODEL_CHOICES:
 
 
 async def _model_choices() -> list[dict[str, Any]]:
-    """Claude's models, then the Antigravity ones the Google plan offers (design/27).
+    """Claude's models, then the Antigravity ones the Google plan offers
+    (design/27), then OpenCode Go's (design/28).
 
-    `agy models` is a subprocess, read at most every ten minutes, and never on
+    Each list is a subprocess, read at most every ten minutes, and never on
     the event loop.
     """
-    return MODEL_CHOICES + await asyncio.to_thread(antigravity.choices)
+    google, go = await asyncio.gather(asyncio.to_thread(antigravity.choices),
+                                      asyncio.to_thread(opencode.choices))
+    return MODEL_CHOICES + google + go
 
 
 def _planning_model(model: str) -> str | None:
     """Planning, routing and design turns are single Claude calls: an
-    Antigravity model chosen for tasks leaves them on the planner model (None)."""
-    return None if antigravity.is_agy(model) else model
+    Antigravity or OpenCode model chosen for tasks leaves them on the planner
+    model (None)."""
+    return None if antigravity.is_agy(model) or opencode.is_oc(model) else model
 
 #: How hard a task thinks before it acts. More effort buys better work on a
 #: hard problem and spends both wall-clock and tokens on an easy one — a

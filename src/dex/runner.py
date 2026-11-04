@@ -34,7 +34,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import antigravity, pricing
+from . import antigravity, opencode, pricing
 from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
@@ -1249,8 +1249,10 @@ class TaskRunner:
                 self._skill_work_dir = None
 
     def _client(self, options: ClaudeAgentOptions) -> Any:
-        """The agent for this task's model: Claude, or Antigravity on its CLI (design/27)."""
-        if antigravity.is_agy(options.model) and self.task.is_survey:
+        """The agent for this task's model: Claude, Antigravity on its CLI
+        (design/27), or OpenCode on the Go plan (design/28)."""
+        other = antigravity.is_agy(options.model) or opencode.is_oc(options.model)
+        if other and self.task.is_survey:
             # A survey is held to its four tools by `allowed_tools`, which only
             # Claude's CLI enforces: it stays on Claude, on the planner's model.
             import dataclasses
@@ -1258,6 +1260,8 @@ class TaskRunner:
             options = dataclasses.replace(options, model=self.config.planner_model)
         if antigravity.is_agy(options.model):
             return antigravity.AgyClient(options, notice=lambda text: self.emit("text", text=text))
+        if opencode.is_oc(options.model):
+            return opencode.OpencodeClient(options, notice=lambda text: self.emit("text", text=text))
         return ClaudeSDKClient(options=options)
 
     def _accrue(self, usage: Any, message_id: str | None = None) -> None:

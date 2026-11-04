@@ -294,7 +294,7 @@ export type ModelChoice = {
   label: string
   note: string
   /** Whose subscription runs it: Claude's, or Google's through Antigravity (design/27). */
-  provider?: 'claude' | 'antigravity'
+  provider?: 'claude' | 'antigravity' | 'opencode'
   /** False when it cannot run on this server, with what to do in `unavailable`. */
   available?: boolean
   unavailable?: string

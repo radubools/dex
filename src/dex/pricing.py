@@ -51,11 +51,20 @@ def estimate(model: str | None, usage: dict[str, float] | None) -> float:
     """Dollars for one message's usage, at list price."""
     if not usage:
         return 0.0
-    input_price, output_price = price_for(model)
     plain = float(usage.get("input_tokens") or 0)
     cached_read = float(usage.get("cache_read_input_tokens") or 0)
     cached_write = float(usage.get("cache_creation_input_tokens") or 0)
     output = float(usage.get("output_tokens") or 0)
+    if model and model.startswith("oc:"):
+        # OpenCode Go prices each model, cache included, and counts its
+        # limits in those dollars (design/28).
+        from . import opencode
+
+        input_price, output_price, read_price, write_price = opencode.rates(
+            model, int(plain + cached_read + cached_write))
+        return (plain * input_price + cached_read * read_price + cached_write * write_price
+                + output * output_price) / 1_000_000
+    input_price, output_price = price_for(model)
 
     return (
         plain * input_price

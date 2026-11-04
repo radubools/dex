@@ -892,6 +892,8 @@ body.resizing iframe { pointer-events: none; }
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
 }
 .menu-row code { font-size: 11px; color: var(--accent); }
+.model-picker { display: grid; grid-template-columns: minmax(96px, 1fr) 2.4fr; gap: 8px; }
+.model-picker select { min-width: 0; }
 
 .stepper {
   display: flex; align-items: center; gap: 2px; flex: none;

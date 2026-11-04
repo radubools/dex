@@ -265,13 +265,14 @@ export function SettingsMenu({
               Model
               <small>Applies to new tasks; running work keeps its model</small>
             </span>
-            <select
+            <ModelPicker
+              label="Model"
+              models={data?.models}
               value={(settings?.model as string) ?? ''}
-              onChange={(e) => patch({ model: e.target.value })}
-            >
-              <option value="">Default ({data?.defaultModel})</option>
-              <ModelOptions models={data?.models} withNote />
-            </select>
+              onChange={(model) => patch({ model })}
+              unset={`Default (${data?.defaultModel})`}
+              withNote
+            />
           </div>
 
           <div className="menu-row column">
@@ -315,15 +316,13 @@ export function SettingsMenu({
               Model for <code>{data?.project}</code>
               <small>Overrides the global choice for this project</small>
             </span>
-            <select
+            <ModelPicker
+              label={`Model for ${data?.project}`}
+              models={data?.models}
               value={(settings?.[projectModelKey] as string) ?? ''}
-              onChange={(e) =>
-                patch({ project_models: { [data!.project]: e.target.value } })
-              }
-            >
-              <option value="">Use the global model</option>
-              <ModelOptions models={data?.models} />
-            </select>
+              onChange={(model) => patch({ project_models: { [data!.project]: model } })}
+              unset="Use the global model"
+            />
           </div>
 
           <div className="menu-row column">
@@ -413,32 +412,65 @@ function Stepper({ value, onChange }: { value: number; onChange: (v: number) => 
 }
 
 const PROVIDERS: { id: NonNullable<ModelChoice['provider']>; label: string }[] = [
-  { id: 'claude', label: 'Claude subscription' },
-  { id: 'antigravity', label: 'Google subscription (Antigravity)' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'antigravity', label: 'Gemini' },
+  { id: 'opencode', label: 'OpenCode' },
 ]
 
 /**
- * The model choices, grouped by whose subscription runs them. One that cannot
- * run on this server (Antigravity not installed or not signed in) is listed,
- * disabled, with what to do.
+ * Two pickers: whose subscription runs the work (Claude, Gemini through
+ * Antigravity, OpenCode Go), then one of that provider's models. Switching
+ * provider picks its first model that can run here. A model that cannot run on
+ * this server (its CLI not installed or not signed in) is listed, disabled,
+ * with what to do. `unset` (the default, or the global choice) is offered
+ * under every provider.
  */
-function ModelOptions({ models, withNote = false }: { models?: ModelChoice[]; withNote?: boolean }) {
+function ModelPicker({ label, models, value, onChange, unset, withNote = false }: {
+  label: string
+  models?: ModelChoice[]
+  value: string
+  onChange: (model: string) => void
+  unset: string
+  withNote?: boolean
+}) {
+  const providerOf = (id: string) => (models ?? []).find((m) => m.id === id)?.provider ?? 'claude'
+  const offered = PROVIDERS.filter((p) => (models ?? []).some((m) => (m.provider ?? 'claude') === p.id))
+  // Unset says nothing about a provider: the one last looked at stays shown.
+  const [chosen, setChosen] = useState<string>(() => providerOf(value))
+  const provider = value ? providerOf(value) : chosen
+  useEffect(() => {
+    if (value) setChosen(providerOf(value))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, models])
+  const group = (models ?? []).filter((m) => (m.provider ?? 'claude') === provider)
   return (
-    <>
-      {PROVIDERS.map((provider) => {
-        const group = (models ?? []).filter((m) => (m.provider ?? 'claude') === provider.id)
-        if (!group.length) return null
-        return (
-          <optgroup key={provider.id} label={provider.label}>
-            {group.map((m) => (
-              <option key={m.id} value={m.id} disabled={m.available === false}>
-                {m.label}
-                {m.available === false ? ` — ${m.unavailable}` : withNote ? ` — ${m.note}` : ''}
-              </option>
-            ))}
-          </optgroup>
-        )
-      })}
-    </>
+    <div className="model-picker">
+      <select
+        aria-label={`${label}: provider`}
+        value={provider}
+        onChange={(e) => {
+          setChosen(e.target.value)
+          const first = (models ?? []).find(
+            (m) => (m.provider ?? 'claude') === e.target.value && m.available !== false,
+          )
+          if (first) onChange(first.id)
+        }}
+      >
+        {offered.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label}
+          </option>
+        ))}
+      </select>
+      <select aria-label={`${label}: model`} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{unset}</option>
+        {group.map((m) => (
+          <option key={m.id} value={m.id} disabled={m.available === false}>
+            {m.label}
+            {m.available === false ? ` — ${m.unavailable}` : withNote ? ` — ${m.note}` : ''}
+          </option>
+        ))}
+      </select>
+    </div>
   )
 }

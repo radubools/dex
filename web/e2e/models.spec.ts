@@ -1,5 +1,5 @@
-// The model pickers: Claude's models and the Antigravity ones, grouped by whose
-// subscription runs them (design/27). The API is answered in the browser.
+// The model pickers: a provider (Claude, Gemini through Antigravity, OpenCode Go),
+// then one of its models (design/27, 28). The API is answered in the browser.
 //
 //   npx playwright test --config web/playwright.config.ts models
 import { expect, test, type Page } from '@playwright/test'
@@ -10,6 +10,8 @@ const models = [
     provider: 'antigravity', available: true },
   { id: 'agy:gemini-3.8-flash-low', label: 'Gemini 3.8 Flash (Low)', note: 'Google subscription, via Antigravity',
     provider: 'antigravity', available: false, unavailable: 'sign in: run `agy`, then Google OAuth' },
+  { id: 'oc:qwen3.8-flash', label: 'Qwen3.8 Flash', note: 'OpenCode Go subscription', provider: 'opencode', available: true },
+  { id: 'oc:glm-5.3', label: 'GLM-5.3', note: 'OpenCode Go subscription', provider: 'opencode', available: true },
 ]
 
 async function open(page: Page, saved: Record<string, unknown>) {
@@ -39,18 +41,28 @@ async function open(page: Page, saved: Record<string, unknown>) {
   return page.getByRole('dialog', { name: 'Settings' })
 }
 
-test('models are grouped by subscription, and one that cannot run says why', async ({ page }) => {
+test('a provider, then its models; one that cannot run says why', async ({ page }) => {
   const menu = await open(page, { model: 'agy:gemini-4-argon-high' })
-  const picker = menu.locator('select').filter({ has: page.locator('option', { hasText: 'Default (claude-opus-5-5)' }) })
-  await expect(picker).toHaveValue('agy:gemini-4-argon-high')
-  await expect(picker.locator('optgroup')).toHaveCount(2)
-  await expect(picker.locator('optgroup').nth(0)).toHaveAttribute('label', 'Claude subscription')
-  await expect(picker.locator('optgroup').nth(1)).toHaveAttribute('label', 'Google subscription (Antigravity)')
-  const unavailable = picker.locator('option[value="agy:gemini-3.8-flash-low"]')
+  const provider = menu.getByRole('combobox', { name: 'Model: provider' })
+  const model = menu.getByRole('combobox', { name: 'Model: model' })
+  await expect(provider.locator('option')).toHaveText(['Claude', 'Gemini', 'OpenCode'])
+  await expect(provider).toHaveValue('antigravity')
+  await expect(model).toHaveValue('agy:gemini-4-argon-high')
+  await expect(model.locator('option')).toHaveCount(3) // the default, and Gemini's two
+  const unavailable = model.locator('option[value="agy:gemini-3.8-flash-low"]')
   await expect(unavailable).toBeDisabled()
   await expect(unavailable).toContainText('sign in')
 
-  const request = page.waitForRequest((r) => r.url().endsWith('/api/settings') && r.method() === 'PUT')
-  await picker.selectOption('claude-opus-5-5')
-  expect((await request).postDataJSON()).toEqual({ model: 'claude-opus-5-5' })
+  // A provider switch picks its first model, Qwen3.8 Flash for OpenCode.
+  let request = page.waitForRequest((r) => r.url().endsWith('/api/settings') && r.method() === 'PUT')
+  await provider.selectOption('opencode')
+  expect((await request).postDataJSON()).toEqual({ model: 'oc:qwen3.8-flash' })
+  await expect(model.locator('option')).toHaveText(['Default (claude-opus-5-5)', /Qwen3.8 Flash/, /GLM-5.3/])
+
+  request = page.waitForRequest((r) => r.url().endsWith('/api/settings') && r.method() === 'PUT')
+  await model.selectOption('oc:glm-5.3')
+  expect((await request).postDataJSON()).toEqual({ model: 'oc:glm-5.3' })
+
+  // The project's own picker works the same way.
+  await expect(menu.getByRole('combobox', { name: 'Model for alpha: provider' })).toHaveValue('claude')
 })

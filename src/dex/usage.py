@@ -88,8 +88,9 @@ def counts_for(window: str, model: str | None) -> bool:
     """
     if not model:
         return True
-    if model.startswith("agy:"):
-        # Antigravity runs on the Google subscription: no Claude window holds it.
+    if model.startswith(("agy:", "oc:")):
+        # Antigravity runs on the Google subscription, OpenCode on the Go
+        # plan: no Claude window holds either.
         return False
     family = next((f for f in MODEL_WINDOWS if f in model.lower()), None)
     if window in MODEL_WINDOWS.values():
