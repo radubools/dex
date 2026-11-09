@@ -90,6 +90,13 @@ module.exports = {
       restart_delay: 2000,
       min_uptime: '20s',
       max_memory_restart: '1500M',
+      // Stop signals go to dex alone, and it gets time to shut down. pm2's
+      // default tree kill signalled every agent subprocess at the same moment
+      // as the server, so they died before shutdown could mark their tasks
+      // preempted, and a restart recorded them as failed instead of paused.
+      // dex stops its own agents once they are marked; 30 s covers that.
+      treekill: false,
+      kill_timeout: 30000,
       out_file: path.join(root, '.pm2-logs', 'dex-api.out.log'),
       error_file: path.join(root, '.pm2-logs', 'dex-api.err.log'),
       time: true,
