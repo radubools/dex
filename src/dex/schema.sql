@@ -191,6 +191,9 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cache_read_tokens  BIGINT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS output_tokens      BIGINT;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS thinking_tokens    BIGINT;
+-- How full the context window is: the main agent's latest model call, prompt
+-- and output, overwritten by each call, so a finished task keeps its last one.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_tokens     BIGINT;
 
 -- ---------------------------------------------------------------- identity ---
 -- Who may use this dex, and which projects they may see.

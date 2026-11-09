@@ -538,6 +538,7 @@ class TaskManager:
             error=None,
             activity=None,
             cost_usd=None,
+            context_tokens=None,
             turns=None,
             held=False,
         )

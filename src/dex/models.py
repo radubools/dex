@@ -175,6 +175,9 @@ class Task:
     #: Token counts from the agent's result. `thinking_tokens` is the part of
     #: `output_tokens` spent thinking, not an extra alongside it.
     tokens: dict[str, int] = field(default_factory=dict)
+    #: The context window after the main agent's latest model call
+    #: (`pricing.context_tokens`): what it holds now, not a total over the task.
+    context_tokens: int | None = None
     #: Files the watcher has seen appear under this task's output directory.
     artifacts: list[str] = field(default_factory=list)
     #: Set when the task is executing, so it can be cancelled.
@@ -447,6 +450,7 @@ class Task:
             "options": self.options or {},
             "costIsEstimate": self.cost_is_estimate,
             "tokens": self.tokens or None,
+            "contextTokens": self.context_tokens,
             "canResume": self.state.resumable,
             "canRerun": self.state.terminal,
             # Restart resurrects this task in place; rerun makes a new one.

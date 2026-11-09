@@ -31,7 +31,8 @@ TASK_COLUMNS = """
     extract(epoch from started_at)::float8 AS started_at,
     extract(epoch from finished_at)::float8 AS finished_at,
     error, cost_usd, turns, session_id, attempt, parent_id, resumed_from, output_slug,
-    model, cost_is_estimate, project, scope, held, anchor, waiting_on, wake_note, options, priority
+    model, cost_is_estimate, project, scope, held, anchor, waiting_on, wake_note, options, priority,
+    context_tokens
 """
 
 
@@ -50,6 +51,7 @@ def task_from_row(row: asyncpg.Record) -> Task:
     task.finished_at = row["finished_at"]
     task.error = row["error"]
     task.cost_usd = row["cost_usd"]
+    task.context_tokens = row["context_tokens"]
     task.turns = row["turns"]
     task.session_id = row["session_id"]
     task.attempt = row["attempt"]
@@ -543,6 +545,10 @@ class TaskStore:
                 task_id, skill,
             )
             await conn.execute("DELETE FROM task_usage WHERE task_id = $1 AND skill = ''", task_id)
+
+    async def set_context_tokens(self, task_id: str, tokens: int) -> None:
+        """Record how full the context window is after the latest model call."""
+        await self.db.pool.execute("UPDATE tasks SET context_tokens = $2 WHERE id = $1", task_id, tokens)
 
     async def set_tokens(self, task_id: str, counts: dict[str, int]) -> None:
         """Record the token counts the agent reported for a finished run.

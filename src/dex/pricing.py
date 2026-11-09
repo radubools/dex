@@ -152,3 +152,16 @@ def tokens(usage: dict[str, Any] | None) -> dict[str, int]:
         "output_tokens": output,
         "thinking_tokens": thinking,
     }
+
+
+def context_tokens(counts: dict[str, Any] | None) -> int:
+    """How full the context window is after one model call, from its `tokens()`.
+
+    Everything the call read (plain input, cache read and cache write are
+    disjoint parts of the prompt) plus what it wrote, which the next call reads
+    back. Thinking is inside `output_tokens` and is not added again.
+    """
+    if not counts:
+        return 0
+    return sum(int(counts.get(k) or 0) for k in
+               ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens"))

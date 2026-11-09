@@ -3,6 +3,7 @@ import {
   answerQuestion, cancelTask, decideTodo, getTask, getTaskMessages, prioritizeTask, readAsset,
   rerunTask, resolveApproval, resumeTask, sendTaskMessage,
 } from '../api'
+import { formatContextTokens } from '../contextTokens'
 import { progressOf, type FeedItem, type TaskView } from '../store'
 import type { Routed, SourceAnchor, Task, TaskMessage, TaskState } from '../types'
 
@@ -61,6 +62,7 @@ export function TaskPanel({
   // Anything terminal has nothing left to stop. A
   // paused task is still live: dex will start it again by itself.
   const live = !['succeeded', 'failed', 'cancelled'].includes(task.state)
+  const context = formatContextTokens(task.contextTokens)
 
   // The activity opens at its end and stays there while it loads and grows
   // (its events arrive after the panel opens, and images and code blocks grow
@@ -134,6 +136,11 @@ export function TaskPanel({
         <span className={`badge ${task.state}`}>{task.state.replace('_', ' ')}</span>
         <span className="muted small">{label}</span>
         {task.turns != null && <span className="muted small">{task.turns} turns</span>}
+        {context && (
+          <span className="muted small context-tokens" title="Tokens in the context window after the latest model call">
+            {context}{task.costUsd ? ' ·' : ''}
+          </span>
+        )}
         {task.costUsd ? (
           <span className="muted small" title={task.costIsEstimate ? 'Running estimate at list price' : 'Reported by the agent'}>
             ${task.costUsd.toFixed(3)}

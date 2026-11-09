@@ -4,6 +4,7 @@
 //
 //   npx playwright test --config web/playwright.config.ts
 import { expect, test, type Page } from '@playwright/test'
+import { formatContextTokens } from '../src/contextTokens'
 
 const now = 1_760_000_000
 const task = {
@@ -74,4 +75,54 @@ test('scrolling up stops it following the end', async ({ page }) => {
   await page.setViewportSize({ width: 1180, height: 800 })
   await page.waitForTimeout(300)
   expect(await fromTop(page)).toBeLessThan(400)
+})
+
+// How full the context window is, just before the cost in the panel's header
+// (web/src/contextTokens.ts): thousands rounded up, and live from the cost event.
+test('context tokens read as thousands, rounded up', () => {
+  expect(formatContextTokens(null)).toBeNull()
+  expect(formatContextTokens(undefined)).toBeNull()
+  expect(formatContextTokens(0)).toBeNull()
+  expect(formatContextTokens(1)).toBe('1k')
+  expect(formatContextTokens(1000)).toBe('1k')
+  expect(formatContextTokens(1001)).toBe('2k')
+  expect(formatContextTokens(11_200)).toBe('12k')
+})
+
+test('the header shows the context size before the cost, and follows the cost event', async ({ page }) => {
+  const running = { ...task, state: 'running', finishedAt: null, costUsd: 0.43, costIsEstimate: true, contextTokens: 11_200, canPause: true }
+  let streams = 0
+  await page.route('**/api/**', async (route) => {
+    const p = new URL(route.request().url()).pathname
+    if (p === '/api/events') {
+      // The first connection is quiet; the reconnect brings the next model call.
+      const body = streams++ === 0 ? '' : `data: ${JSON.stringify({
+        type: 'cost', taskId: 'task-a', seq: 500, ts: now + 1, costUsd: 0.51, estimate: true, contextTokens: 20_001,
+      })}\n\n`
+      return route.fulfill({ status: 200, contentType: 'text/event-stream', body })
+    }
+    if (p === '/api/tasks/task-a/events') {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ taskId: 'task-a', events: [] }) })
+    }
+    const data = p === '/api/tasks' ? { tasks: [running] }
+      : p === '/api/tasks/task-a' ? { task: running }
+      : p === '/api/threads/t1' ? { thread: { ...thread, messages: [] }, tasks: [running] }
+      : answer(p)
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
+  })
+  await page.goto('/?project=alpha&thread=t1')
+  await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
+
+  const meta = page.locator('.task-panel .panel-meta')
+  // Right before the cost: '12k · $0.430'.
+  await expect(meta.locator('.context-tokens')).toHaveText('12k ·')
+  await expect(meta.locator('.context-tokens + span')).toHaveText('$0.430~')
+  await expect(meta.locator('.context-tokens')).toHaveText('21k ·', { timeout: 10_000 })
+  await expect(meta.locator('.context-tokens + span')).toHaveText('$0.510~')
+})
+
+test('no usage yet shows no context size', async ({ page }) => {
+  await open(page)
+  await expect(page.locator('.task-panel .panel-meta')).toContainText('$0.100')
+  await expect(page.locator('.task-panel .context-tokens')).toHaveCount(0)
 })

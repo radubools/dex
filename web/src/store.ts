@@ -303,7 +303,11 @@ function applyEvent(state: State, event: DexEvent): State {
     // Cost ticks up while the task runs; it is not a feed entry.
     case 'cost':
       return next({
-        task: { ...view.task, costUsd: event.costUsd, costIsEstimate: event.estimate },
+        task: {
+          ...view.task, costUsd: event.costUsd, costIsEstimate: event.estimate,
+          // The agent's final total carries no context size; keep the last one.
+          contextTokens: event.contextTokens ?? view.task.contextTokens,
+        },
       })
 
     case 'task_message': {

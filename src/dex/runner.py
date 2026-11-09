@@ -1348,7 +1348,7 @@ class TaskRunner:
             return opencode.OpencodeClient(options, notice=lambda text: self.emit("text", text=text))
         return ClaudeSDKClient(options=options)
 
-    def _accrue(self, usage: Any, message_id: str | None = None) -> None:
+    def _accrue(self, usage: Any, message_id: str | None = None, *, subagent: bool = False) -> None:
         """Add one message's usage to the rollup and the running estimate.
 
         Guarded separately from `_observe` so a pricing problem costs only the
@@ -1377,13 +1377,24 @@ class TaskRunner:
         self._run_costs[key] = self._run_costs.get(key, 0.0) + cost
         self._write_usage(self.store.add_usage, self.task.id, hour, self._skill, cost,
                           {k: int(v) for k, v in added.items()})
-        if cost <= 0:
-            return
-        self._estimated_cost += cost
-        self.task.cost_usd = self._estimated_cost
-        self.task.cost_is_estimate = True
-        self.emit("cost", costUsd=self._estimated_cost, estimate=True)
-        asyncio.create_task(self._store_cost(self._estimated_cost, estimate=True))
+        # The context window is this call's whole usage, not what it added: each
+        # call rereads everything before it. A subagent's calls have a window of
+        # their own, so only the main agent's move it.
+        context = 0 if subagent else pricing.context_tokens(
+            self._message_usage.get(message_id, now) if message_id else now)
+        resized = context > 0 and context != self.task.context_tokens
+        if resized:
+            self.task.context_tokens = context
+            asyncio.create_task(self._store_context(context))
+        if cost > 0:
+            self._estimated_cost += cost
+            self.task.cost_usd = self._estimated_cost
+            self.task.cost_is_estimate = True
+        if cost > 0 or resized:
+            self.emit("cost", costUsd=self.task.cost_usd or 0.0, estimate=self.task.cost_is_estimate,
+                      contextTokens=self.task.context_tokens)
+        if cost > 0:
+            asyncio.create_task(self._store_cost(self._estimated_cost, estimate=True))
 
     def _note_skill(self, tool: str, tool_input: dict[str, Any] | None) -> None:
         """Follow which skill the task is working with, so spend lands on it."""
@@ -1641,6 +1652,12 @@ class TaskRunner:
                 message=f"The turn finished but its reply could not be posted: {exc}",
                 fatal=False,
             )
+
+    async def _store_context(self, tokens: int) -> None:
+        try:
+            await self.store.set_context_tokens(self.task.id, tokens)
+        except Exception:
+            log.exception("could not record the context size for %s", self.task.id)
 
     async def _store_tokens(self, counts: dict[str, int]) -> None:
         try:
@@ -2017,7 +2034,8 @@ class TaskRunner:
             return
 
         if isinstance(message, AssistantMessage):
-            self._accrue(getattr(message, "usage", None), getattr(message, "message_id", None))
+            self._accrue(getattr(message, "usage", None), getattr(message, "message_id", None),
+                         subagent=getattr(message, "parent_tool_use_id", None) is not None)
             for block in message.content:
                 # Text already arrived as deltas; re-emitting the completed
                 # block here would duplicate every word.

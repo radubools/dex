@@ -44,6 +44,8 @@ export type Task = {
   model: string | null
   /** True while costUsd is a running estimate, not the agent's own total. */
   costIsEstimate: boolean
+  /** Tokens in the context window after the main agent's latest model call. */
+  contextTokens?: number | null
   canResume: boolean
   canRerun: boolean
   canRestart: boolean
@@ -192,7 +194,7 @@ type Base = { seq: number; ts: number; taskId: string | null }
 export type DexEvent = Base &
   (
     | { type: 'settings'; settings: Settings }
-    | { type: 'cost'; costUsd: number; estimate: boolean }
+    | { type: 'cost'; costUsd: number; estimate: boolean; contextTokens?: number | null }
     | { type: 'task_message'; message: TaskMessage }
     | { type: 'task_message_delivered'; count: number; startedTaskId: string }
     | { type: 'thread_message'; threadId: string; message: ThreadMessage }

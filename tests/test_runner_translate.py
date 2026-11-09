@@ -21,7 +21,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-from dex import skills
+from dex import pricing, skills
 from dex.bus import EventBus
 from dex.models import Task
 from dex.runner import TaskRunner
@@ -99,6 +99,71 @@ async def test_messages_without_usage_are_harmless(runner):
     run._translate(AssistantMessage(content=[], model="claude-opus-5", usage=None))
     await asyncio.sleep(0.1)
     assert run.task.cost_usd in (None, 0.0)
+    assert run.task.context_tokens is None
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, 0),
+        ({"input_tokens": 1000}, 1000),
+        ({"input_tokens": 1, "cache_read_input_tokens": 600, "cache_creation_input_tokens": 300,
+          "output_tokens": 100}, 1001),
+        # Thinking is part of the output, not added to it.
+        ({"input_tokens": 10, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 80}}, 110),
+    ],
+)
+def test_the_context_size_adds_input_both_caches_and_output(fields, expected):
+    assert pricing.context_tokens(pricing.tokens(usage(**fields))) == expected
+    assert pricing.context_tokens(None) == 0
+
+
+async def test_the_context_size_is_the_latest_call_not_a_total(runner, db):
+    run, bus = runner
+    run._translate(AssistantMessage(
+        content=[], model="claude-opus-5", message_id="m1",
+        usage=usage(input_tokens=5, cache_read_input_tokens=9_000, output_tokens=200)))
+    # The SDK repeats a message once per content block; that is the same call.
+    run._translate(AssistantMessage(
+        content=[], model="claude-opus-5", message_id="m1",
+        usage=usage(input_tokens=5, cache_read_input_tokens=9_000, output_tokens=200)))
+    await asyncio.sleep(0.2)
+    assert run.task.context_tokens == 9_205
+
+    run._translate(AssistantMessage(
+        content=[], model="claude-opus-5", message_id="m2",
+        usage=usage(input_tokens=3, cache_read_input_tokens=9_205, cache_creation_input_tokens=1_000,
+                    output_tokens=50)))
+    await asyncio.sleep(0.3)
+    assert run.task.context_tokens == 10_258
+
+    events = [e for e in await bus.history() if e.type == "cost"]
+    assert [e.data["contextTokens"] for e in events] == [9_205, 10_258]
+    # Kept with the task, so a finished one still shows its last call.
+    assert (await TaskStore(db).get(run.task.id)).context_tokens == 10_258
+    assert run.task.to_json(run.config.assets_dir)["contextTokens"] == 10_258
+
+
+async def test_a_subagent_call_does_not_move_the_context_size(runner):
+    run, _ = runner
+    run._translate(AssistantMessage(content=[], model="claude-opus-5", message_id="m1",
+                                    usage=usage(input_tokens=4_000)))
+    run._translate(AssistantMessage(content=[], model="claude-opus-5", message_id="s1",
+                                    parent_tool_use_id="tool-1", usage=usage(input_tokens=90_000)))
+    await asyncio.sleep(0.2)
+    assert run.task.context_tokens == 4_000
+
+
+async def test_the_result_leaves_the_context_size_alone(runner):
+    run, _ = runner
+    run._translate(AssistantMessage(content=[], model="claude-opus-5", message_id="m1",
+                                    usage=usage(input_tokens=4_000)))
+    # The result's usage is the whole run's, summed over every call.
+    run._translate(ResultMessage(
+        subtype="success", duration_ms=1000, duration_api_ms=900, is_error=False, num_turns=4,
+        session_id="s", total_cost_usd=1.25, result="done", usage=usage(input_tokens=50_000)))
+    await asyncio.sleep(0.2)
+    assert run.task.context_tokens == 4_000
 
 
 async def test_tool_use_emits_a_tool_event_carrying_the_activity(runner):
