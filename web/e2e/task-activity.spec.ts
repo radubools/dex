@@ -121,6 +121,35 @@ test('the header shows the context size before the cost, and follows the cost ev
   await expect(meta.locator('.context-tokens + span')).toHaveText('$0.510~')
 })
 
+// The panel covers the page on a phone; the header row is the same one, and
+// must still show the context size where it can be seen.
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+
+  test('the header shows the context size before the cost', async ({ page }) => {
+    const finished = { ...task, costUsd: 4.587, contextTokens: 153_851 }
+    await page.route('**/api/**', async (route) => {
+      const p = new URL(route.request().url()).pathname
+      if (p === '/api/events') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' })
+      if (p === '/api/tasks/task-a/events') {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ taskId: 'task-a', events: [] }) })
+      }
+      const data = p === '/api/tasks' ? { tasks: [finished] }
+        : p === '/api/tasks/task-a' ? { task: finished }
+        : p === '/api/threads/t1' ? { thread: { ...thread, messages: [{ id: 'm1', role: 'dex', kind: 'tasks', text: 'Started 1 task', data: { tasks: [finished] }, ts: now }] }, tasks: [finished] }
+        : answer(p)
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
+    })
+    await page.goto('/?project=alpha&thread=t1')
+    await page.locator('.task-chip', { hasText: 'Build the widget' }).first().click()
+
+    const tokens = page.locator('.task-panel .panel-meta .context-tokens')
+    await expect(tokens).toBeInViewport()
+    await expect(tokens).toHaveText('154k ·')
+    await expect(page.locator('.task-panel .panel-meta .context-tokens + span')).toHaveText('$4.587')
+  })
+})
+
 test('no usage yet shows no context size', async ({ page }) => {
   await open(page)
   await expect(page.locator('.task-panel .panel-meta')).toContainText('$0.100')
