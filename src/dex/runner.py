@@ -806,16 +806,16 @@ class TaskRunner:
 
         @tool(
             "wait_for_tasks",
-            "Wait until tasks are done (by id, slug or package; default: every task this one depends "
-            "on). If they finish within `wait_s` seconds (at most 300; default 0) you get their "
-            "statuses back. Otherwise this task is parked as blocked: END YOUR TURN right after this "
-            "call, with no further work. A blocked task holds no slot and no time limit; dex resumes "
-            "this same session, ahead of other queued work, when they are all done, and tells you how "
-            "each went. A task that started or continued work is blocked at the end of its turn anyway, "
-            "until that work is done: it then resumes to review the results and finish.",
+            "Block this task until tasks are done (by id, slug or package; default: every task this one "
+            "depends on). If they are all done already you get their statuses back. Otherwise this task is "
+            "parked as blocked: END YOUR TURN right after this call, with no further work. It never waits "
+            "in the turn: a waiting run would hold the slot the tasks it waits on need to run. A blocked "
+            "task holds no slot and no time limit; dex runs what it waits on ahead of other queued work, "
+            "then resumes this same session, ahead of other queued work too, and tells you how each went. "
+            "A task that started or continued work is blocked at the end of its turn anyway, until that "
+            "work is done: it then resumes to review the results and finish.",
             {"type": "object", "properties": {
                 "tasks": {"type": "array", "items": {"type": "string"}},
-                "wait_s": {"type": "number", "description": "Seconds to wait in this turn first (0-300)."},
             }},
         )
         async def wait_for_tasks(args: dict[str, Any]) -> dict[str, Any]:
@@ -833,10 +833,10 @@ class TaskRunner:
                                  "others): waiting for it would never end.")
             for i in ids:
                 await graph.store.add(self.task.id, i, "waited")
-            seconds = max(0.0, min(300.0, float(args.get("wait_s") or 0)))
-            if seconds:
-                self.task.activity = f"waiting up to {seconds:.0f}s on {len(ids)} task(s)"
-            statuses = await graph.wait(ids, seconds)
+            # Never waits in the turn: the run would keep its slot while what it
+            # waits on sits in the queue for one (a story once held its slot five
+            # minutes waiting on a queued captions task, with every slot taken).
+            statuses = await graph.statuses(ids)
             if all(s.get("done", True) for s in statuses):
                 return reply({"done": True, "tasks": statuses})
             self._park_on = ids

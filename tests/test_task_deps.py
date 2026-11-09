@@ -144,12 +144,12 @@ async def test_a_blocked_task_wakes_first_once_everything_it_waits_on_is_done(ma
     stored = await manager.tasks.get(parent.id)
     assert stored.state is TaskState.BLOCKED and stored.waiting_on == [child.id]
     assert stored.resumed_from == "sess-1"
-    # Still running: nothing wakes, and a blocked task is never claimed.
+    # Not done: nothing wakes, and a blocked task is never claimed. What it
+    # waits on goes before the older queued work.
     assert await manager.graph.wake_ready() == 0
     claimed = await manager.tasks.claim("w")
-    assert claimed.id == old.id
+    assert claimed.id == child.id
     await finish(manager, child)
-    await manager.tasks.set_state(old.id, TaskState.QUEUED)  # put the older work back in line
     assert await manager.graph.wake_ready() == 1
     woken = await manager.tasks.get(parent.id)
     assert woken.state is TaskState.QUEUED and woken.waiting_on is None
@@ -537,3 +537,60 @@ async def test_a_power_task_starts_no_tasks(manager, db):
     with pytest.raises(deps_mod.Refused):
         await manager.graph.spawn_power(power, title="More", brief="b")
     assert power.builds_package  # its own directory, for the report
+
+
+async def test_wait_for_tasks_never_waits_in_the_turn(manager, db, config):
+    await threads(db)
+    parent = await manager.submit("story", title="Story")
+    runner = TaskRunner(parent, config, manager.bus, manager.tasks, SettingsStore(db))
+    runner.graph = manager.graph
+    tools = tools_of(runner)
+    await tools["start_task"]({"thread": "Backgrounds", "title": "Prop", "brief": "make it", "slug": "background-prop"})
+    began = time.monotonic()
+    out = json.loads((await tools["wait_for_tasks"]({"wait_s": 300}))["content"][0]["text"])
+    assert out["parked"] and time.monotonic() - began < 2
+
+
+async def test_what_a_blocked_task_waits_on_runs_ahead_of_older_queued_work(manager, db):
+    await threads(db)
+    old = await manager.submit("older queued work", title="Older")
+    parent = await manager.submit("story", title="Story")
+    child = await manager.graph.spawn(parent, thread="Backgrounds", title="Prop", brief="prop")
+    await manager.tasks.set_state(parent.id, TaskState.RUNNING, started_at=1.0)
+    await manager.graph.park(parent, [child.id])
+    assert (await manager.tasks.get(child.id)).priority == deps_mod.WOKEN
+    assert (await manager.tasks.claim("w")).id == child.id
+    assert old
+
+
+async def test_a_follow_up_started_after_its_waiter_parked_is_raised_by_the_waker(manager, db):
+    await threads(db)
+    parent = await manager.submit("story", title="Story")
+    target = await manager.graph.spawn(parent, thread="Backgrounds", title="Prop", brief="prop")
+    await manager.tasks.set_state(target.id, TaskState.RUNNING, started_at=1.0)
+    waiter = await manager.submit("another story", title="Story 2")
+    await manager.graph.follow_up(waiter, target.id, "add a variant")
+    await manager.tasks.set_state(waiter.id, TaskState.RUNNING, started_at=1.0)
+    await manager.graph.park(waiter, [target.id])
+    await manager.submit("newer work", title="Newer")
+    await finish(manager, target)
+    follow = await manager.deliver_messages(target.id)
+    assert follow is not None and follow.priority == 0
+    await manager.graph.wake_ready()
+    assert (await manager.tasks.get(follow.id)).priority == deps_mod.WOKEN
+
+
+async def test_deeper_dependencies_go_before_their_waiters_siblings(manager, db):
+    await threads(db)
+    chat = await manager.submit("make lessons", title="Chat")
+    stories = [await manager.graph.spawn(chat, thread="Story", title=f"Story {i}", brief="s") for i in range(3)]
+    await manager.tasks.set_state(chat.id, TaskState.RUNNING, started_at=1.0)
+    await manager.graph.park(chat, [s.id for s in stories])
+    first = await manager.tasks.claim("w")
+    assert first.id == stories[0].id
+    # The first story blocks on a captions task it started: that goes before the other stories.
+    captions = await manager.graph.spawn(first, thread="Backgrounds", title="Captions", brief="c")
+    await manager.graph.park(await manager.tasks.get(first.id), [captions.id])
+    for _ in range(2):  # the waker raises one level per pass down the chain
+        await manager.graph.wake_ready()
+    assert (await manager.tasks.claim("w")).id == captions.id

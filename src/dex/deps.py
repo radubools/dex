@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 from . import skills
@@ -315,6 +314,32 @@ class Dependencies:
         await self.m.tasks.set_state(task.id, TaskState.BLOCKED, waiting_on=json.dumps(task.waiting_on),
                                      finished_at=None, resumed_from=task.session_id,
                                      activity=f"waiting on {len(ids)} task{'s' if len(ids) != 1 else ''}")
+        await self.raise_dependencies(task, ids)
+
+    async def raise_dependencies(self, waiter: Task, ids: list[str]) -> list[Task]:
+        """Put what a blocked task waits on ahead of untouched queued work.
+
+        A blocked task holds no slot, so the work it waits on should run next,
+        not after everything queued before it: one level above the waiter, and
+        at least WOKEN. One above, so that deeper work goes first: a chat waiting
+        on forty stories raises them all, and a story waiting on its captions
+        raises those above the stories still queued. The latest attempt of each
+        package is the one raised, which is the follow-up a `continue_task` note
+        starts once its target's run ends.
+        """
+        # Its stored priority, not the copy in hand: the waker raises blocked
+        # waiters too, one level per pass down a chain.
+        stored = await self.m.tasks.get(waiter.id)
+        level = max(WOKEN, ((stored or waiter).priority or 0) + 1)
+        latest = [t.id for t in [await self.store.latest(i) for i in ids] if t is not None]
+        raised = await self.m.tasks.prioritize(latest, level) if latest else []
+        for t in raised:
+            self.m.bus.publish(Event(type="task_state", task_id=t.id, project=t.project,
+                                     data={"state": t.state.value, "activity": t.activity, "priority": t.priority}))
+        if raised:
+            self.m._wake_workers()
+            log.info("raised %d task(s) %s waits on", len(raised), waiter.slug)
+        return raised
 
     def wake_note(self, statuses: list[dict[str, Any]]) -> str:
         lines = []
@@ -383,6 +408,9 @@ class Dependencies:
             for s in stranded:
                 await self.m.deliver_messages(s["id"])
             if stranded or any(not s.get("done", True) for s in statuses):
+                # Still waiting: keep what it waits on ahead of the queue, which
+                # covers follow-up attempts started after it parked.
+                await self.raise_dependencies(task, ids)
                 continue
             note = self.wake_note(statuses)
             landed = await self.m.tasks.set_state(
@@ -422,12 +450,3 @@ class Dependencies:
             except asyncio.CancelledError:
                 pass
             self._waker = None
-
-    async def wait(self, ids: list[str], seconds: float, poll_s: float = 5.0) -> list[dict[str, Any]]:
-        """Poll up to `seconds` (in the caller's turn) for all of `ids` to be done."""
-        deadline = time.monotonic() + max(0.0, seconds)
-        while True:
-            statuses = await self.statuses(ids)
-            if all(s.get("done", True) for s in statuses) or time.monotonic() >= deadline:
-                return statuses
-            await asyncio.sleep(min(poll_s, max(0.1, deadline - time.monotonic())))

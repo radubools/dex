@@ -29,7 +29,7 @@ beside `ask_user`:
 | `start_task(title, brief, slug, skill?, thread?)` | Starts a new task in the thread of the skill that makes it (design/26), or an existing thread named, of the same project. The thread records who asked. |
 | `continue_task(task, message)` | Asks an existing task for a change: a follow-up note to its latest attempt (`queue_message`), which becomes a new attempt in the same package. |
 | `task_status(tasks?)` | Where tasks stand now: state, done, package directory, summary or error. |
-| `wait_for_tasks(tasks?, wait_s?)` | Waits up to `wait_s` (≤ 300 s) in the turn, then parks the task as **blocked** (below). |
+| `wait_for_tasks(tasks?)` | Parks the task as **blocked** (below) unless they are all done. It never waits in the turn: a waiting run would hold the slot the tasks it waits on need. |
 
 `start_task` and `continue_task` record an edge: the task **depends on** the
 one it started or continued. `wait_for_tasks` records one for every task it
@@ -129,6 +129,14 @@ sequenceDiagram
   session, and a `wake_note` listing each dependency: state, summary or
   error, package directory. `claim` orders by priority first, so a woken
   task goes before all other queued work; claiming resets the priority.
+- What a blocked task waits on runs **ahead of the queue**: when it parks,
+  and on every waker pass while it stays blocked, the latest attempt of each
+  package it waits on is raised one level above the waiter, and at least to
+  1 (`raise_dependencies`). Deeper work goes first: a chat waiting on forty
+  stories raises them to 1, and a story waiting on its captions raises those
+  to 2, ahead of the stories still queued. Each waker pass carries it one
+  level further down a chain. The pass covers a follow-up attempt that
+  a `continue_task` note starts only once its target's current run ends.
 - The resumed session is sent only the note (it already has the brief). If the
   session cannot be resumed, the fresh one gets the brief and the note.
 - A failed or cancelled dependency still wakes its waiter: the note says so,
@@ -157,7 +165,7 @@ Nothing running is stopped.
 | priority | means |
 |---|---|
 | 0 | ordinary queued work |
-| 1 | woken: what it waited on is done (above) |
+| 1+ | woken: what it waited on is done; or waited on by a blocked task, one above it (above) |
 | 2 | prioritized by the operator, with everything under it |
 
 A claim resets it to 0. A prioritized task that blocks keeps its 2 when it
