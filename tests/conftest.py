@@ -30,6 +30,12 @@ def _no_routing(monkeypatch):
     monkeypatch.setattr("dex.api.route_message", stay)
 
 
+@pytest.fixture(autouse=True)
+def _no_transcripts(monkeypatch, tmp_path):
+    """The startup backfill reads no real Claude sessions (`dex.transcripts`)."""
+    monkeypatch.setattr("dex.transcripts.projects_dir", lambda: tmp_path / "no-claude-projects")
+
+
 @pytest.fixture(scope="session")
 def dsn() -> str:
     return TEST_DSN

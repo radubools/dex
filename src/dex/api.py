@@ -51,7 +51,7 @@ from .identity import (
 from .config import CONFIG, MAX_WORKERS, PARALLEL_CONCURRENCY, SEQUENTIAL_CONCURRENCY, Config
 from .db import Database, import_json_threads
 from . import animation, antigravity, opencode
-from . import designer, local_sources, skills, surveyor, tables, uploads
+from . import designer, local_sources, skills, surveyor, tables, transcripts, uploads
 from .feed import ReviewStore, discover
 from .migrate import adopt_existing_project, ensure_design_thread, ensure_main_thread, tie_threads
 from .router import Route, route_message
@@ -60,7 +60,7 @@ from .models import Event, TaskState
 from .planner import Plan, plan_from_message
 from .queue import TaskManager
 from .store import (
-    CostStore, PackageTagStore, SettingsStore, TaskMessageStore, ThreadStore,
+    CostStore, PackageTagStore, SettingsStore, TaskMessageStore, TaskStore, ThreadStore,
     read_manifest_tags,
 )
 from .threads import ThreadMessage
@@ -427,9 +427,13 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         await tasks.start()
         await watcher.start()
         await usage.start()
+        # Tasks from before `context_tokens` was kept get theirs from their
+        # session transcripts, in the background: nothing waits on it.
+        backfilling = asyncio.create_task(transcripts.backfill(TaskStore(db)))
         try:
             yield
         finally:
+            backfilling.cancel()
             await usage.stop()
             await watcher.stop()
             await tasks.stop()

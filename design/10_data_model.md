@@ -122,6 +122,7 @@ erDiagram
         bigint cache_write_tokens "billed at 1.25x"
         bigint output_tokens
         bigint thinking_tokens "subset of output"
+        bigint context_tokens "the latest call's window"
         jsonb waiting_on "blocked: the task ids"
         text wake_note "told on waking"
         int priority "woken tasks claimed first"

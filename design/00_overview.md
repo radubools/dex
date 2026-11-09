@@ -190,6 +190,7 @@ flowchart TB
 | `bus` | Persist-then-deliver event fan-out |
 | `watcher` | New files → `asset` events, manifest tags → index |
 | `usage` / `pricing` | Limit windows, cost estimates, token accounting |
+| `transcripts` | A task's context size from its Claude session transcript, for tasks from before it was kept |
 | `widgets` | Which widget opens which file |
 | `feed` / `animation` / `gifinfo` | The review reel and animation playback |
 | `fake_agent` | A scripted runner for offline UI work |

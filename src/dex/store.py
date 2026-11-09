@@ -550,6 +550,27 @@ class TaskStore:
         """Record how full the context window is after the latest model call."""
         await self.db.pool.execute("UPDATE tasks SET context_tokens = $2 WHERE id = $1", task_id, tokens)
 
+    async def sessions_without_context(self) -> list[tuple[str, str]]:
+        """(task id, session id) of every task not running that has no context size."""
+        rows = await self.db.pool.fetch(
+            """SELECT id, session_id FROM tasks
+                WHERE context_tokens IS NULL AND session_id IS NOT NULL
+                  AND state NOT IN ('running', 'awaiting_input')"""
+        )
+        return [(r["id"], r["session_id"]) for r in rows]
+
+    async def fill_context_tokens(self, sizes: dict[str, int]) -> int:
+        """Give tasks the context size found for them, unless a run wrote one first."""
+        if not sizes:
+            return 0
+        result = await self.db.pool.execute(
+            """UPDATE tasks t SET context_tokens = s.tokens
+                 FROM unnest($1::text[], $2::bigint[]) AS s(id, tokens)
+                WHERE t.id = s.id AND t.context_tokens IS NULL""",
+            list(sizes), list(sizes.values()),
+        )
+        return int(result.rsplit(" ", 1)[-1])
+
     async def set_tokens(self, task_id: str, counts: dict[str, int]) -> None:
         """Record the token counts the agent reported for a finished run.
 
