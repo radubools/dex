@@ -34,8 +34,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dex.app
         # A multi-platform target gets no synthesized entry point otherwise.
         OTHER_SWIFT_FLAGS: -parse-as-library
+        # The app icon, rendered from web/icon.svg by ~/games/engine/tools/app-icons.mjs.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     sources:
       - path: Sources
+      - path: Assets.xcassets
     info:
       path: Generated/Info.plist
       properties:
