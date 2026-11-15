@@ -52,7 +52,7 @@ from .prompts import (
     power_prompt, power_system, todos_prompt,
     design_prompt, generation_prompt, survey_prompt,
 )
-from .usage import is_usage_limit_error, limit_pause_note
+from .usage import is_usage_limit_error, limit_pause_note, provider_window, resets_in
 
 #: Largest single message the agent SDK will read from the CLI (default 1 MB).
 AGENT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
@@ -1916,7 +1916,8 @@ class TaskRunner:
         )
 
     def _pause_for_limit(self, result: str) -> None:
-        """The CLI refused work because a Claude limit is spent.
+        """The agent refused work because a limit is spent: Claude's, or the
+        quota of the provider an `agy:`/`oc:` model runs on (a 429).
 
         Failing here throws away a task somebody is waiting on, and the queue
         dispatches the next one into the same refusal — one failure per task,
@@ -1926,14 +1927,14 @@ class TaskRunner:
         on the row, and dex holds the fleet until the window the CLI named has
         rolled over, whereupon rebalance puts the paused work back.
         """
-        self.task.activity = limit_pause_note(result)
+        self.task.activity = limit_pause_note(result, self.task.model)
         # Not failed, so no terminal fields: the task has not ended, it has
         # stopped where the window caught it.
         self.task.finished_at = None
         self.set_state(TaskState.PAUSED)
-        asyncio.create_task(self._store_limit_pause())
+        asyncio.create_task(self._store_limit_pause(result))
 
-    async def _store_limit_pause(self) -> None:
+    async def _store_limit_pause(self, result: str = "") -> None:
         """Persist the pause, with the session to resume, and hold the fleet."""
         try:
             await self.store.set_state(
@@ -1950,16 +1951,25 @@ class TaskRunner:
         # the fleet keeps dispatching into the same refusal; a conservative
         # shared-weekly reading is corrected by the next probe (or the next
         # run's own RateLimitEvent) a few minutes later.
+        own = provider_window(self.task.model)
         try:
-            snapshot = await self.settings.limit_snapshot()
-            fresh = [
-                w for w, r in snapshot.items()
-                if isinstance(r, dict) and r.get("status") == "rejected"
-                and time.time() - r.get("seenAt", 0) < 60
-            ]
-            if not fresh:
+            if own is not None:
+                # Antigravity and OpenCode report no usage as they go: their
+                # refusal is the reading, held until the reset it names (an
+                # hour when it names none; a refusal after that sets it again).
+                wait = resets_in(result) or 3600.0
                 await self.settings.record_limit(
-                    {"rateLimitType": "seven_day", "status": "rejected"})
+                    {"rateLimitType": own, "status": "rejected", "resetsAt": time.time() + wait})
+            else:
+                snapshot = await self.settings.limit_snapshot()
+                fresh = [
+                    w for w, r in snapshot.items()
+                    if isinstance(r, dict) and r.get("status") == "rejected"
+                    and time.time() - r.get("seenAt", 0) < 60
+                ]
+                if not fresh:
+                    await self.settings.record_limit(
+                        {"rateLimitType": "seven_day", "status": "rejected"})
         except Exception:
             log.exception("could not record a synthetic reading for %s", self.task.id)
         if self.on_limit_reading is not None:

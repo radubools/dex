@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from typing import Any
 
@@ -75,6 +76,18 @@ MODEL_WINDOWS = {
 }
 
 
+#: The limits of the agents that are not Claude, one window each, by model
+#: prefix: Antigravity runs on the Google subscription, OpenCode on the Go plan.
+#: Neither reports its usage as it goes; a window is recorded when the provider
+#: refuses a call (a 429), with the reset its message names.
+PROVIDER_WINDOWS = {"agy:": "antigravity", "oc:": "opencode"}
+
+
+def provider_window(model: str | None) -> str | None:
+    """The window that holds `model` when it is not a Claude model, else None."""
+    return next((w for prefix, w in PROVIDER_WINDOWS.items() if (model or "").startswith(prefix)), None)
+
+
 def counts_for(window: str, model: str | None) -> bool:
     """Whether a window can stop work running on `model`.
 
@@ -88,10 +101,11 @@ def counts_for(window: str, model: str | None) -> bool:
     """
     if not model:
         return True
-    if model.startswith(("agy:", "oc:")):
+    own = provider_window(model)
+    if own is not None or window in PROVIDER_WINDOWS.values():
         # Antigravity runs on the Google subscription, OpenCode on the Go
-        # plan: no Claude window holds either.
-        return False
+        # plan: no Claude window holds either, and theirs hold no Claude model.
+        return window == own
     family = next((f for f in MODEL_WINDOWS if f in model.lower()), None)
     if window in MODEL_WINDOWS.values():
         return family is not None and window == MODEL_WINDOWS[family]
@@ -138,7 +152,23 @@ LIMIT_MARKERS = (
     "usage limit reached",
     "reached your usage limit",
     "rate limit",
+    # Antigravity (Google): "RESOURCE_EXHAUSTED (code 429): Individual quota
+    # reached. … Resets in 2h5m39s." A whole batch failed on it in two minutes
+    # on 15 Nov, as Claude's limit once did.
+    "individual quota reached",
+    "resource_exhausted",
+    "code 429",
+    "quota exceeded",
 )
+
+
+def resets_in(message: str) -> float | None:
+    """Seconds until the limit a refusal names resets ("Resets in 2h5m39s"), or None."""
+    m = re.search(r"resets in\s+((?:\d+\s*[dhms]\s*)+)", message, re.IGNORECASE)
+    if not m:
+        return None
+    unit = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+    return float(sum(int(n) * unit[u.lower()] for n, u in re.findall(r"(\d+)\s*([dhmsDHMS])", m.group(1))))
 
 
 def is_usage_limit_error(message: str) -> bool:
@@ -151,16 +181,20 @@ def is_usage_limit_error(message: str) -> bool:
     return any(marker in lowered for marker in LIMIT_MARKERS)
 
 
-def limit_pause_note(result: str) -> str:
+def limit_pause_note(result: str, model: str | None = None) -> str:
     """What a task's activity says while it sits out a spent limit.
 
     Names the window's own reset so the operator knows the resume is
     automatic, and keeps the CLI's sentence for the exact window it named.
     """
     return (
-        "paused: Claude refuses work until the limit resets — "
+        f"paused: {_provider_name(model)} refuses work until the limit resets — "
         f"{result} — dex resumes this task when the window clears"
     )
+
+
+def _provider_name(model: str | None) -> str:
+    return {"antigravity": "Antigravity", "opencode": "OpenCode"}.get(provider_window(model) or "", "Claude")
 
 
 class UsageWatcher:
