@@ -23,7 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 #: Besides DEX_*: what a process needs to find its home, its tools and its locale.
-KEEP = {"HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TERM", "PATH"}
+#: CLAUDE_CODE_TMPDIR is the one Claude Code setting kept: where the agents'
+#: own temporary files go, set beside TMPDIR in ecosystem.config.cjs.
+KEEP = {"HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "CLAUDE_CODE_TMPDIR", "TERM", "PATH"}
 TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 
 

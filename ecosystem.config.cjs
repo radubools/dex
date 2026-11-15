@@ -79,6 +79,13 @@ module.exports = {
         ...localAuth,
         DEX_DATABASE_URL: 'postgresql://127.0.0.1/dex',
         DEX_PORT: '4317',
+        // Temporary files on the external drive, not the system disk: every
+        // agent, skill, test server and browser dex starts inherits these
+        // (Python's tempfile, Node's os.tmpdir(), Chromium, Claude Code's own
+        // files). Story e2e runs and their Vite caches once filled the system
+        // disk with 200 GB and stopped tasks for lack of space.
+        TMPDIR: '/Volumes/external/tmp',
+        CLAUDE_CODE_TMPDIR: '/Volumes/external/tmp',
         // Postgres.app and homebrew are not on a daemon's default PATH.
         PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${
           process.env.PATH || ''

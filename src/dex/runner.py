@@ -1293,6 +1293,12 @@ class TaskRunner:
 
                 shutil.rmtree(leftover, ignore_errors=True)
                 self._skill_work_dir = None
+            # An ideation run's sandbox scratch is temporary: gone once the run is
+            # over, kept while it is only paused or blocked.
+            if self.task.is_ideation and self.task.state.terminal:
+                from . import sandbox  # noqa: PLC0415
+
+                sandbox.clear_scratch(self.task_dir)
 
     async def _compacts(self, model: str | None, session: str | None, woken: bool) -> bool:
         """Whether this run compacts the session it resumes first: a new

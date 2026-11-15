@@ -43,6 +43,12 @@ def scratch_for(directory: Path) -> Path:
     return Path(tempfile.gettempdir()).resolve() / f"dex-ideation-{directory.name}"
 
 
+def clear_scratch(directory: Path) -> None:
+    """Remove a finished run's scratch: its test servers' builds, screenshots and
+    caches. Nothing else removed them, and ideation's grew to 100 GB."""
+    shutil.rmtree(scratch_for(directory), ignore_errors=True)
+
+
 def _quoted(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 

@@ -152,3 +152,19 @@ async def test_without_a_sandbox_there_is_no_shell(run, monkeypatch):
 
     assert isinstance(refused, PermissionResultDeny)
     assert "nothing can confine it" in refused.message
+
+
+def test_a_finished_runs_scratch_is_cleared(tmp_path, monkeypatch):
+    import tempfile
+
+    from dex import sandbox as sb
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    run = tmp_path / "ml"
+    run.mkdir()
+    scratch = sb.scratch_for(run)
+    (scratch / "e2e").mkdir(parents=True)
+    (scratch / "e2e" / "shot.png").write_bytes(b"x")
+    sb.clear_scratch(run)
+    assert not scratch.exists()
+    sb.clear_scratch(run)  # nothing there: no error
