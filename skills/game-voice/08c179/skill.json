@@ -1,0 +1,10 @@
+{
+  "name": "game-voice",
+  "description": "Spoken captions for the games in ~/games: the readable words to say for every text a story's card shows (its line, question, \"more\" paragraphs and the green or red hint after an answer), maths and markdown read out and runtime values kept as slots, keyed by the text, in one kind \"voice\" package per story; the game speaks them live in the voice the player picks. Runtime numbers filled in from a play-through of the story or inferred from the beat's context. No audio is made.",
+  "version": "08c179",
+  "updated": 1794478966.185008,
+  "requires": [
+    "pytest"
+  ],
+  "thread": "Captions"
+}

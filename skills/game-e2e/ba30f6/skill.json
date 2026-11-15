@@ -1,0 +1,11 @@
+{
+  "name": "game-e2e",
+  "description": "End-to-end tests of the lessons (\"stories\") of the games in ~/games \u2014 plays a story package in its game in a real browser (headless Chromium, desktop and phone, every route) with the engine's story-e2e.mjs, checks every beat and its e2e.json assertions, reviews every screenshot, and hands the story task a passing, reviewed report it adopts. Story tasks never run the test themselves; they start a game-e2e task as a dependency in the End-to-end tests thread.",
+  "version": "ba30f6",
+  "updated": 1794774617.633336,
+  "requires": [
+    "dex",
+    "pytest"
+  ],
+  "thread": "End-to-end tests"
+}

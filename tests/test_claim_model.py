@@ -45,16 +45,17 @@ async def test_the_projects_own_model_wins(manager, db):
     assert await manager.model_for(task) == "claude-sonnet-5-5"
 
 
-async def test_a_paused_task_keeps_the_model_it_ran_on(manager, db):
+async def test_a_resumed_task_takes_the_model_chosen_since_it_stopped(manager, db):
+    """Paused by a restart or its provider's quota, it resumes on the setting of now."""
     settings = SettingsStore(db)
     task = Task(problem="p", title="ran", slug="ran", project=manager.config.default_project)
-    task.model = "claude-sonnet-5-5"
+    task.model = "agy:gemini-4-carbon-medium"
     await manager.tasks.create(task)
     await manager.tasks.set_state(task.id, TaskState.RUNNING, started_at=1.0)
     await manager.tasks.set_state(task.id, TaskState.PAUSED)
 
-    await settings.set(SettingsStore.MODEL, "claude-opus-5-5")
+    await settings.set(SettingsStore.MODEL, "oc:qwen3.8-flash")
     await manager.resume_paused(1)               # back in the queue, as the server does
-    assert (await manager.tasks.get(task.id)).state is TaskState.QUEUED
     claimed = await manager.tasks.claim("w", model_for=manager.model_for)
-    assert claimed is not None and claimed.model == "claude-sonnet-5-5"
+    assert claimed is not None and claimed.model == "oc:qwen3.8-flash"
+    assert (await manager.tasks.get(task.id)).model == "oc:qwen3.8-flash"

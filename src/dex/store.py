@@ -601,14 +601,18 @@ class TaskStore:
         )
 
     async def claim(self, worker: str, interactive: bool | None = None,
-                    model_for: Callable[[Task], Awaitable[str]] | None = None) -> Task | None:
+                    model_for: Callable[[Task], Awaitable[str]] | None = None,
+                    skip: list[str] | None = None) -> Task | None:
         """Take the oldest queued task, skipping rows another worker holds.
 
-        `model_for` gives the model a task runs on as the settings stand now: a
-        queued task takes it when it is claimed, so one that waited in the queue
-        runs on the model chosen since, not the one set when it was made. One
-        that has run before (paused, then put back in the queue) keeps the
-        model its session is on.
+        `model_for` gives the model a task runs on as the settings stand now,
+        and every claim takes it: a task that waited in the queue runs on the
+        model chosen since it was made, and one that is resumed (paused by a
+        restart, or by its provider's quota, then put back) on the model chosen
+        since it stopped. Its session continues when the new model's agent can
+        resume it, and starts afresh on the same package when not (runner).
+        `skip` names tasks to pass over this time: ones whose model is out of
+        quota until its limit resets (queue.py).
 
         `interactive` picks which kind of work to look at: True for the chat
         turns that run as tasks, False for generation, None for either. The two
@@ -622,6 +626,8 @@ class TaskStore:
         elif interactive is False:
             scope_filter = "AND NOT (scope = ANY($1::text[]))"
         scopes = [list(INTERACTIVE_SCOPES)] if scope_filter else []
+        skip_filter = f"AND NOT (id = ANY(${len(scopes) + 1}::text[]))" if skip else ""
+        args = [*scopes, *([list(skip)] if skip else [])]
         async with self.db.pool.acquire() as conn, conn.transaction():
             row = await conn.fetchrow(
                 # Only queued work is claimable. A paused task is deliberately
@@ -637,12 +643,12 @@ class TaskStore:
                 # (the fleet held or at capacity claims nothing): waiting for
                 # `resume_paused` let queued work take every freed slot first,
                 # so a prioritized paused task never got one.
-                f"""SELECT id, started_at FROM tasks
+                f"""SELECT id FROM tasks
                    WHERE (state = 'queued' OR (state = 'paused' AND started_at IS NOT NULL AND NOT held))
-                     {scope_filter}
+                     {scope_filter} {skip_filter}
                    ORDER BY priority DESC, (started_at IS NOT NULL) DESC, seq
                    FOR UPDATE SKIP LOCKED LIMIT 1""",
-                *scopes,
+                *args,
             )
             if row is None:
                 return None
@@ -661,7 +667,7 @@ class TaskStore:
             if claimed is None:
                 return None
             task = task_from_row(claimed)
-            if model_for is not None and row["started_at"] is None:
+            if model_for is not None:
                 model = await model_for(task)
                 if model and model != task.model:
                     await conn.execute("UPDATE tasks SET model = $2 WHERE id = $1", task.id, model)
@@ -1340,6 +1346,13 @@ class SettingsStore:
         """Per-project override, e.g. `model:algorithms`."""
         return f"model:{project}"
 
+    @staticmethod
+    def skill_model_key(skill: str) -> str:
+        """Per-skill override, for the tasks in that skill's threads, e.g.
+        `skill_model:game-reading`. Skills are the install's, so it holds in
+        every project that has the skill on."""
+        return f"skill_model:{skill}"
+
     def __init__(self, db: Database) -> None:
         self.db = db
 
@@ -1462,8 +1475,13 @@ class SettingsStore:
         except (TypeError, ValueError):
             return 1.0
 
-    async def model_for(self, project: str | None, fallback: str) -> str:
-        """Per-project override first, then the global setting, then the config."""
+    async def model_for(self, project: str | None, fallback: str, skill: str | None = None) -> str:
+        """The skill's override first (its threads' tasks), then the project's,
+        then the global setting, then the config."""
+        if skill:
+            chosen = await self.get(self.skill_model_key(skill))
+            if chosen:
+                return str(chosen)
         if project:
             chosen = await self.get(self.project_model_key(project))
             if chosen:

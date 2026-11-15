@@ -86,7 +86,7 @@ async def test_a_quota_refusal_pauses_and_holds_until_the_named_reset(config, db
     assert "seven_day" not in snapshot or snapshot["seven_day"].get("status") != "rejected"
 
 
-@pytest.mark.parametrize("default, held", [(GEMINI, True), ("claude-opus-5-5", False)])
+@pytest.mark.parametrize("default, held", [(GEMINI, True), ("claude-opus-5-5", False), ("oc:qwen3.8-flash", False)])
 async def test_the_fleet_is_held_while_the_default_model_is_refused(db, default, held):
     bus = EventBus(db)
     await bus.start()

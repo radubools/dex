@@ -1912,6 +1912,7 @@ td.clipped:hover { color: var(--accent); }
   background: color-mix(in srgb, var(--warn) 14%, transparent);
 }
 .skill-carries { display: flex; flex-wrap: wrap; gap: 5px; }
+.skill-model { display: grid; gap: 4px; margin: 8px 0 6px; max-width: 520px; }
 .skill-chip {
   font-size: 11px; padding: 1px 8px; border-radius: 5px;
   background: var(--panel-2); color: var(--muted);

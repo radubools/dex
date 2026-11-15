@@ -257,6 +257,9 @@ class SettingsRequest(BaseModel):
     model: str | None = None
     #: Per-project override, e.g. {"algorithms": "claude-sonnet-5"}.
     project_models: dict[str, str] | None = None
+    #: Per-skill override for the tasks in its threads, e.g. {"game-reading": "oc:qwen3.8-flash"};
+    #: "" goes back to the project's or global model.
+    skill_models: dict[str, str] | None = None
 
 
 class TaskActionRequest(BaseModel):
@@ -901,6 +904,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await settings.set(SettingsStore.ANIMATION_SPEED, body.animation_speed)
         for project, model in (body.project_models or {}).items():
             await settings.set(SettingsStore.project_model_key(project), model)
+        for skill, model in (body.skill_models or {}).items():
+            await settings.set(SettingsStore.skill_model_key(skill), model)
 
         current = await settings.all()
         bus.publish(Event(type="settings", data={"settings": current}))

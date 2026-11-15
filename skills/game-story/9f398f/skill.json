@@ -1,0 +1,14 @@
+{
+  "name": "game-story",
+  "description": "Lesson scripts (\"stories\") for the games in ~/games: the schema-1 story format the engine's story runner plays (beats with cues, camera, spawns, actions, choices), the catalogue of per-algorithm act actions, and write/validate/outline/export of kind \"story\" packages, plus the spoken captions (the readable words of every text) every story must get from its captions task before it is finished.",
+  "version": "9f398f",
+  "updated": 1794478966.3176901,
+  "requires": [
+    "PIL",
+    "dex",
+    "numpy",
+    "pytest",
+    "scipy"
+  ],
+  "thread": "Stories"
+}

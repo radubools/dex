@@ -1,0 +1,14 @@
+{
+  "name": "game-reading",
+  "description": "The source behind a lesson in the games in ~/games \u2014 for each concept a story teaches, a faithful and complete retelling of what the book or paper says about it, in our own words, with every idea and equation (LaTeX, with its number) kept, figures drawn from the data, page references, a link to read it in the source and every publication it cites linked to its DOI, arXiv or publisher page (scouted on the web and checked), in one kind \"reading\" package per story that the game shows behind the story card's book button.",
+  "version": "00a7b5",
+  "updated": 1794720145.6163452,
+  "requires": [
+    "PIL",
+    "cairo",
+    "numpy",
+    "pytest",
+    "scipy"
+  ],
+  "thread": "Readings"
+}

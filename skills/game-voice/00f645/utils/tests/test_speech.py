@@ -1,0 +1,93 @@
+"""Checks for game-voice's speech.speakable: each family of reading voice.speakable gets wrong."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import pytest  # noqa: E402
+
+from utils.speech import speakable  # noqa: E402
+
+CASES = [
+    # brackets: functions, products, bracketed powers
+    ("$$f(x)$$", "F of X"),
+    ("$$p = \\sigma(z)$$", "P equals sigma of Z"),
+    ("$$F(n) = F(n-1) + F(n-2)$$", "F of N equals F of N minus 1 plus F of N minus 2"),
+    ("$$\\frac{n(n-1)}{2}$$", "N times the quantity N minus 1, all over 2"),
+    ("$$(1.5 - 2)^2 = 0.25$$", "the quantity 1.5 minus 2, squared, equals 0.25"),
+    ("$$G = 1 - p^2 - (1-p)^2$$", "G equals 1 minus P squared minus the quantity 1 minus P, squared"),
+    ("$$w(n) = w(n-1) + 1$$", "W of N equals W of N minus 1 plus 1"),
+    ("$$a(x - 1)$$", "A times the quantity X minus 1"),
+    ("$$\\hat y(1 - \\hat y)$$", "Y hat times the quantity 1 minus Y hat"),
+    ("$$d_1(q, p_0) = ?$$", "D 1 of Q, P 0 equals?"),
+    ("$$P(c \\mid x)$$", "P of C given X"),
+    ("$$p(1) = 0.73$$", "P of 1 equals 0.73"),
+    ("$$O(\\max(m, n))$$", "O of the max of M, N"),
+    ("$$O(n + m)$$", "O of N plus M"),
+    # limits, logs, norms, mod, binomials, factorial
+    ("$$\\sum_{i=1}^{n} x_i$$", "the sum from I equals 1 to N of X I"),
+    ("$$\\sum_i w_i$$", "the sum over I of W I"),
+    ("$$\\min_{c \\le a} b$$", "the min over C is at most A of B"),
+    ("$$n \\log_2 n$$", "N log base 2 of N"),
+    ("$$\\lVert w \\rVert = 1$$", "the norm of W equals 1"),
+    ("$$h = (5 \\cdot 10 + 2) \\bmod 13$$", "H equals 5 times 10 plus 2 mod 13"),
+    ("$$\\binom{4}{2}$$", "4 choose 2"),
+    ("$$n! = 6$$", "N factorial equals 6"),
+    # the game's Unicode minus in filled values
+    ("Right: $$\\delta_o h_1 = −0.418$$.", "Right: delta O H 1 equals minus 0.418."),
+    # code in plain text
+    ("Line 7: if arr[lo] <= arr[mid], the left half is in order.",
+     "Line 7: if arr at lo less than or equal to arr at mid, the left half is in order."),
+    ("What is dp[i][j]?", "What is dp at I, J?"),
+    ("count[3] after line 4 = ?", "count at 3 after line 4 equals what?"),
+    ("At i = 5, h == want, but the window is b b a.", "At I equals 5, H equals want, but the window is B B A."),
+    ("The body of remove_dups is blank.", "The body of remove dups is blank."),
+    ("ways(1) calls ways(-1), then -3.", "ways of 1 calls ways of minus 1, then minus 3."),
+    ("-1 is not a height, so lh and rh can't be compared.", "minus 1 is not a height, so lh and rh can't be compared."),
+    ("-low[0] is the largest value in the low half.", "minus low at 0 is the largest value in the low half."),
+    ("we need 3 - 3 = 0.", "we need 3 minus 3 equals 0."),
+    # a ` - ` after a digit or lone variable is prose unless a real operand follows:
+    # "9 - dearer" and "G - and" stay a pause, "i - 1" is subtraction.
+    ("Four roads adding to 9 - dearer than through C.", "Four roads adding to 9 - dearer than through C."),
+    ("We only want G - and we know where G is.", "We only want G - and we know where G is."),
+    ("cell i - 1 holds the parent.", "cell I minus 1 holds the parent."),
+    ("The heap holds (9, 2, 'A') - and D never joins.", "The heap holds (9, 2, 'A') - and D never joins."),
+    ("distance to G - guess['C'] is 2.", "distance to G - guess at 'C' is 2."),
+    ("dp[i][j] = up + 1", "dp at I, J equals up plus 1"),
+    ("len(height) - 1 is the last index.", "len of height minus 1 is the last index."),
+    ("Then + would join the texts: \"3\" + \"4\" is \"34\".", "Then plus would join the texts: \"3\" plus \"4\" is \"34\"."),
+    ("no rule that * goes before +: the order", "no rule that times goes before plus: the order"),
+    ("Every reading carried the same +2.", "Every reading carried the same plus 2."),
+    ("mins[-1] is the top.", "mins at minus 1 is the top."),
+    ("its lowest value $$L^* = 0.10$$", "its lowest value L star equals 0.10"),
+    ("The cross marks ■'s mean.", "The cross marks cube's mean."),
+    ("Try a = [] so A starts right at the shared tail.", "Try A equals an empty list so A starts right at the shared tail."),
+    ("line 2 were count = {}?", "line 2 were count equals an empty dict?"),
+    ("The stack now holds { and [, still waiting.", "The stack now holds a curly brace and a square bracket, still waiting."),
+    ("Line 20 adds left[3:], line 21 adds right[:2] and mid[1:4].",
+     "Line 20 adds left from 3 on, line 21 adds right up to 2 and mid from 1 to 4."),
+    ("Try [2, 1, 2, 1].", "Try [2, 1, 2, 1]."),
+    # shapes, buttons and marks
+    ("Slide k: ■ up to k = 4, ● from 5 on.", "Slide K: cube up to K equals 4, sphere from 5 on."),
+    ("Press ▶ Step, then ⏩ Run or 🎲 New ball.", "Press Step, then Run or New ball."),
+    ("Read the ✓ and ✗ marks.", "Read the tick and cross marks."),
+    # prose left alone
+    ("Re-linking the nodes in place costs one spare node.", "Re-linking the nodes in place costs one spare node."),
+    ("Fresh accuracy 73%. Next, prune it (gently).", "Fresh accuracy 73 percent. Next, prune it (gently)."),
+    ("the bag(s) of samples", "the bag(s) of samples"),
+]
+
+
+@pytest.mark.parametrize("text,want", CASES)
+def test_speakable(text, want):
+    assert speakable(text) == want
+
+
+def test_a_link_is_read_as_its_label() -> None:
+    assert speakable("See [[story/llm-svd|the SVD]] first.") == "See the SVD first."
+    assert speakable("Its [[story/llm-svd|$$\\Sigma$$ part]].") == speakable("Its $$\\Sigma$$ part.")
+    assert speakable("See [[story/llm-matrix-norms]].") == "See llm matrix norms."
+

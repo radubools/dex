@@ -66,6 +66,21 @@ them, and a project never has two for the same reason. Tasks can't name a new th
 `start_task` has no such option. A person still can, with New thread, and
 `enqueue_task --create-thread` still can from a script.
 
+**A skill without a declared thread** still gets one when work needs it: titled for
+the skill ("game-reading" → "Game reading"), if the project has the skill on. A
+skill the project lacks gets none.
+
+**A skill's own model.** Each skill in the Skills pane has a model picker, the same
+two selects as Settings: Global (no override), or a provider and one of its models.
+The choice is install-wide (`skill_model:<skill>` in settings). A task runs on its
+thread's skill's model, then its project's, then the global one
+(`SettingsStore.model_for`). It is settled whenever a worker claims the task
+(`TaskManager.model_for`), so a dependency dex starts for a skill, in that skill's
+thread, runs on the skill's model, and a change reaches queued and resumed tasks.
+When that model is out of quota while the default one is not, the fleet is not
+held (design 09): the worker passes over that task, leaving it queued until the
+limit resets (`spent_until`).
+
 **Several threads, one skill.** Players and Enemies are both game-characters. Work goes
 to the busiest unless the router or the task picks another of those tied.
 

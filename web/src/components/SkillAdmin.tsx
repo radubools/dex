@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { exportSkill, importSkill, listSkills, setSkillEnabled } from '../api'
-import type { Project, Skill } from '../types'
+import { exportSkill, getSettings, importSkill, listSkills, putSettings, setSkillEnabled } from '../api'
+import type { Project, SettingsResponse, Skill } from '../types'
+import { ModelPicker } from './ModelPicker'
 
 /**
  * Which capabilities this install has, and which projects use them.
@@ -18,6 +19,12 @@ import type { Project, Skill } from '../types'
  * enabled for nothing — it appears in the dropdown and waits. Ticking it for a
  * project takes that project off whatever version it was on, which is what
  * makes "try it in one project first" a thing you can actually do.
+ *
+ * Each skill can run on a model of its own: the tasks in its threads, and the
+ * dependencies dex starts for it there, use it instead of the project's model
+ * and the global one: a skill's choice wins over both. "Global" saves no
+ * override, and the skill's tasks then follow the project's model, else the
+ * global one.
  */
 export function SkillAdmin({
   projects,
@@ -34,6 +41,8 @@ export function SkillAdmin({
   /** What an import did, until the next action. */
   const [note, setNote] = useState<string | null>(null)
   const file = useRef<HTMLInputElement>(null)
+  /** The models on offer and the saved overrides, for each skill's model picker. */
+  const [settings, setSettings] = useState<SettingsResponse | null>(null)
 
   const load = () =>
     listSkills()
@@ -54,6 +63,22 @@ export function SkillAdmin({
         })
       })
       .catch((err: Error) => setError(err.message))
+
+  useEffect(() => {
+    getSettings().then(setSettings).catch(() => {})
+  }, [])
+
+  const setModel = (name: string, model: string) => {
+    setError(null)
+    putSettings({ skill_models: { [name]: model } })
+      .then((r) => setSettings((d) => (d ? { ...d, settings: r.settings } : d)))
+      .catch((err: Error) => setError(err.message))
+  }
+  // What a skill with no override runs on: the global model, by name.
+  const globalModel = (() => {
+    const id = (settings?.settings?.model as string) || settings?.defaultModel || ''
+    return settings?.models?.find((m) => m.id === id)?.label ?? id
+  })()
 
   useEffect(() => {
     void load()
@@ -184,6 +209,20 @@ export function SkillAdmin({
                 </button>
               </div>
               {detail?.description && <p className="muted small">{detail.description}</p>}
+
+              <div className="skill-model">
+                <span className="muted small">
+                  Model for its tasks: overrides the project's and the global model
+                </span>
+                <ModelPicker
+                  label={`Model for ${skill.name}`}
+                  models={settings?.models}
+                  value={(settings?.settings?.[`skill_model:${skill.name}`] as string) ?? ''}
+                  onChange={(model) => setModel(skill.name, model)}
+                  inherit={globalModel}
+                  inheritText={`Uses the project's model, else the global one (${globalModel})`}
+                />
+              </div>
 
               <div className="skill-carries">
                 {detail?.modules.map((m) => <span className="skill-chip" key={m}>{m}</span>)}

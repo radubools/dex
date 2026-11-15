@@ -70,6 +70,8 @@ class TaskManager:
         #: Only the tasks this process is running: their cancel handles and the
         #: futures the agent is parked on. Everything else comes from Postgres.
         self.live: dict[str, Task] = {}
+        #: Tasks passed over until their model's spent limit resets: id -> when.
+        self._spent: dict[str, float] = {}
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}"
         self._workers: dict[int, asyncio.Task[None]] = {}
         #: The chat pool: the same worker loop, claiming only the runs someone
@@ -270,11 +272,37 @@ class TaskManager:
     async def model_for(self, task: Task) -> str:
         """The model `task` runs on as the settings stand now: its project's
         override, else the global setting, else the config; the planner's for
-        todos and ideation. Read when it is made and again when a worker claims
-        it, so a queued task runs on the model chosen while it waited."""
+        todos and ideation. Read when it is made and again whenever a worker
+        claims it, new or resumed, so it runs on the model chosen since."""
         if task.is_todos or task.is_ideation:
             return self.config.planner_model
-        return await self.settings.model_for(task.project, self.config.model)
+        return await self.settings.model_for(task.project, self.config.model, skill=await self.skill_of(task))
+
+    async def skill_of(self, task: Task) -> str | None:
+        """The skill whose thread the task runs in: a skill's work, and the
+        dependencies dex starts for it, always run there (deps.skill_thread)."""
+        if not task.thread_id:
+            return None
+        try:
+            return await self.db.pool.fetchval("SELECT skill FROM threads WHERE id = $1", task.thread_id)
+        except Exception:
+            log.exception("could not read the skill of thread %s", task.thread_id)
+            return None
+
+    async def spent_until(self, model: str | None) -> float | None:
+        """When the limit holding `model` resets, if one is spent; else None.
+
+        The fleet is held only by the default model's limits (usage.py). A
+        skill may run on another model, and its tasks must wait for that
+        model's limit rather than start into the same refusal again."""
+        from .usage import PAUSE_AT, closest_limit
+
+        snapshot = await self.settings.limit_snapshot()
+        window, used = closest_limit(snapshot, model=model)
+        if window is None or used < PAUSE_AT:
+            return None
+        resets = (snapshot.get(window) or {}).get("resetsAt")
+        return float(resets) if isinstance(resets, (int, float)) else time.time() + 300
 
     async def queue_message(self, task_id: str, body: str,
                             options: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -779,8 +807,24 @@ class TaskManager:
                     at_capacity = True
                     task = None
                 else:
+                    now = time.time()
+                    self._spent = {k: v for k, v in self._spent.items() if v > now}
                     task = await self.tasks.claim(self.worker_id, interactive=interactive,
-                                                  model_for=self.model_for)
+                                                  model_for=self.model_for, skip=list(self._spent))
+                    until = await self.spent_until(task.model) if task is not None else None
+                    if task is not None and until is not None:
+                        # Its model (a skill's own, say) is out of quota while the
+                        # default model is not: back in the queue, passed over until
+                        # that limit resets, so it neither fails nor spins.
+                        self._spent[task.id] = until
+                        await self.tasks.set_state(task.id, TaskState.QUEUED,
+                                                   activity=f"waiting: {task.model} is out of quota until "
+                                                            + time.strftime("%H:%M", time.localtime(until)))
+                        self.bus.publish(Event(type="task_state", task_id=task.id, project=task.project,
+                                               data={"state": TaskState.QUEUED.value, "model": task.model,
+                                                     "activity": "waiting for its model's limit to reset"}))
+                        task = None
+                        continue
                     if task is not None:
                         # Re-check: claiming is a database round trip, and a
                         # planner call can take the last chat slot during it. The

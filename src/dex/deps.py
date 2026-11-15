@@ -68,6 +68,12 @@ def _first_line(text: str | None, limit: int = 300) -> str:
     return (text or "").strip().splitlines()[0][:limit] if (text or "").strip() else ""
 
 
+def skill_thread_title(skill: str) -> str:
+    """The thread title for a skill that declares none: "game-reading" -> "Game reading"."""
+    words = skill.replace("_", "-").split("-")
+    return " ".join(words).capitalize()
+
+
 class Dependencies:
     def __init__(self, manager: "TaskManager") -> None:
         self.m = manager
@@ -102,8 +108,12 @@ class Dependencies:
                 return max(tied, key=lambda t: t["tasks"])
             declared = skills.thread_skills(self.m.config.workspace, self.m.config.project_dir(project)).get(skill)
             title = declared.thread if declared else POWER_THREAD if skill == POWER_SKILL else ""
+            if not title and skill in skills.read_enabled(self.m.config.project_dir(project)).skills:
+                # A skill that declares no thread still gets one, named for it,
+                # so its work (and the model chosen for it) has a place.
+                title = skill_thread_title(skill)
             if not title:
-                raise Refused(f"{skill!r} has no thread in this project. Threads: "
+                raise Refused(f"{skill!r} has no thread here: it is not a skill this project has on. Threads: "
                               + ", ".join(t["title"] for t in rows))
             named = next((t for t in rows if t["title"].lower() == title.lower() and t["skill"] is None), None)
             if named is not None:
