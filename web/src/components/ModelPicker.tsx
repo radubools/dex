@@ -5,11 +5,13 @@ const PROVIDERS: { id: NonNullable<ModelChoice['provider']>; label: string }[] =
   { id: 'claude', label: 'Claude' },
   { id: 'antigravity', label: 'Gemini' },
   { id: 'opencode', label: 'OpenCode' },
+  { id: 'codex', label: 'OpenAI' },
 ]
 
 /**
  * Two pickers: whose subscription runs the work (Claude, Gemini through
- * Antigravity, OpenCode Go), then one of that provider's models. Switching
+ * Antigravity, OpenCode Go, OpenAI through Codex), then one of that provider's
+ * models (Codex's at each effort, Sol at medium first). Switching
  * provider picks its first model that can run here. A model that cannot run on
  * this server (its CLI not installed or not signed in) is listed, disabled,
  * with what to do.

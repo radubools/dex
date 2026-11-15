@@ -33,8 +33,8 @@ CACHE_READ_MULTIPLIER = 0.1
 CACHE_WRITE_MULTIPLIER = 1.25
 
 #: Public list prices for the models the subscription CLIs serve, which
-#: report no dollars of their own: Antigravity (`agy:`) never does, and
-#: OpenCode (`oc:`) when its model list gives none. Collected once, by hand,
+#: report no dollars of their own: Antigravity (`agy:`) and Codex (`codex:`)
+#: never do, and OpenCode (`oc:`) when its model list gives none. Collected once, by hand,
 #: on 2026-11-03 (sources in design/27); a price announced to change carries
 #: the date it changes. model family -> [(from, (input, output, cache read,
 #: cache write))], dollars per million tokens, oldest first.
@@ -47,7 +47,16 @@ SUBSCRIPTION_PRICES: dict[str, list[tuple[str, tuple[float, float, float, float]
     "claude-sonnet-5-5": [("", (2.0, 10.0, 0.20, 2.5))],
     "claude-haiku-5-5": [("", (0.10, 0.50, 0.01, 0.125))],
     "gpt-oss-120b": [("", (0.09, 0.36, 0.0, 0.0))],
+    # OpenAI's GPT-5.6, which Codex (`codex:`) serves on the ChatGPT plan,
+    # collected on 2026-11-15 (design/29). Sol's $4/$20 is a promotion until
+    # 30 November, $5/$30 after; cached input is a tenth of input.
+    "gpt-5.6-sol": [("", (4.0, 20.0, 0.40, 0.0)), ("2026-12-01", (5.0, 30.0, 0.50, 0.0))],
+    "gpt-5.6-terra": [("", (2.0, 12.0, 0.20, 0.0))],
+    "gpt-5.6-luna": [("", (0.20, 1.20, 0.02, 0.0))],
 }
+
+#: The prefixes of the subscription CLIs' models, which report no dollars.
+SUBSCRIPTION_PREFIXES = ("agy:", "oc:", "codex:")
 
 
 def subscription_rates(model: str, today: str | None = None) -> tuple[float, float, float, float] | None:
@@ -66,7 +75,7 @@ def subscription_rates(model: str, today: str | None = None) -> tuple[float, flo
 def price_for(model: str | None) -> tuple[float, float]:
     if not model:
         return DEFAULT_PRICE
-    if model.startswith(("agy:", "oc:")):
+    if model.startswith(SUBSCRIPTION_PREFIXES):
         rates = subscription_rates(model)
         return rates[:2] if rates else DEFAULT_PRICE
     if model in PRICES:
@@ -85,7 +94,7 @@ def estimate(model: str | None, usage: dict[str, float] | None) -> float:
     cached_read = float(usage.get("cache_read_input_tokens") or 0)
     cached_write = float(usage.get("cache_creation_input_tokens") or 0)
     output = float(usage.get("output_tokens") or 0)
-    if model and model.startswith(("agy:", "oc:")):
+    if model and model.startswith(SUBSCRIPTION_PREFIXES):
         # The CLIs report no dollars. OpenCode Go prices each model, cache
         # included, and counts its limits in those dollars (design/28); else,
         # and for Antigravity, the public list price (SUBSCRIPTION_PRICES).
