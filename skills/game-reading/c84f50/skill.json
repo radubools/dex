@@ -1,0 +1,11 @@
+{
+  "name": "game-reading",
+  "description": "The original text behind a lesson in the games in ~/games \u2014 the passages of the book or paper a story retells, verbatim, with their equations in LaTeX, their figures cut from the PDF and every publication they cite linked to its DOI, arXiv or publisher page (scouted on the web and checked), in one kind \"reading\" package per story that the game shows behind the story card's book button.",
+  "version": "c84f50",
+  "updated": 1794704918.1532621,
+  "requires": [
+    "PIL",
+    "pytest"
+  ],
+  "thread": "Readings"
+}
