@@ -4,13 +4,18 @@ import { getIdeation, getSettings, putSettings, setIdeation, setLimitPaused, set
 import type { ModelChoice, SettingsResponse } from '../types'
 import { ServerPicker } from './ServerPicker'
 
-/** Claude's limit windows, named as the CLI names them. */
+/** The limit windows: Claude's, named as its CLI names them, then the other plans'. */
 const WINDOW_NAMES: Record<string, string> = {
   five_hour: 'session',
   seven_day: 'weekly',
   seven_day_opus: 'Opus',
   seven_day_sonnet: 'Sonnet',
   seven_day_overage_included: 'Fable',
+  antigravity: 'Gemini',
+  opencode: 'OpenCode',
+  codex: 'OpenAI',
+  codex_5h: 'OpenAI session',
+  codex_weekly: 'OpenAI weekly',
 }
 
 const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`)
@@ -444,11 +449,13 @@ const PROVIDERS: { id: NonNullable<ModelChoice['provider']>; label: string }[] =
   { id: 'claude', label: 'Claude' },
   { id: 'antigravity', label: 'Gemini' },
   { id: 'opencode', label: 'OpenCode' },
+  { id: 'codex', label: 'OpenAI' },
 ]
 
 /**
  * Two pickers: whose subscription runs the work (Claude, Gemini through
- * Antigravity, OpenCode Go), then one of that provider's models. Switching
+ * Antigravity, OpenCode Go, OpenAI through Codex), then one of that provider's
+ * models (Codex's at each effort, Sol at medium first). Switching
  * provider picks its first model that can run here. A model that cannot run on
  * this server (its CLI not installed or not signed in) is listed, disabled,
  * with what to do.

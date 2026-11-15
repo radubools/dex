@@ -76,16 +76,25 @@ MODEL_WINDOWS = {
 }
 
 
-#: The limits of the agents that are not Claude, one window each, by model
-#: prefix: Antigravity runs on the Google subscription, OpenCode on the Go plan.
-#: Neither reports its usage as it goes; a window is recorded when the provider
-#: refuses a call (a 429), with the reset its message names.
-PROVIDER_WINDOWS = {"agy:": "antigravity", "oc:": "opencode"}
+#: The limits of the agents that are not Claude, by model prefix: Antigravity
+#: runs on the Google subscription, OpenCode on the Go plan, Codex on the
+#: ChatGPT plan. Antigravity and OpenCode report no usage as they go; their
+#: window is recorded when the provider refuses a call (a 429), with the reset
+#: its message names. Codex reports each of its windows as it goes, and can be
+#: read for free (`codex.rate_limits`): they are named `codex_<span>`
+#: (`codex_5h`, `codex_weekly`), and all of them hold Codex work.
+PROVIDER_WINDOWS = {"agy:": "antigravity", "oc:": "opencode", "codex:": "codex"}
 
 
 def provider_window(model: str | None) -> str | None:
     """The window that holds `model` when it is not a Claude model, else None."""
     return next((w for prefix, w in PROVIDER_WINDOWS.items() if (model or "").startswith(prefix)), None)
+
+
+def window_provider(window: str) -> str | None:
+    """The provider a window is one of, when it is not Claude's: its own name,
+    or a window of several (`codex_weekly` is Codex's)."""
+    return next((p for p in PROVIDER_WINDOWS.values() if window == p or window.startswith(p + "_")), None)
 
 
 def counts_for(window: str, model: str | None) -> bool:
@@ -102,10 +111,12 @@ def counts_for(window: str, model: str | None) -> bool:
     if not model:
         return True
     own = provider_window(model)
-    if own is not None or window in PROVIDER_WINDOWS.values():
+    theirs = window_provider(window)
+    if own is not None or theirs is not None:
         # Antigravity runs on the Google subscription, OpenCode on the Go
-        # plan: no Claude window holds either, and theirs hold no Claude model.
-        return window == own
+        # plan, Codex on the ChatGPT plan: no Claude window holds any of them,
+        # and theirs hold no Claude model.
+        return theirs == own
     family = next((f for f in MODEL_WINDOWS if f in model.lower()), None)
     if window in MODEL_WINDOWS.values():
         return family is not None and window == MODEL_WINDOWS[family]
@@ -194,7 +205,8 @@ def limit_pause_note(result: str, model: str | None = None) -> str:
 
 
 def _provider_name(model: str | None) -> str:
-    return {"antigravity": "Antigravity", "opencode": "OpenCode"}.get(provider_window(model) or "", "Claude")
+    return {"antigravity": "Antigravity", "opencode": "OpenCode", "codex": "Codex"}.get(
+        provider_window(model) or "", "Claude")
 
 
 class UsageWatcher:
@@ -335,13 +347,33 @@ class UsageWatcher:
         )
         return reading
 
+    async def read_codex(self) -> bool:
+        """Where the ChatGPT plan's windows stand, read from Codex.
+
+        Free, unlike a Claude probe: Codex answers it without a model call.
+        Read on every check while Codex work is the default, so a window that
+        resets lets work go again without a run to report it."""
+        from . import codex  # noqa: PLC0415 -- only needed when Codex is chosen
+
+        try:
+            found = await asyncio.to_thread(codex.rate_limits)
+        except Exception:
+            log.exception("could not read Codex's limits")
+            return False
+        for reading in found:
+            await self.settings.record_limit(reading)
+        return bool(found)
+
     async def check(self) -> bool:
         """Re-decide whether work is held by the limit. Returns the flag."""
         snapshot = await self.settings.limit_snapshot()
-        if await self._should_probe(snapshot):
+        model = await self.model() if self.model is not None else None
+        if provider_window(model) == "codex":
+            if await self.read_codex():
+                snapshot = await self.settings.limit_snapshot()
+        elif await self._should_probe(snapshot):
             if await self.probe() is not None:
                 snapshot = await self.settings.limit_snapshot()
-        model = await self.model() if self.model is not None else None
         window, used = closest_limit(snapshot, model=model)
         wanted = used >= PAUSE_AT
 

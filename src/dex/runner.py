@@ -35,7 +35,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import antigravity, opencode, pricing
+from . import antigravity, codex, opencode, pricing
 from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
@@ -1305,7 +1305,8 @@ class TaskRunner:
         follow-up attempt (not a pause or a wake) of a task that succeeded, on
         Claude, with auto-compact on."""
         if (not session or woken or self.task.is_chat or self.task.turns
-                or not self.task.parent_id or antigravity.is_agy(model) or opencode.is_oc(model)):
+                or not self.task.parent_id or antigravity.is_agy(model) or opencode.is_oc(model)
+                or codex.is_codex(model)):
             return False
         if not await self.settings.auto_compact():
             return False
@@ -1331,21 +1332,25 @@ class TaskRunner:
 
     def _resumable(self, model: str | None, session: str) -> bool:
         """Whether the agent this model runs on can resume `session`: OpenCode
-        keeps `ses_…` ids, Antigravity conversations it has on disk, Claude
-        the rest."""
-        if (antigravity.is_agy(model) or opencode.is_oc(model)) and self.task.is_survey:
+        keeps `ses_…` ids, Antigravity and Codex the conversations and threads
+        they have on disk, Claude the rest."""
+        if (antigravity.is_agy(model) or opencode.is_oc(model) or codex.is_codex(model)) and self.task.is_survey:
             model = self.config.planner_model  # a survey runs on Claude (`_client`)
         on_agy = (antigravity.gemini_home() / "antigravity-cli" / "brain" / session).is_dir()
+        on_codex = codex.has_thread(session)
         if opencode.is_oc(model):
             return session.startswith("ses_")
         if antigravity.is_agy(model):
             return on_agy
-        return not session.startswith("ses_") and not on_agy
+        if codex.is_codex(model):
+            return on_codex
+        return not session.startswith("ses_") and not on_agy and not on_codex
 
     def _client(self, options: ClaudeAgentOptions) -> Any:
         """The agent for this task's model: Claude, Antigravity on its CLI
-        (design/27), or OpenCode on the Go plan (design/28)."""
-        other = antigravity.is_agy(options.model) or opencode.is_oc(options.model)
+        (design/27), OpenCode on the Go plan (design/28), or Codex on the
+        ChatGPT plan (design/29)."""
+        other = antigravity.is_agy(options.model) or opencode.is_oc(options.model) or codex.is_codex(options.model)
         if other and self.task.is_survey:
             # A survey is held to its four tools by `allowed_tools`, which only
             # Claude's CLI enforces: it stays on Claude, on the planner's model.
@@ -1356,7 +1361,17 @@ class TaskRunner:
             return antigravity.AgyClient(options, notice=lambda text: self.emit("text", text=text))
         if opencode.is_oc(options.model):
             return opencode.OpencodeClient(options, notice=lambda text: self.emit("text", text=text))
+        if codex.is_codex(options.model):
+            return codex.CodexClient(options, notice=lambda text: self.emit("text", text=text),
+                                     status=self._status_line)
         return ClaudeSDKClient(options=options)
+
+    def _status_line(self, line: str) -> None:
+        """An agent's own one-line note on what it is doing (Codex's
+        commentary): the task's activity, as a tool's title is."""
+        if self.task.state is TaskState.RUNNING and line and line != self.task.activity:
+            self.task.activity = line
+            self.set_state(TaskState.RUNNING)
 
     def _accrue(self, usage: Any, message_id: str | None = None, *, subagent: bool = False) -> None:
         """Add one message's usage to the rollup and the running estimate.
@@ -1917,7 +1932,7 @@ class TaskRunner:
 
     def _pause_for_limit(self, result: str) -> None:
         """The agent refused work because a limit is spent: Claude's, or the
-        quota of the provider an `agy:`/`oc:` model runs on (a 429).
+        quota of the provider an `agy:`/`oc:`/`codex:` model runs on (a 429).
 
         Failing here throws away a task somebody is waiting on, and the queue
         dispatches the next one into the same refusal — one failure per task,
