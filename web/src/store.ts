@@ -175,6 +175,8 @@ function applyEvent(state: State, event: DexEvent): State {
           state: event.state,
           activity: event.activity,
           error: event.error ?? view.task.error,
+          // A queued task takes the model set when it is claimed, not when it was made.
+          model: event.model ?? view.task.model,
           // Raised by a prioritize; a claim starts it again from 0. Worked out
           // on every change, so a task that ran and was paused offers it again.
           approval: event.approval ?? view.task.approval,

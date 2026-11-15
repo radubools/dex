@@ -15,6 +15,7 @@ import socket  # noqa: F401  (hostname is supplied by the caller)
 import time
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import asyncpg
@@ -599,8 +600,15 @@ class TaskStore:
             "UPDATE tasks SET session_id = $2 WHERE id = $1", task_id, session_id
         )
 
-    async def claim(self, worker: str, interactive: bool | None = None) -> Task | None:
+    async def claim(self, worker: str, interactive: bool | None = None,
+                    model_for: Callable[[Task], Awaitable[str]] | None = None) -> Task | None:
         """Take the oldest queued task, skipping rows another worker holds.
+
+        `model_for` gives the model a task runs on as the settings stand now: a
+        queued task takes it when it is claimed, so one that waited in the queue
+        runs on the model chosen since, not the one set when it was made. One
+        that has run before (paused, then put back in the queue) keeps the
+        model its session is on.
 
         `interactive` picks which kind of work to look at: True for the chat
         turns that run as tasks, False for generation, None for either. The two
@@ -629,7 +637,7 @@ class TaskStore:
                 # (the fleet held or at capacity claims nothing): waiting for
                 # `resume_paused` let queued work take every freed slot first,
                 # so a prioritized paused task never got one.
-                f"""SELECT id FROM tasks
+                f"""SELECT id, started_at FROM tasks
                    WHERE (state = 'queued' OR (state = 'paused' AND started_at IS NOT NULL AND NOT held))
                      {scope_filter}
                    ORDER BY priority DESC, (started_at IS NOT NULL) DESC, seq
@@ -650,7 +658,15 @@ class TaskStore:
                     RETURNING {TASK_COLUMNS}""",
                 row["id"], worker,
             )
-        return task_from_row(claimed) if claimed else None
+            if claimed is None:
+                return None
+            task = task_from_row(claimed)
+            if model_for is not None and row["started_at"] is None:
+                model = await model_for(task)
+                if model and model != task.model:
+                    await conn.execute("UPDATE tasks SET model = $2 WHERE id = $1", task.id, model)
+                    task.model = model
+        return task
 
     async def heartbeat(self, task_id: str, activity: str | None = None) -> None:
         """Refresh the claim, and carry the current activity into the row.

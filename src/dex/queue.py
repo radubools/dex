@@ -251,9 +251,7 @@ class TaskManager:
         task.resumed_from = resumed_from
         task.scope = scope
         task.options = dict(options or {})
-        task.model = await self.settings.model_for(self.config.project, self.config.model)
-        if task.is_todos or task.is_ideation:
-            task.model = self.config.planner_model
+        task.model = await self.model_for(task)
         await self.tasks.create(task)
 
         self.bus.publish(
@@ -268,6 +266,15 @@ class TaskManager:
         if not task.todo:
             self.todos.wake()
         return task
+
+    async def model_for(self, task: Task) -> str:
+        """The model `task` runs on as the settings stand now: its project's
+        override, else the global setting, else the config; the planner's for
+        todos and ideation. Read when it is made and again when a worker claims
+        it, so a queued task runs on the model chosen while it waited."""
+        if task.is_todos or task.is_ideation:
+            return self.config.planner_model
+        return await self.settings.model_for(task.project, self.config.model)
 
     async def queue_message(self, task_id: str, body: str,
                             options: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -772,7 +779,8 @@ class TaskManager:
                     at_capacity = True
                     task = None
                 else:
-                    task = await self.tasks.claim(self.worker_id, interactive=interactive)
+                    task = await self.tasks.claim(self.worker_id, interactive=interactive,
+                                                  model_for=self.model_for)
                     if task is not None:
                         # Re-check: claiming is a database round trip, and a
                         # planner call can take the last chat slot during it. The

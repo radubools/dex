@@ -300,6 +300,10 @@ class TaskRunner:
 
     def set_state(self, state: TaskState, **extra: Any) -> None:
         self.task.state = state
+        if state is TaskState.RUNNING and self.task.model:
+            # Settled when a worker claims it (store.claim), so it can differ
+            # from the model the task was created with: open pages update it.
+            extra.setdefault("model", self.task.model)
         self.emit("task_state", state=state.value, activity=self.task.activity, **extra)
         # Persisted in the background: a state change must not block the agent
         # loop, but it must survive the process.

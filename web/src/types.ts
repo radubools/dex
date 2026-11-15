@@ -199,7 +199,7 @@ export type DexEvent = Base &
     | { type: 'task_message_delivered'; count: number; startedTaskId: string }
     | { type: 'thread_message'; threadId: string; message: ThreadMessage }
     | { type: 'task_created'; task: Task }
-    | { type: 'task_state'; state: TaskState; activity: string | null; error?: string; priority?: number; approval?: Task['approval'] }
+    | { type: 'task_state'; state: TaskState; activity: string | null; error?: string; priority?: number; approval?: Task['approval']; model?: string }
     | { type: 'text'; text: string }
     | { type: 'text_delta'; id: string; delta: string }
     | { type: 'thinking'; text: string }
