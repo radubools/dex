@@ -254,6 +254,8 @@ class SettingsRequest(BaseModel):
     #: Whether a typed message may be moved where the router says it belongs.
     auto_route: bool | None = None
     auto_compact: bool | None = None
+    #: A follow-up on a succeeded task starts from its summary (compaction).
+    compact_follow_ups: bool | None = None
     #: One of EFFORT_IDS, or "" to fall back to the deployment default.
     effort: Literal["low", "medium", "high", "xhigh", "max", ""] | None = None
     model: str | None = None
@@ -872,6 +874,8 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await settings.set(SettingsStore.AUTO_ROUTE, body.auto_route)
         if body.auto_compact is not None:
             await settings.set(SettingsStore.AUTO_COMPACT, body.auto_compact)
+        if body.compact_follow_ups is not None:
+            await settings.set(SettingsStore.COMPACT_FOLLOW_UPS, body.compact_follow_ups)
         if body.effort is not None:
             # "" clears the override rather than storing an invalid effort.
             await settings.set(SettingsStore.EFFORT, body.effort or None)

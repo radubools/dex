@@ -766,6 +766,16 @@ class TaskStore:
         )
         return [row["id"] for row in rows]
 
+    async def summary(self, task_id: str) -> str | None:
+        """What this attempt said when it finished: its last `result` event's summary.
+
+        Since the summary lists the files the run changed (runner.py), it is
+        also what a follow-up starts from in place of the whole session.
+        """
+        return await self.db.pool.fetchval(
+            """SELECT data->>'summary' FROM events WHERE task_id = $1 AND type = 'result'
+               ORDER BY seq DESC LIMIT 1""", task_id)
+
 
 def _claimed_by_dead_local_process(claimed_by: str | None, hostname: str | None) -> bool:
     """True when the claim names a process on this machine that no longer exists."""
@@ -847,9 +857,7 @@ class DepStore:
             return None
         queued = await self.db.pool.fetchval(
             "SELECT count(*) FROM task_messages WHERE task_id = $1 AND delivered_at IS NULL", latest.id)
-        summary = await self.db.pool.fetchval(
-            """SELECT data->>'summary' FROM events WHERE task_id = $1 AND type = 'result'
-               ORDER BY seq DESC LIMIT 1""", latest.id)
+        summary = await TaskStore(self.db).summary(latest.id)
         thread = await self.db.pool.fetchval(
             "SELECT title FROM threads WHERE id = $1", latest.thread_id) if latest.thread_id else None
         return {
@@ -1308,6 +1316,10 @@ class SettingsStore:
     #: session it resumes, starting from its summary rather than all of it.
     AUTO_COMPACT = "auto_compact"
     MODEL = "model"
+    #: Whether a follow-up on a task that succeeded starts a fresh session from
+    #: its closing summary instead of resuming the whole conversation. Off by
+    #: default: compaction trades the agent's full memory for a smaller context.
+    COMPACT_FOLLOW_UPS = "compact_follow_ups"
     #: How long a task may think before acting. None defers to DEX_EFFORT, so
     #: an operator who never touches it keeps whatever the deployment set.
     EFFORT = "effort"
@@ -1336,6 +1348,7 @@ class SettingsStore:
         AUTO_ROUTE: False,
         # Off until chosen: a follow-up keeps everything its session knew.
         AUTO_COMPACT: False,
+        COMPACT_FOLLOW_UPS: False,
         MODEL: None,
         EFFORT: None,
         ANIMATION_SPEED: 1.0,
@@ -1394,6 +1407,9 @@ class SettingsStore:
     async def auto_compact(self) -> bool:
         """Whether a successful task's follow-up starts from a compacted session."""
         return bool(await self.get(self.AUTO_COMPACT, False))
+    async def compact_follow_ups(self) -> bool:
+        """Whether a follow-up starts from the previous attempt's summary (`deliver_messages`)."""
+        return bool(await self.get(self.COMPACT_FOLLOW_UPS, False))
 
     async def utility_proposals(self) -> bool:
         """Whether a task may ask about promoting a helper into `utils/`."""

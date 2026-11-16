@@ -40,10 +40,10 @@ from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
 from .store import SettingsStore, TaskMessageStore, TaskStore, ThreadStore
-from .diffs import preview_change
+from .diffs import FileChange, preview_change
 from .models import Event, Task, TaskState
 from . import local_sources, skills, surveyor, widgets
-from .changes import file_lines, is_code, is_work
+from .changes import describe, file_lines, files_section, is_code, is_work
 from .sql import ReadOnlyPool, check, readonly_dsn
 from .threads import ThreadMessage
 from .permissions import PermissionPolicy
@@ -271,8 +271,12 @@ class TaskRunner:
         self._usage_lock = asyncio.Lock()
         self._added_todos = 0
         #: A write's lines, until its tool says it happened (changes.py).
-        self._pending_changes: dict[str, tuple[str, int]] = {}
+        self._pending_changes: dict[str, FileChange] = {}
         self._changed_paths: set[str] = set()
+        #: What each write that went through did to its file, for the closing summary.
+        self._changed_files: dict[str, str] = {}
+        #: Per file: its lines, whether this run created it, and what it touched by name.
+        self._file_tallies: dict[str, dict[str, Any]] = {}
         self._size_tags: list[str] = []
         self._artifacts_before: dict[Path, int] = {}
         #: State writes still in flight (`set_state` persists in the background).
@@ -911,7 +915,7 @@ class TaskRunner:
                 log.exception("could not build a diff for %s", tool_name)
                 change = None
             if change is not None:
-                self._pending_changes[context.tool_use_id or change.path] = (change.path, change.additions)
+                self._pending_changes[context.tool_use_id or change.path] = change
                 self.emit(
                     "diff",
                     id=context.tool_use_id or change.path,
@@ -1445,25 +1449,70 @@ class TaskRunner:
         change = self._pending_changes.pop(tool_id, None)
         if change is None or not ok:
             return
-        path, lines = change
+        path, lines = change.path, change.additions
         self._changed_paths.add(path)
         if is_work(path):
+            self._note_file(change)
             code = is_code(path)
             self._write_usage(self._record_changes, lines if code else 0, 0 if code else lines)
+
+    def _note_file(self, change: FileChange) -> None:
+        """Fold one write into the summary's entry for its file: two edits read as one."""
+        seen = self._file_tallies.setdefault(change.path, {
+            "additions": 0, "deletions": 0, "created": change.created,
+            "added": [], "changed": [], "removed": [], "line": None,
+        })
+        seen["additions"] += change.additions
+        seen["deletions"] += change.deletions
+        for key in ("added", "changed", "removed"):
+            seen[key] = list(dict.fromkeys(seen[key] + getattr(change, key)))
+        # Removed and put back (a rewrite by Write) is a change, not news; added
+        # in this run is the news, whatever was edited inside it afterwards.
+        back = set(seen["added"]) & set(seen["removed"])
+        seen["added"] = [n for n in seen["added"] if n not in back]
+        seen["removed"] = [n for n in seen["removed"] if n not in back]
+        seen["changed"] = [n for n in dict.fromkeys(seen["changed"] + sorted(back)) if n not in seen["added"]]
+        if change.first_line and (seen["line"] is None or change.first_line < seen["line"]):
+            seen["line"] = change.first_line
+        self._changed_files[change.path] = describe(
+            seen["additions"], seen["deletions"], created=seen["created"],
+            added=seen["added"], changed=seen["changed"], removed=seen["removed"], line=seen["line"],
+        )
+
+    def _scripted_changes(self) -> list[tuple[Path, int]]:
+        """Files in the package that changed with no diff, which a command wrote, and their lines."""
+        if not self.task.builds_package:
+            return []
+        root = self.config.workspace.resolve()
+        changed = {str((root / p).resolve()) for p in self._changed_paths}
+        found = []
+        for relative, written in self._artifacts().items():
+            path = (self.task_dir / relative).resolve()
+            if self._artifacts_before.get(relative) == written or str(path) in changed or not is_work(relative):
+                continue
+            found.append((path, file_lines(path)))
+        return found
+
+    def _summary_files(self) -> str:
+        """The closing summary's list of every file this run changed (changes.files_section)."""
+        files = dict(self._changed_files)
+        root = self.config.workspace.resolve()
+        try:
+            scripted = self._scripted_changes()
+        except Exception:
+            log.exception("could not list what %s's commands wrote", self.task.id)
+            scripted = []
+        for path, lines in scripted:
+            label = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+            files.setdefault(label, describe(lines, 0, scripted=True))
+        return files_section(files)
 
     def _count_scripted(self) -> None:
         """Files that changed in the package with no diff, which a command wrote: counted
         whole, since the old copy is gone. Also how a task that changed nothing gets its row."""
         code = assets = 0
-        if self.task.builds_package:
-            root = self.config.workspace.resolve()
-            changed = {str((root / p).resolve()) for p in self._changed_paths}
-            for relative, written in self._artifacts().items():
-                path = (self.task_dir / relative).resolve()
-                if self._artifacts_before.get(relative) == written or str(path) in changed or not is_work(relative):
-                    continue
-                lines = file_lines(path)
-                code, assets = (code + lines, assets) if is_code(path) else (code, assets + lines)
+        for path, lines in self._scripted_changes():
+            code, assets = (code + lines, assets) if is_code(path) else (code, assets + lines)
         self._write_usage(self._record_changes, code, assets)
 
     async def _record_changes(self, code: int, assets: int) -> None:
@@ -2161,13 +2210,18 @@ class TaskRunner:
                 asyncio.create_task(
                     self._post_design_reply(self.task.thread_id, message.result)
                 )
+            # The narrative, then where the work is: a follow-up on a finished
+            # task starts from this summary instead of the whole session.
+            summary = (message.result or "")[:4000]
+            if files := self._summary_files():
+                summary = f"{summary.rstrip()}\n\n{files}" if summary.strip() else files
             self.emit(
                 "result",
                 ok=not message.is_error,
                 durationMs=message.duration_ms,
                 turns=message.num_turns,
                 costUsd=message.total_cost_usd,
-                summary=(message.result or "")[:4000],
+                summary=summary,
             )
             if message.is_error:
                 result = message.result or "agent reported an error"

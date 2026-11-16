@@ -67,3 +67,63 @@ def file_lines(path: Path) -> int:
         return len(data.decode("utf-8").splitlines())
     except UnicodeDecodeError:
         return 0
+
+
+#: Past this many files the summary names how many more there were.
+MAX_LISTED_FILES = 40
+#: What a task's closing summary calls the list, so a follow-up can find it.
+FILES_HEADING = "**Files changed**"
+
+
+def _names(names: list[str], limit: int = 3) -> str:
+    """`a`, `b`, `c` and 2 more: a document's sections are named as they read."""
+    shown = [n if n.startswith("§ ") else f"`{n}`" for n in names[:limit]]
+    more = f" and {len(names) - limit} more" if len(names) > limit else ""
+    return ", ".join(shown) + more
+
+
+def describe(
+    additions: int,
+    deletions: int,
+    *,
+    created: bool = False,
+    scripted: bool = False,
+    added: list[str] | None = None,
+    changed: list[str] | None = None,
+    removed: list[str] | None = None,
+    line: int | None = None,
+) -> str:
+    """One line on what happened to one file, by the definitions or sections it touched.
+
+    `added: \`summary\`; changed \`deliver_messages\` (+40 −2)`. With nothing to
+    name, where the edit is: `edited around line 42 (+3 −1)`.
+    """
+    added, changed, removed = added or [], changed or [], removed or []
+    if scripted:
+        return f"written by a command ({additions} lines)"
+    if created:
+        if not added:
+            return f"new file ({additions} lines)"
+        what = "sections" if all(n.startswith("§ ") for n in added) else "defines"
+        return f"new file, {what} {_names(added)} ({additions} lines)"
+    parts = [f"{verb} {_names(names)}" for verb, names in
+             (("added", added), ("changed", changed), ("removed", removed)) if names]
+    if not parts:
+        parts = [f"edited around line {line}" if line else "edited"]
+    return f"{'; '.join(parts)} (+{additions} −{deletions})"
+
+
+def files_section(files: dict[str, str]) -> str:
+    """The closing summary's list of changed files, path to phrase, or "" for none.
+
+    A summary is what a follow-up starts from in place of the whole session
+    (`TaskManager.deliver_messages`), so it says where the work is, not only
+    what it was.
+    """
+    if not files:
+        return ""
+    paths = sorted(files)
+    lines = [f"- `{path}` — {files[path]}" for path in paths[:MAX_LISTED_FILES]]
+    if len(paths) > MAX_LISTED_FILES:
+        lines.append(f"- … and {len(paths) - MAX_LISTED_FILES} more")
+    return f"{FILES_HEADING}\n\n" + "\n".join(lines)

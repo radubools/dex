@@ -286,6 +286,8 @@ export type Settings = {
   auto_route?: boolean
   /** A succeeded task's follow-up starts from a compacted session. */
   auto_compact?: boolean
+  /** A follow-up on a succeeded task starts from its summary, not its whole session. */
+  compact_follow_ups?: boolean
   model: string | null
   /** How hard a task thinks before acting; null defers to the deployment. */
   effort: string | null
