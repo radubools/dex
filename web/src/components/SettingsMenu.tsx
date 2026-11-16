@@ -107,7 +107,10 @@ export function SettingsMenu({
           : limit.status === 'allowed_warning'
             ? `Claude says you are approaching ${limitName}`
             : `Within ${limitName} · no percentage reported on this plan`
-  const projectModelKey = data ? `model:${data.project}` : ''
+  // The project the override applies to: the one open in the UI. The server's
+  // own default project (data.project) only when none is open.
+  const overrideProject = project || data?.project || ''
+  const projectModelKey = overrideProject ? `model:${overrideProject}` : ''
 
   const menu = (
     <div className="menu-sheet" role="dialog" aria-modal="true" aria-label="Settings">
@@ -343,22 +346,23 @@ export function SettingsMenu({
             </div>
           </div>
 
-          <div className="menu-row column">
+          {overrideProject && <div className="menu-row column">
             <span>
-              Model for <code>{data?.project}</code>
+              Model for <code>{overrideProject}</code>
               <small>Overrides the global choice for this project; a skill's own model (Skills) overrides this for that skill's tasks</small>
             </span>
             <ModelPicker
-              label={`Model for ${data?.project}`}
+              key={overrideProject}
+              label={`Model for ${overrideProject}`}
               models={data?.models}
               value={(settings?.[projectModelKey] as string) ?? ''}
-              onChange={(model) => patch({ project_models: { [data!.project]: model } })}
+              onChange={(model) => patch({ project_models: { [overrideProject]: model } })}
               inherit={(() => {
                 const global = (settings?.model as string) || data?.defaultModel || ''
                 return data?.models?.find((m) => m.id === global)?.label ?? global
               })()}
             />
-          </div>
+          </div>}
 
           <div className="menu-row column">
             <span>

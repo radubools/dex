@@ -40,8 +40,10 @@ MODELS = [
 
 
 @pytest.fixture(autouse=True)
-def _models(monkeypatch: pytest.MonkeyPatch) -> None:
+def _models(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(opencode, "_models_cache", (opencode.time.time(), MODELS))
+    # Never the operator's own list of local models.
+    monkeypatch.setattr(opencode, "LOCAL_FILE", tmp_path / "no-local-models.json")
 
 
 def test_calls_become_the_claude_tools_the_policy_knows() -> None:
@@ -271,3 +273,71 @@ def test_a_session_resumes_only_on_the_agent_that_kept_it(tmp_path: Path, monkey
     assert not runner._resumable("claude-opus-5-5", "ses_abc")
     assert not runner._resumable("claude-opus-5-5", "agy-conv")
 
+
+
+# ------------------------------------------------------------- local models
+
+LOCAL_27B = {"id": "qwen3.8-27b", "name": "Local Qwen3.8 27B", "url": "http://127.0.0.1:8100/v1",
+             "served": "qwen3.8-27b", "context": 65536, "output": 16384, "priced_as": "qwen3.8-flash"}
+
+
+@pytest.fixture
+def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import json as _json
+    f = tmp_path / "local-models.json"
+    f.write_text(_json.dumps([LOCAL_27B]))
+    monkeypatch.setattr(opencode, "LOCAL_FILE", f)
+    monkeypatch.setattr(opencode, "cli", lambda: Path("/opt/homebrew/bin/opencode"))
+    up = {"now": True}
+    monkeypatch.setattr(opencode, "local_up", lambda entry: up["now"])
+    return up
+
+
+def test_a_local_model_is_offered_in_the_opencode_group_while_its_server_answers(local) -> None:
+    first = opencode.choices()[0]
+    assert first["id"] == "oc:local/qwen3.8-27b" and first["provider"] == "opencode" and first["available"]
+    local["now"] = False
+    first = opencode.choices()[0]
+    assert not first["available"] and "8100" in first["unavailable"]
+    assert opencode.is_local("oc:local/qwen3.8-27b") and not opencode.is_local("oc:qwen3.8-flash")
+
+
+def test_a_local_model_runs_on_the_local_provider_without_a_variant(local) -> None:
+    options = SimpleNamespace(cwd=str(CWD), model="oc:local/qwen3.8-27b", effort="high", can_use_tool=None,
+                              system_prompt="", resume=None, mcp_servers={}, env={}, stderr=None)
+    client = OpencodeClient(options)
+    args = client._args("hi")
+    assert args[args.index("-m") + 1] == "local/qwen3.8-27b"
+    import json as _json
+    provider = _json.loads(client._config())["provider"]["local"]
+    assert provider["options"]["baseURL"] == "http://127.0.0.1:8100/v1"
+    model = provider["models"]["qwen3.8-27b"]
+    assert model["tool_call"] and model["temperature"] is False and model["limit"]["context"] == 65536
+    # A Go model's run declares no local provider.
+    assert "provider" not in _json.loads(_client(None)._config())
+
+
+def test_a_local_model_is_priced_at_its_go_models_rates(local) -> None:
+    assert opencode.rates("oc:local/qwen3.8-27b") == opencode.rates("oc:qwen3.8-flash")
+
+
+def test_a_go_quota_never_holds_a_local_model() -> None:
+    from dex.usage import provider_window
+    assert provider_window("oc:local/qwen3.8-27b") == "local"
+    assert provider_window("oc:qwen3.8-flash") == "opencode"
+    assert not counts_for("opencode", "oc:local/qwen3.8-27b")
+    assert not counts_for("seven_day", "oc:local/qwen3.8-27b")
+
+
+def test_a_local_model_gets_longer_to_print_its_first_line(local) -> None:
+    options = SimpleNamespace(cwd=str(CWD), model="oc:local/qwen3.8-27b", effort=None, can_use_tool=None,
+                              system_prompt="", resume=None, mcp_servers={}, env={}, stderr=None)
+    assert OpencodeClient(options)._startup_timeout == opencode.LOCAL_STARTUP_TIMEOUT_S
+    assert _client(None)._startup_timeout == opencode.STARTUP_TIMEOUT_S
+
+
+def test_a_local_model_that_takes_images_says_so_to_opencode() -> None:
+    plain = opencode.local_provider(LOCAL_27B)["models"]["qwen3.8-27b"]
+    assert plain["attachment"] is False and plain["modalities"]["input"] == ["text"]
+    seeing = opencode.local_provider({**LOCAL_27B, "images": True})["models"]["qwen3.8-27b"]
+    assert seeing["attachment"] is True and seeing["modalities"] == {"input": ["text", "image"], "output": ["text"]}

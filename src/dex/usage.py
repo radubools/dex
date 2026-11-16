@@ -83,7 +83,9 @@ MODEL_WINDOWS = {
 #: its message names. Codex reports each of its windows as it goes, and can be
 #: read for free (`codex.rate_limits`): they are named `codex_<span>`
 #: (`codex_5h`, `codex_weekly`), and all of them hold Codex work.
-PROVIDER_WINDOWS = {"agy:": "antigravity", "oc:": "opencode", "codex:": "codex"}
+#: A model served on this Mac (`oc:local/`) comes first and has its own window,
+#: so a Go quota refusal never holds local work.
+PROVIDER_WINDOWS = {"oc:local/": "local", "agy:": "antigravity", "oc:": "opencode", "codex:": "codex"}
 
 
 def provider_window(model: str | None) -> str | None:

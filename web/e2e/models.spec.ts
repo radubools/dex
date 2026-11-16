@@ -24,7 +24,9 @@ function save(saved: Record<string, unknown>, body: Record<string, unknown>) {
   return { ...saved }
 }
 
-async function open(page: Page, saved: Record<string, unknown>) {
+const project = (slug: string) => ({ slug, name: slug, description: '', createdAt: 0, updatedAt: 0, threads: 0, tasks: 0 })
+
+async function open(page: Page, saved: Record<string, unknown>, { projects = [] as string[], url = '/' } = {}) {
   await page.route('**/api/**', (route) => {
     const p = new URL(route.request().url()).pathname
     const body =
@@ -35,7 +37,10 @@ async function open(page: Page, saved: Record<string, unknown>) {
       : p === '/api/settings' ? { settings: saved, costs,
           tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0, visible: 0, counted: 0, with_cost: 0 },
           models, efforts: [], project: 'alpha', defaultModel: 'claude-opus-5-5', defaultEffort: 'high' }
-      : p === '/api/projects' ? { projects: [], default: null }
+      : p === '/api/projects' ? { projects: projects.map(project), default: projects.length ? 'alpha' : null }
+      : p === '/api/threads' && route.request().method() === 'POST'
+        ? { thread: { id: 't-1', title: 'Main thread', project: route.request().postDataJSON()?.project ?? null, kind: 'main',
+            intent: 'task', createdAt: 0, updatedAt: 0, messageCount: 0, taskIds: [], costUsd: 0, messages: [] } }
       : p === '/api/threads' ? { threads: [] }
       : p === '/api/tasks' ? { tasks: [] }
       : p === '/api/packages' ? { packages: [] }
@@ -46,7 +51,7 @@ async function open(page: Page, saved: Record<string, unknown>) {
     class Quiet { close() {} addEventListener() {} }
     ;(window as unknown as { EventSource: unknown }).EventSource = Quiet
   })
-  await page.goto('/')
+  await page.goto(url)
   await page.getByRole('button', { name: /^Settings/ }).click()
   return page.getByRole('dialog', { name: 'Settings' })
 }
@@ -94,6 +99,17 @@ test("a project's picker starts on Global, and overrides only when a provider is
   await provider.selectOption('global')
   expect((await request).postDataJSON()).toEqual({ project_models: { alpha: '' } })
   await expect(model).toBeDisabled()
+})
+
+test("the project override is the open project's, not the server's default", async ({ page }) => {
+  // The server's own project is alpha (with an override); the UI has beta open.
+  const menu = await open(page, { model: 'claude-opus-5-5', 'model:alpha': 'oc:glm-5.3' }, { projects: ['beta', 'alpha'], url: '/?project=beta' })
+  await expect(menu.getByRole('combobox', { name: 'Model for alpha: provider' })).toHaveCount(0)
+  const provider = menu.getByRole('combobox', { name: 'Model for beta: provider' })
+  await expect(provider).toHaveValue('global') // alpha's override is not beta's
+  const request = page.waitForRequest((r) => r.url().endsWith('/api/settings') && r.method() === 'PUT')
+  await provider.selectOption('opencode')
+  expect((await request).postDataJSON()).toEqual({ project_models: { beta: 'oc:qwen3.8-flash' } })
 })
 
 test('auto-compact follow-ups starts off and saves when turned on', async ({ page }) => {

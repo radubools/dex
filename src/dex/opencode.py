@@ -85,6 +85,10 @@ REFUSED = re.compile(r"^(question|subagent|skill|browser.*|opencode_.*)$")
 
 #: How long a run may print nothing at all before it counts as stalled.
 STARTUP_TIMEOUT_S = 150.0
+#: The same for a local model: its server may be starting from cold (about three
+#: minutes for a 27B), and its first output waits for the whole prompt to be read
+#: on this Mac, with other tasks' prompts batched beside it.
+LOCAL_STARTUP_TIMEOUT_S = 900.0
 
 #: OpenCode's code tool: a sandbox from which the model calls MCP tools
 #: (`tools.dex.ask_user(...)`). Each call it makes comes to the gate itself,
@@ -93,6 +97,18 @@ CODE_TOOL = "execute"
 
 #: Effort as OpenCode names its variants, least to most.
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+#: Models served on this Mac by an OpenAI-compatible server (vllm-metal), run
+#: through the same OpenCode harness as the Go models and offered beside them:
+#: `oc:local/<id>`. Each is listed in LOCAL_FILE as {id, name, url (the
+#: server's /v1), served (its model name there), context, output, priced_as
+#: (the Go model whose list rates price its tokens), images (true when its
+#: server takes images)}. Offered only while its
+#: server answers; a Go sign-in is not needed.
+LOCAL = "local/"
+LOCAL_FILE = Path(os.environ.get("DEX_LOCAL_MODELS", Path.home() / ".dex" / "local-models.json"))
+_LOCAL_UP_TTL = 15.0
+_local_up: dict[str, tuple[float, bool]] = {}
 
 #: Offered before the plan's list has been read, or when it cannot be.
 FALLBACK_MODELS = [
@@ -103,6 +119,45 @@ FALLBACK_MODELS = [
 
 def is_oc(model: str | None) -> bool:
     return bool(model) and str(model).startswith(PREFIX)
+
+
+def is_local(model: str | None) -> bool:
+    """An OpenCode model served on this Mac: `oc:local/<id>` (or `local/<id>`)."""
+    bare = str(model or "")
+    bare = bare[len(PREFIX):] if bare.startswith(PREFIX) else bare
+    return bare.startswith(LOCAL)
+
+
+def local_models() -> list[dict[str, Any]]:
+    """The local models LOCAL_FILE lists, or none."""
+    try:
+        data = json.loads(LOCAL_FILE.read_text())
+    except (OSError, ValueError):
+        return []
+    return [m for m in data if isinstance(m, dict) and m.get("id") and m.get("url")] if isinstance(data, list) else []
+
+
+def _local(model_id: str) -> dict[str, Any] | None:
+    bare = model_id[len(PREFIX):] if is_oc(model_id) else model_id
+    bare = bare[len(LOCAL):] if bare.startswith(LOCAL) else bare
+    return next((m for m in local_models() if m["id"] == bare), None)
+
+
+def local_up(entry: dict[str, Any]) -> bool:
+    """Whether the local model's server answers and serves it (checked at most every 15 s)."""
+    url = str(entry["url"]).rstrip("/")
+    cached = _local_up.get(url + entry["id"])
+    if cached and time.time() - cached[0] < _LOCAL_UP_TTL:
+        return cached[1]
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{url}/models", timeout=2) as r:
+            served = {m.get("id") for m in json.loads(r.read()).get("data") or []}
+        up = (entry.get("served") or entry["id"]) in served
+    except (OSError, ValueError):
+        up = False
+    _local_up[url + entry["id"]] = (time.time(), up)
+    return up
 
 
 def cli() -> Path | None:
@@ -170,12 +225,25 @@ def choices() -> list[dict[str, Any]]:
     ready = cli() is not None and signed_in()
     why = None if ready else ("install OpenCode" if cli() is None
                               else "sign in: run `opencode auth login` with an OpenCode Go account")
-    return [{"id": PREFIX + m["id"], "label": m["name"], "note": "OpenCode Go subscription",
-             "provider": "opencode", "available": ready, **({"unavailable": why} if why else {})}
-            for m in listed]
+    go = [{"id": PREFIX + m["id"], "label": m["name"], "note": "OpenCode Go subscription",
+           "provider": "opencode", "available": ready, **({"unavailable": why} if why else {})}
+          for m in listed]
+    local = []
+    for m in local_models():
+        up = cli() is not None and local_up(m)
+        local.append({"id": PREFIX + LOCAL + m["id"], "label": m.get("name") or m["id"],
+                      "note": "on this Mac (vllm-metal), through OpenCode", "provider": "opencode",
+                      "available": up, **({} if up else {"unavailable": "install OpenCode" if cli() is None
+                                                         else f"start its server ({m['url']})"})})
+    return local + go
 
 
 def _model(model_id: str) -> dict[str, Any] | None:
+    if is_local(model_id):
+        # Priced as the Go model it names; it has no variants of its own.
+        entry = _local(model_id) or {}
+        priced = next((m for m in models() if m["id"] == entry.get("priced_as")), None)
+        return {**priced, "variants": []} if priced else None
     bare = model_id[len(PREFIX):] if is_oc(model_id) else model_id
     return next((m for m in models() if m["id"] == bare), None)
 
@@ -198,6 +266,22 @@ def rates(model_id: str, prompt_tokens: int = 0) -> tuple[float, float, float, f
     number = lambda value: float(value or 0)  # noqa: E731
     return (number(chosen.get("input")), number(chosen.get("output")),
             number(cache.get("read")), number(cache.get("write")))
+
+
+def local_provider(entry: dict[str, Any]) -> dict[str, Any]:
+    """OpenCode's config for a local model's server: an OpenAI-compatible provider.
+
+    `temperature: false` keeps OpenCode from sending one, so the server's own
+    default applies. A model listed with `"images": true` (its server loads a
+    vision projector) takes images: OpenCode then sends attached images to it."""
+    images = bool(entry.get("images"))
+    return {"npm": "@ai-sdk/openai-compatible", "name": "Local",
+            "options": {"baseURL": str(entry["url"]).rstrip("/"), "apiKey": "local"},
+            "models": {entry["id"]: {
+                "id": entry.get("served") or entry["id"], "name": entry.get("name") or entry["id"],
+                "tool_call": True, "reasoning": True, "temperature": False, "attachment": images,
+                "modalities": {"input": ["text", "image"] if images else ["text"], "output": ["text"]},
+                "limit": {"context": int(entry.get("context") or 65536), "output": int(entry.get("output") or 16384)}}}}
 
 
 def variant(model_id: str, effort: str | None) -> str | None:
@@ -400,7 +484,13 @@ class OpencodeClient:
         self._launch: tuple[list[str], dict[str, str]] = ([], {})
 
     @property
+    def _startup_timeout(self) -> float:
+        return LOCAL_STARTUP_TIMEOUT_S if is_local(self.model) else STARTUP_TIMEOUT_S
+
+    @property
     def model_ref(self) -> str:
+        if is_local(self.model):
+            return self.model           # "local/<id>": the provider _config declares
         chosen = variant(self.model, self.effort)
         return f"{PROVIDER}/{self.model}" + (f"#{chosen}" if chosen else "")
 
@@ -418,10 +508,15 @@ class OpencodeClient:
         await self._bridge.stop()
 
     def _config(self) -> str:
-        """The session's inline config: dex's MCP servers, at this run's address."""
-        return json.dumps({"mcp": {"servers": {
+        """The session's inline config: dex's MCP servers, at this run's address,
+        and the local provider when the model is a local one."""
+        config: dict[str, Any] = {"mcp": {"servers": {
             name: {"type": "remote", "url": self._bridge.url(f"mcp/{name}"), "oauth": False}
-            for name in self._bridge.servers}}})
+            for name in self._bridge.servers}}}
+        entry = _local(self.model) if is_local(self.model) else None
+        if entry:
+            config["provider"] = {"local": local_provider(entry)}
+        return json.dumps(config)
 
     def _args(self, prompt: str) -> list[str]:
         return [str(cli()), "run", "--standalone", "--format", "json", "--thinking", "--agent", AGENT,
@@ -632,14 +727,14 @@ class OpencodeClient:
             # OpenCode has been seen to stall before its server answers, with
             # nothing printed, now and then; a run that says nothing at all
             # for this long is started once more.
-            first = await asyncio.wait_for(proc.stdout.readline(), STARTUP_TIMEOUT_S)
+            first = await asyncio.wait_for(proc.stdout.readline(), self._startup_timeout)
         except TimeoutError:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
             await proc.wait()
             reading.cancel()
             if retried or self._interrupted or proc is not self._proc:
-                self._error = self._error or f"OpenCode printed nothing for {STARTUP_TIMEOUT_S:.0f}s"
+                self._error = self._error or f"OpenCode printed nothing for {self._startup_timeout:.0f}s"
                 if proc is self._proc and not self._interrupted:
                     self._finish_turn(error=self._error)
                 return
