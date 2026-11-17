@@ -54,13 +54,18 @@ class Backend:
     """The vLLM process: stopped, starting, awake or asleep."""
 
     def __init__(self, serve: str, port: int, model: str, sleep_after: float, stop_after: float,
-                 start_timeout: float = 900) -> None:
+                 start_timeout: float = 900, peers: list[str] | None = None, peer_wait: float = 1800,
+                 stop_grace: float = 30) -> None:
+        self.stop_grace = stop_grace
+        self.peers, self.peer_wait = [u.rstrip("/") for u in peers or []], peer_wait
         self.serve, self.port, self.model = os.path.expanduser(serve), port, model
         self.sleep_after, self.stop_after, self.start_timeout = sleep_after, stop_after, start_timeout
         self.url = f"http://127.0.0.1:{port}"
         self.state = "stopped"
         self.proc: asyncio.subprocess.Process | None = None
         self.active = 0
+        #: Requests waiting for the server to start or wake (not yet in flight).
+        self.waiting = 0
         self.last = time.time()
         self.lock = asyncio.Lock()
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10))
@@ -71,12 +76,39 @@ class Backend:
             if self.state == "awake" and self.proc and self.proc.returncode is None:
                 return
             if self.proc is None or self.proc.returncode is not None:
+                await self._release_peers()
                 await self._start()
             elif self.state == "asleep":
                 r = await self.http.post(f"{self.url}/wake_up")
                 r.raise_for_status()
                 log.info("woke the server")
             self.state = "awake"
+
+    async def _release_peers(self) -> None:
+        """Wait until every peer has stopped its server, so both never load at once."""
+        for peer in self.peers:
+            t0 = time.time()
+            while True:
+                try:
+                    r = (await self.http.post(f"{peer}/proxy/release", timeout=60)).json()
+                except (httpx.HTTPError, ValueError):
+                    break  # the peer proxy is not running: nothing of it is loaded
+                if r.get("stopped"):
+                    break
+                if time.time() - t0 > self.peer_wait:
+                    raise RuntimeError(f"{peer} stayed busy for {self.peer_wait:.0f} s")
+                log.info("waiting for %s to finish %s request(s) before loading", peer, r.get("busy"))
+                await asyncio.sleep(5)
+
+    async def release(self) -> dict:
+        """A peer needs the memory: stop now unless requests are in flight."""
+        async with self.lock:
+            if self.active:
+                return {"stopped": False, "busy": self.active}
+            if self.proc is not None:
+                log.info("a peer needs the memory: stopping")
+                await self.stop()
+            return {"stopped": True}
 
     async def _start(self) -> None:
         self.state = "starting"
@@ -115,7 +147,8 @@ class Backend:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGINT)
         try:
-            await asyncio.wait_for(proc.wait(), 30)
+            # A server whose stop is slow (a Colab runtime being released) gets its grace.
+            await asyncio.wait_for(proc.wait(), self.stop_grace)
         except TimeoutError:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -145,18 +178,22 @@ def app_for(backend: Backend) -> Starlette:
             {"id": backend.model, "object": "model", "owned_by": "local", "root": backend.model}]})
 
     async def status(_: Request) -> Response:
-        return JSONResponse({"state": backend.state, "active": backend.active,
+        return JSONResponse({"state": backend.state, "active": backend.active, "waiting": backend.waiting,
+                             "peers": backend.peers,
                              "idle_s": round(time.time() - backend.last), "sleep_after_s": backend.sleep_after,
                              "stop_after_s": backend.stop_after})
 
     async def forward(request: Request) -> Response:
-        backend.active += 1
+        backend.waiting += 1
         backend.last = time.time()
         try:
             await backend.ready()
+            # In flight from here: counted before the lock is free for a peer's release.
+            backend.active += 1
         except Exception as e:  # noqa: BLE001 - reported to the caller as a 503
-            backend.active -= 1
             return JSONResponse({"error": {"message": f"local model server unavailable: {e}"}}, status_code=503)
+        finally:
+            backend.waiting -= 1
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
         upstream = backend.http.build_request(request.method, f"{backend.url}{request.url.path}",
                                               params=request.query_params, headers=headers,
@@ -180,6 +217,9 @@ def app_for(backend: Backend) -> Starlette:
         return StreamingResponse(body(), status_code=r.status_code,
                                  headers={k: v for k, v in r.headers.items() if k.lower() not in HOP})
 
+    async def release(_: Request) -> Response:
+        return JSONResponse(await backend.release())
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette):
         watcher = asyncio.create_task(backend.watch())
@@ -192,6 +232,7 @@ def app_for(backend: Backend) -> Starlette:
     return Starlette(routes=[
         Route("/v1/models", models, methods=["GET"]),
         Route("/proxy/status", status, methods=["GET"]),
+        Route("/proxy/release", release, methods=["POST"]),
         Route("/{path:path}", forward, methods=["GET", "POST", "PUT", "DELETE", "PATCH"]),
     ], lifespan=lifespan)
 
@@ -206,11 +247,20 @@ def main() -> None:
                     help="idle seconds before sleeping (default 10 min); 0 never sleeps, for a server with no "
                          "sleep mode such as llama.cpp's")
     ap.add_argument("--stop-after", type=float, default=3600, help="idle seconds before stopping (default 1 h)")
+    ap.add_argument("--start-timeout", type=float, default=900,
+                    help="seconds a start may take before the request gets a 503 (default 15 min)")
+    ap.add_argument("--stop-grace", type=float, default=30,
+                    help="seconds a stopping server gets before it is killed (default 30; more for a remote "
+                         "server whose release takes a while)")
+    ap.add_argument("--peer", action="append", default=[],
+                    help="another proxy (e.g. http://127.0.0.1:8100) whose model must be unloaded before this one "
+                         "loads; repeatable")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    backend = Backend(a.serve, a.backend_port, a.model, a.sleep_after, a.stop_after)
+    backend = Backend(a.serve, a.backend_port, a.model, a.sleep_after, a.stop_after, start_timeout=a.start_timeout,
+                      peers=a.peer, stop_grace=a.stop_grace)
     uvicorn.run(app_for(backend), host="127.0.0.1", port=a.port, log_level="warning",
-                timeout_graceful_shutdown=40)
+                timeout_graceful_shutdown=max(40, a.stop_grace + 10))
 
 
 if __name__ == "__main__":

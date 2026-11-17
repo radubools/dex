@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "widget": "narrated-video",
+      "extensions": [
+        ".mp4",
+        ".webm"
+      ]
+    }
+  ]
+}

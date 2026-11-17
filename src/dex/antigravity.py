@@ -283,10 +283,14 @@ class Bridge:
     local process can guess its way to a task's tools or its decisions.
     """
 
-    def __init__(self, servers: dict[str, Any], gate: Callable[[dict[str, Any]], Any]) -> None:
+    def __init__(self, servers: dict[str, Any], gate: Callable[[dict[str, Any]], Any],
+                 relay: tuple[str, Callable[..., None]] | None = None) -> None:
         self.servers = {name: s["instance"] for name, s in (servers or {}).items()
                         if isinstance(s, dict) and s.get("type") == "sdk"}
         self.gate = gate
+        #: (upstream base URL, on_stream): `llm/<path>` is forwarded there, and
+        #: an agent's streamed chat completion is read on the way through.
+        self.relay = relay
         self.token = secrets.token_urlsafe(18)
         self.port: int | None = None
         self._stack = contextlib.AsyncExitStack()
@@ -332,6 +336,8 @@ class Bridge:
                 return await reply(send, 200, json.dumps(decision).encode())
             if name.startswith("mcp/") and name[4:] in managers:
                 return await managers[name[4:]].handle_request(scope, receive, send)
+            if self.relay and (name == "llm" or name.startswith("llm/")):
+                return await self._relay(scope, receive, send, name[3:].lstrip("/"))
             return await reply(send, 404, b"{}")
 
         config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="off")
@@ -345,6 +351,61 @@ class Bridge:
             await asyncio.sleep(0.01)
         self.port = self._server.servers[0].sockets[0].getsockname()[1]
 
+    async def _relay(self, scope: dict[str, Any], receive: Any, send: Any, path: str) -> None:
+        """Forward a model request to the relay's upstream and stream the reply
+        back unchanged. A streamed chat completion that offers tools (the agent's
+        own calls, not a title or a summary) is also read on the way: each
+        reasoning or text delta goes to `on_stream` as it arrives."""
+        import httpx
+
+        upstream, on_stream = self.relay  # type: ignore[misc]
+        chunks = []
+        while True:
+            event = await receive()
+            chunks.append(event.get("body", b""))
+            if not event.get("more_body"):
+                break
+        body = b"".join(chunks)
+        try:
+            sent = json.loads(body) if body else {}
+        except ValueError:
+            sent = {}
+        watch = isinstance(sent, dict) and bool(sent.get("stream")) and bool(sent.get("tools"))
+        hop = {b"host", b"content-length", b"transfer-encoding", b"connection", b"accept-encoding"}
+        headers = [(k.decode(), v.decode()) for k, v in scope.get("headers") or [] if k.lower() not in hop]
+        query = scope.get("query_string") or b""
+        url = f"{upstream.rstrip('/')}/{path}" + (f"?{query.decode()}" if query else "")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10)) as client:
+            try:
+                req = client.build_request(scope.get("method", "POST"), url, headers=headers, content=body)
+                resp = await client.send(req, stream=True)
+            except httpx.HTTPError as exc:
+                await send({"type": "http.response.start", "status": 502,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body",
+                            "body": json.dumps({"error": {"message": f"local model: {exc}"}}).encode()})
+                return
+            await send({"type": "http.response.start", "status": resp.status_code,
+                        "headers": [(k.encode(), v.encode()) for k, v in resp.headers.items()
+                                    if k.lower().encode() not in hop | {b"content-encoding"}]})
+            pending = b""
+            if watch:
+                on_stream("start")
+            try:
+                async for chunk in resp.aiter_raw():
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                    if not watch:
+                        continue
+                    pending += chunk
+                    *lines, pending = pending.split(b"\n")
+                    for line in lines:
+                        _read_sse(line, on_stream)
+            finally:
+                await resp.aclose()
+                if watch:
+                    on_stream("end")
+            await send({"type": "http.response.body", "body": b""})
+
     async def stop(self) -> None:
         if self._server is not None:
             self._server.should_exit = True
@@ -353,6 +414,25 @@ class Bridge:
                 await asyncio.wait_for(self._serving, 5)
         with contextlib.suppress(Exception):
             await self._stack.aclose()
+
+
+def _read_sse(line: bytes, on_stream: Callable[..., None]) -> None:
+    """One line of an OpenAI-style chat completion stream: its reasoning and
+    text deltas, to `on_stream("reasoning" | "text", delta)`."""
+    line = line.strip()
+    if not line.startswith(b"data:") or line.endswith(b"[DONE]"):
+        return
+    try:
+        event = json.loads(line[5:])
+    except ValueError:
+        return
+    for choice in event.get("choices") or []:
+        delta = choice.get("delta") or {}
+        thought = delta.get("reasoning_content") or delta.get("reasoning")
+        if thought:
+            on_stream("reasoning", str(thought))
+        if delta.get("content"):
+            on_stream("text", str(delta["content"]))
 
 
 # ----------------------------------------------------------------- client
