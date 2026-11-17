@@ -302,17 +302,23 @@ def test_a_local_model_is_offered_in_the_opencode_group_while_its_server_answers
     assert opencode.is_local("oc:local/qwen3.8-27b") and not opencode.is_local("oc:qwen3.8-flash")
 
 
-def test_a_local_model_runs_on_the_local_provider_without_a_variant(local) -> None:
+def test_a_local_model_runs_on_the_local_provider_at_its_efforts_variant(local) -> None:
     options = SimpleNamespace(cwd=str(CWD), model="oc:local/qwen3.8-27b", effort="high", can_use_tool=None,
                               system_prompt="", resume=None, mcp_servers={}, env={}, stderr=None)
     client = OpencodeClient(options)
     args = client._args("hi")
-    assert args[args.index("-m") + 1] == "local/qwen3.8-27b"
+    assert args[args.index("-m") + 1] == "local/qwen3.8-27b#high"
     import json as _json
     provider = _json.loads(client._config())["provider"]["local"]
     assert provider["options"]["baseURL"] == "http://127.0.0.1:8100/v1"
     model = provider["models"]["qwen3.8-27b"]
     assert model["tool_call"] and model["temperature"] is False and model["limit"]["context"] == 65536
+    # Effort is a thinking budget and a reply cap, sent in every request's body.
+    high = model["variants"]["high"]
+    assert high["thinking_budget_tokens"] == 4096 and high["max_completion_tokens"] == 4096 + 8192
+    assert "act now" in high["reasoning_budget_message"]
+    assert model["variants"]["none"]["thinking_budget_tokens"] == 0
+    assert model["limit"]["output"] == 12288 + 8192
     # A Go model's run declares no local provider.
     assert "provider" not in _json.loads(_client(None)._config())
 
@@ -341,3 +347,36 @@ def test_a_local_model_that_takes_images_says_so_to_opencode() -> None:
     assert plain["attachment"] is False and plain["modalities"]["input"] == ["text"]
     seeing = opencode.local_provider({**LOCAL_27B, "images": True})["models"]["qwen3.8-27b"]
     assert seeing["attachment"] is True and seeing["modalities"] == {"input": ["text", "image"], "output": ["text"]}
+
+
+def test_a_local_models_effort_defaults_to_medium_and_its_entry_can_tune_the_budgets(local) -> None:
+    assert opencode.local_variant(None) == "medium" and opencode.local_variant("bogus") == "medium"
+    assert opencode.local_variant("xhigh") == "xhigh"
+    tuned = opencode.local_budgets({**LOCAL_27B, "thinking": {"medium": 1000}, "answer_tokens": 4000})
+    assert tuned["medium"] == {"thinking_budget_tokens": 1000, "reasoning_budget_message": opencode.LOCAL_BUDGET_MESSAGE,
+                               "max_completion_tokens": 5000}
+    assert tuned["high"]["max_completion_tokens"] == 4096 + 4000
+
+
+@pytest.mark.parametrize("outcome, failed", [("succeeded", False), (None, True), ("failed", True)])
+def test_an_exit_code_after_a_session_that_succeeded_is_not_a_failure(tmp_path: Path, outcome, failed) -> None:
+    # Says its last word, then exits 1 with nothing on stderr: OpenCode's shutdown.
+    script = 'echo \'{"type":"text","sessionID":"ses_3","part":{"text":"Done: package validated."}}\'; exit 1'
+
+    async def run() -> list:
+        client = _client(None)
+        client.cwd = tmp_path
+        client._in_turn = True
+        client._launch = (["sh", "-c", script], dict(opencode.os.environ))
+
+        async def export() -> str | None:
+            return outcome  # what the session's own record says
+
+        client._count_the_rest = export
+        client._proc = await client._start()
+        await client._run(client._proc)
+        return _drain(client)
+
+    last = asyncio.run(run())[-1]
+    assert last.is_error is failed
+    assert (last.result == "OpenCode exited (1)") if failed else (last.result == "Done: package validated.")

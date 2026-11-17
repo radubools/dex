@@ -98,16 +98,33 @@ CODE_TOOL = "execute"
 #: Effort as OpenCode names its variants, least to most.
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-#: Models served on this Mac by an OpenAI-compatible server (vllm-metal), run
+#: Models served on this Mac by an OpenAI-compatible server (llama.cpp, or vllm-metal), run
 #: through the same OpenCode harness as the Go models and offered beside them:
 #: `oc:local/<id>`. Each is listed in LOCAL_FILE as {id, name, url (the
 #: server's /v1), served (its model name there), context, output, priced_as
 #: (the Go model whose list rates price its tokens), images (true when its
-#: server takes images)}. Offered only while its
+#: server takes images), and optionally thinking and answer_tokens (see
+#: LOCAL_THINKING)}. dex's effort picks the run's variant, which carries its
+#: thinking budget and reply cap to the server. Offered only while its
 #: server answers; a Go sign-in is not needed.
 LOCAL = "local/"
 LOCAL_FILE = Path(os.environ.get("DEX_LOCAL_MODELS", Path.home() / ".dex" / "local-models.json"))
 _LOCAL_UP_TTL = 15.0
+#: How long a local model may think in one reply, in tokens, by dex's effort.
+#: llama-server ends the thinking there (`thinking_budget_tokens`), adds
+#: LOCAL_BUDGET_MESSAGE and lets the model answer: without a budget, a model
+#: could deliberate for a whole reply (Qwen3.6 once spent 16,384 tokens drafting
+#: a file in its head, 16 times, and never wrote it). An entry's `thinking`
+#: overrides levels for that model.
+LOCAL_THINKING = {"none": 0, "minimal": 512, "low": 1024, "medium": 2048, "high": 4096, "xhigh": 8192,
+                  "max": 12288}
+#: What one reply may say once it has thought: about one file or one command.
+#: A reply is capped at its thinking budget plus this (`max_completion_tokens`),
+#: so a big job is done in steps, a tool call each, rather than in one reply.
+#: An entry's `answer_tokens` overrides it.
+LOCAL_ANSWER_TOKENS = 8192
+LOCAL_BUDGET_MESSAGE = ("\n\nThinking budget reached. Stop deliberating and act now: make the next tool call "
+                        "(write the file, run the command), and refine it in later steps.\n")
 _local_up: dict[str, tuple[float, bool]] = {}
 
 #: Offered before the plan's list has been read, or when it cannot be.
@@ -232,7 +249,7 @@ def choices() -> list[dict[str, Any]]:
     for m in local_models():
         up = cli() is not None and local_up(m)
         local.append({"id": PREFIX + LOCAL + m["id"], "label": m.get("name") or m["id"],
-                      "note": "on this Mac (vllm-metal), through OpenCode", "provider": "opencode",
+                      "note": "on this Mac, through OpenCode", "provider": "opencode",
                       "available": up, **({} if up else {"unavailable": "install OpenCode" if cli() is None
                                                          else f"start its server ({m['url']})"})})
     return local + go
@@ -268,20 +285,40 @@ def rates(model_id: str, prompt_tokens: int = 0) -> tuple[float, float, float, f
             number(cache.get("read")), number(cache.get("write")))
 
 
+def local_budgets(entry: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per effort, what a reply of this local model may spend: a thinking budget
+    and a cap on the whole reply (LOCAL_THINKING, LOCAL_ANSWER_TOKENS)."""
+    thinking = {**LOCAL_THINKING, **(entry.get("thinking") or {})}
+    answer = int(entry.get("answer_tokens") or LOCAL_ANSWER_TOKENS)
+    return {level: {"thinking_budget_tokens": int(budget), "reasoning_budget_message": LOCAL_BUDGET_MESSAGE,
+                    "max_completion_tokens": int(budget) + answer}
+            for level, budget in thinking.items() if level in EFFORTS}
+
+
+def local_variant(effort: str | None) -> str:
+    """The local variant for dex's effort: every level has one; none set means medium."""
+    return effort if effort in LOCAL_THINKING else "medium"
+
+
 def local_provider(entry: dict[str, Any]) -> dict[str, Any]:
     """OpenCode's config for a local model's server: an OpenAI-compatible provider.
 
     `temperature: false` keeps OpenCode from sending one, so the server's own
     default applies. A model listed with `"images": true` (its server loads a
-    vision projector) takes images: OpenCode then sends attached images to it."""
+    vision projector) takes images: OpenCode then sends attached images to it.
+    Its variants, one per effort, put the thinking budget and the reply cap in
+    every request's body (`local/<id>#<effort>`)."""
     images = bool(entry.get("images"))
+    budgets = local_budgets(entry)
     return {"npm": "@ai-sdk/openai-compatible", "name": "Local",
             "options": {"baseURL": str(entry["url"]).rstrip("/"), "apiKey": "local"},
             "models": {entry["id"]: {
                 "id": entry.get("served") or entry["id"], "name": entry.get("name") or entry["id"],
                 "tool_call": True, "reasoning": True, "temperature": False, "attachment": images,
                 "modalities": {"input": ["text", "image"] if images else ["text"], "output": ["text"]},
-                "limit": {"context": int(entry.get("context") or 65536), "output": int(entry.get("output") or 16384)}}}}
+                "limit": {"context": int(entry.get("context") or 65536),
+                          "output": max(b["max_completion_tokens"] for b in budgets.values())},
+                "variants": budgets}}}
 
 
 def variant(model_id: str, effort: str | None) -> str | None:
@@ -458,7 +495,17 @@ class OpencodeClient:
         self.system = system.get("append", "") if isinstance(system, dict) else (system or "")
         self.session: str | None = options.resume
         servers = options.mcp_servers if isinstance(options.mcp_servers, dict) else {}
-        self._bridge = Bridge(servers, self._gate)
+        # A local model's requests go through this run's bridge, which streams
+        # its reasoning and text into dex as they arrive (OpenCode's run prints
+        # a part only once it is whole).
+        entry = _local(self.model) if is_local(self.model) else None
+        self._bridge = Bridge(servers, self._gate,
+                              relay=(str(entry["url"]), self._stream) if entry else None)
+        #: The streamed block open now, (kind, index), and whether text or
+        #: thinking streamed since OpenCode last printed a whole part of it.
+        self._stream_block: tuple[str, int] | None = None
+        self._streamed_text = False
+        self._streamed_thinking = False
         self._servers = tuple(sorted(self._bridge.servers, key=len, reverse=True))
         self._proc: asyncio.subprocess.Process | None = None
         self._runner: asyncio.Task[Any] | None = None
@@ -490,7 +537,9 @@ class OpencodeClient:
     @property
     def model_ref(self) -> str:
         if is_local(self.model):
-            return self.model           # "local/<id>": the provider _config declares
+            # "local/<id>": the provider _config declares, at the variant for
+            # this effort (its thinking budget and reply cap).
+            return f"{self.model}#{local_variant(self.effort)}"
         chosen = variant(self.model, self.effort)
         return f"{PROVIDER}/{self.model}" + (f"#{chosen}" if chosen else "")
 
@@ -515,7 +564,10 @@ class OpencodeClient:
             for name in self._bridge.servers}}}
         entry = _local(self.model) if is_local(self.model) else None
         if entry:
-            config["provider"] = {"local": local_provider(entry)}
+            provider = local_provider(entry)
+            if self._bridge.relay and self._bridge.port:
+                provider["options"]["baseURL"] = self._bridge.url("llm")
+            config["provider"] = {"local": provider}
         return json.dumps(config)
 
     def _args(self, prompt: str) -> list[str]:
@@ -636,6 +688,32 @@ class OpencodeClient:
         self._messages.put_nowait(StreamEvent(
             uuid=f"oc-{self.session}-{self._turn_started}", session_id=self.session or "", event=event))
 
+    def _stream(self, kind: str, delta: str = "") -> None:
+        """A local model's tokens as they arrive (the bridge's relay): reasoning
+        and text, each as a streamed block, closed when its reply ends."""
+        if kind in ("start", "end"):
+            self._close_stream()
+            return
+        want = "thinking" if kind == "reasoning" else "text"
+        if self._stream_block and self._stream_block[0] != want:
+            self._close_stream()
+        if self._stream_block is None:
+            self._index += 1
+            self._stream_block = (want, self._index)
+            self._event({"type": "content_block_start", "index": self._index, "content_block": {"type": want}})
+        self._event({"type": "content_block_delta", "index": self._stream_block[1],
+                     "delta": {"type": "thinking_delta", "thinking": delta} if want == "thinking"
+                     else {"type": "text_delta", "text": delta}})
+        if want == "text":
+            self._streamed_text = True
+        else:
+            self._streamed_thinking = True
+
+    def _close_stream(self) -> None:
+        if self._stream_block is not None:
+            self._event({"type": "content_block_stop", "index": self._stream_block[1]})
+            self._stream_block = None
+
     def _text(self, text: str) -> None:
         """A finished text part, as one block: OpenCode's run prints whole parts."""
         self._index += 1
@@ -681,7 +759,14 @@ class OpencodeClient:
         kind = event.get("type")
         part = event.get("part") if isinstance(event.get("part"), dict) else {}
         if kind == "text" and part.get("text"):
-            self._text(str(part["text"]))
+            if self._streamed_text:
+                # Already shown as it streamed: kept for the turn's result only.
+                self._streamed_text = False
+                self._response.append(str(part["text"]))
+            else:
+                self._text(str(part["text"]))
+        elif kind == "reasoning" and self._streamed_thinking:
+            self._streamed_thinking = False  # already shown as it streamed
         elif kind == "reasoning" and str(part.get("text") or "").strip():
             self._messages.put_nowait(AssistantMessage(
                 content=[ThinkingBlock(thinking=str(part["text"]).strip(), signature="")], model=PREFIX + self.model))
@@ -756,16 +841,25 @@ class OpencodeClient:
             await reading
         if self._interrupted or proc is not self._proc:
             return
-        await self._count_the_rest()
+        outcome = await self._count_the_rest()
         if code != 0 and not self._error:
-            self._error = (stderr[-1] if stderr else "") or f"OpenCode exited ({code})"
+            if outcome == "succeeded" and not stderr:
+                # OpenCode's own record says the session finished, and it printed
+                # no error: the exit code is its shutdown's, not the work's. (It
+                # has exited 1 after a session it marked succeeded, reading tasks
+                # with large contexts most often, and every one was reported as
+                # failed with its work done and its summary written.)
+                log.info("OpenCode exited %s after session %s succeeded: not a failure", code, self.session)
+            else:
+                self._error = (stderr[-1] if stderr else "") or f"OpenCode exited ({code})"
         self._finish_turn(error=self._error)
 
-    async def _count_the_rest(self) -> None:
+    async def _count_the_rest(self) -> str | None:
         """The tokens the stream did not print: its last model call's, which
-        `opencode run` exits before reporting. Read from the session's export."""
+        `opencode run` exits before reporting. Read from the session's export,
+        which also says how the session ended (its `outcome`), returned."""
         if not self.session:
-            return
+            return None
         try:
             proc = await asyncio.create_subprocess_exec(
                 str(cli()), "session", "export", "--standalone", self.session, cwd=str(self.cwd),
@@ -775,13 +869,15 @@ class OpencodeClient:
             exported = json.loads(out)
         except (OSError, TimeoutError, ValueError):
             log.warning("could not read the usage of OpenCode session %s", self.session)
-            return
+            return None
         started = self._turn_started * 1000
         for message in exported.get("messages") or []:
             info = message.get("info") if isinstance(message.get("info"), dict) else message
             created = ((info.get("time") or {}).get("created") or 0) if isinstance(info, dict) else 0
             if isinstance(info, dict) and info.get("tokens") and created >= started - 1000:
                 self._usage(str(info.get("id") or ""), info["tokens"])
+        session = exported.get("info") if isinstance(exported.get("info"), dict) else {}
+        return str(session.get("outcome")) if session.get("outcome") else None
 
     def _finish_turn(self, *, error: str | None) -> None:
         if not self._in_turn:

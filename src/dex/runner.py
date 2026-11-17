@@ -237,6 +237,9 @@ class TaskRunner:
         self.task_dir = task.output_dir(config.assets_dir, config.default_project)
         #: Set by wait_for_tasks: the ids this run ends blocked on (deps.py).
         self._park_on: list[str] | None = None
+        #: Whether dex ended a parked run's turn itself: the agent was parked by
+        #: wait_for_tasks and carried on calling tools instead of ending its turn.
+        self._park_cut = False
         #: The task graph (deps.Dependencies), set by the queue.
         self.graph = None
         #: The enabled skills as they were before this task ran, so a
@@ -907,6 +910,15 @@ class TaskRunner:
         """
 
         async def wrapped(tool_name: str, input_data: dict[str, Any], context: Any) -> Any:
+            if self._park_on:
+                # Parked by wait_for_tasks: the turn is over. Some models carry
+                # on (polling, or doing the waited-on work themselves); refused,
+                # and the turn is ended for them (`_converse`).
+                from claude_agent_sdk import PermissionResultDeny  # noqa: PLC0415
+
+                return PermissionResultDeny(message=(
+                    "This task is parked: it waits on other tasks (wait_for_tasks). End your turn now, "
+                    "with no further work; dex resumes this session when they are done, with their results."))
             try:
                 change = preview_change(tool_name, input_data, self.config.workspace)
             except Exception:
@@ -1669,6 +1681,22 @@ class TaskRunner:
                                            f"{delay:.0f}s ({retries} of {CONNECTION_RETRIES}).")
                     await asyncio.sleep(delay)
                     await client.query(CARRY_ON)
+                    continue
+                if isinstance(message, ResultMessage) and self._park_cut:
+                    break  # the parked turn dex cut short: blocked by `run`, not failed
+                if (self._park_on and not self._park_cut and isinstance(message, AssistantMessage)
+                        and any(isinstance(b, ToolUseBlock) for b in message.content)):
+                    # Parked, and the agent carried on instead of ending its turn
+                    # (any call, wait_for_tasks again included: one agent called
+                    # it 30 times in five minutes, its dependency never starting):
+                    # dex ends it, so this task gives up its slot and what it waits
+                    # on runs (a story once polled for minutes, its e2e task queued
+                    # behind every other, then ran the e2e test itself).
+                    self._park_cut = True
+                    self.emit("text", text="Parked, but the agent went on working: ending its turn so what "
+                                           "it waits on can run.")
+                    with contextlib.suppress(Exception):
+                        await client.interrupt()
                     continue
                 self._observe(message)
                 if not isinstance(message, ResultMessage):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -594,3 +595,53 @@ async def test_deeper_dependencies_go_before_their_waiters_siblings(manager, db)
     for _ in range(2):  # the waker raises one level per pass down the chain
         await manager.graph.wake_ready()
     assert (await manager.tasks.claim("w")).id == captions.id
+
+
+class StubbornClient(Client):
+    """Parks with wait_for_tasks, then keeps calling tools instead of ending its turn."""
+
+    interrupted = 0
+    on_park = None
+    poll_with = "mcp__dex__task_status"
+
+    async def query(self, prompt):
+        Client.prompts.append(prompt)
+
+    async def receive_messages(self):
+        from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
+        yield AssistantMessage(content=[ToolUseBlock(id="w1", name="mcp__dex__wait_for_tasks", input={})],
+                               model="local")
+        StubbornClient.on_park()  # the tool ran: the run is parked
+        for i in range(5):  # ...and the agent polls on, with the very same call
+            yield AssistantMessage(content=[ToolUseBlock(id=f"s{i}", name=StubbornClient.poll_with, input={})],
+                                   model="local")
+            if StubbornClient.interrupted:
+                yield ResultMessage(subtype="error_during_execution", duration_ms=1, duration_api_ms=1,
+                                    is_error=True, num_turns=1, session_id="sess-2")
+                return
+
+    async def interrupt(self):
+        StubbornClient.interrupted += 1
+
+
+@pytest.mark.parametrize("poll_with", ["mcp__dex__task_status", "mcp__dex__wait_for_tasks"])
+async def test_a_parked_run_that_carries_on_is_ended_by_dex_and_blocked(manager, db, config, monkeypatch, poll_with):
+    await threads(db)
+    StubbornClient.poll_with = poll_with
+    monkeypatch.setattr("dex.runner.ClaudeSDKClient", StubbornClient, raising=False)
+    parent = await manager.submit("tell a story", title="Story", slug="story-stubborn")
+    child = await manager.graph.spawn(parent, thread="Backgrounds", title="Prop", brief="prop")
+    runner = TaskRunner(parent, config, manager.bus, manager.tasks, SettingsStore(db))
+    runner.graph = manager.graph
+    StubbornClient.interrupted = 0
+    StubbornClient.on_park = lambda: setattr(runner, "_park_on", [child.id])
+    await runner.run()
+    stored = await manager.tasks.get(parent.id)
+    # dex cut the turn at the first call after parking: blocked on the child, not failed.
+    assert StubbornClient.interrupted == 1
+    assert stored.state is TaskState.BLOCKED, stored.error
+    assert stored.waiting_on == [child.id] and stored.error is None
+    # And while parked, the gate refuses any tool before it runs.
+    decide = runner._with_diffs(lambda *a: None)
+    refused = await decide("Bash", {"command": "node story-e2e.mjs"}, SimpleNamespace(tool_use_id="x"))
+    assert "parked" in refused.message
