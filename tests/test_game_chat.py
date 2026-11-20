@@ -210,6 +210,43 @@ def test_the_task_graph_and_any_tasks_activity(client):
     wait_state(client, chat, {"cancelled"})
 
 
+def test_a_tasks_previews_are_its_widget_files_behind_the_token(client, config, monkeypatch, tmp_path):
+    import dex.widgets as widgets
+
+    class FakeWidget:
+        def to_json(self):
+            return {"name": "glb-viewer", "title": "3D viewer", "description": "", "version": "7", "built": True,
+                    "url": "/api/widgets/game-asset-viewer/abc/glb-viewer/index.js?v=7"}
+
+    monkeypatch.setattr(widgets, "resolve_many", lambda assets, ws, paths: {p: FakeWidget() for p in paths if p.endswith(".glb")})
+    bundle = tmp_path / "index.js"
+    bundle.write_text("export function mount(el) { el.textContent = 'hi' }")
+    monkeypatch.setattr(widgets, "bundle_path", lambda ws, skill, version, name: bundle if name == "glb-viewer" else None)
+    t = client.thread_id
+    chat = client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH, json={"text": "Make a tree"}).json()["chatId"]
+    wait_state(client, chat, {"succeeded"})
+    task = client.get(f"/api/game-chat/ml/tasks/{chat}/events", headers=AUTH).json()["chat"]
+    previews = client.get(f"/api/game-chat/ml/tasks/{chat}/previews", headers=AUTH).json()
+    pkg = config.assets_dir / previews["dir"]
+    (pkg / "previews").mkdir(parents=True, exist_ok=True)
+    (pkg / "tree.glb").write_bytes(b"glTF....")
+    (pkg / "previews" / "tree.png").write_bytes(b"png")
+    (pkg / "notes.txt").write_text("not a preview")
+    (pkg / ".hidden.glb").write_bytes(b"x")
+    previews = client.get(f"/api/game-chat/ml/tasks/{chat}/previews", headers=AUTH).json()
+    assert [p["name"] for p in previews["previews"]] == ["tree.glb"]
+    w = previews["previews"][0]["widget"]
+    assert w["url"] == "/api/game-chat/ml/widgets/game-asset-viewer/abc/glb-viewer/index.js?v=7"
+    assert "export function mount" in client.get(w["url"], headers=AUTH).text
+    assert client.get(w["url"]).status_code == 401
+    path = previews["previews"][0]["path"]
+    assert client.get("/api/game-chat/ml/files", params={"path": path}, headers=AUTH).content == b"glTF...."
+    assert client.get("/api/game-chat/ml/files", params={"path": path}).status_code == 401
+    assert client.get("/api/game-chat/ml/files", params={"path": "games/x/secret.glb"}, headers=AUTH).status_code == 403
+    assert client.get("/api/game-chat/ml/files", params={"path": "ml/../games/x.glb"}, headers=AUTH).status_code == 403
+    assert task["chatId"] == chat
+
+
 def test_cancel_and_unknown_chats(client):
     t = client.thread_id
     assert client.post("/api/game-chat/ml/chats/nope/cancel", headers=AUTH).status_code == 404

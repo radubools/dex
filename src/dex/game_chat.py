@@ -633,6 +633,73 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         root, members = await task_chain(entry, task_id)
         return await feed(root, members, after, limit)
 
+    # A task's previews: the files in its package a dex widget opens, as dex's own
+    # task view shows them above the file list (WidgetSlideshow), the widgets'
+    # code, and the files a widget asks for. Read-only, and only inside this
+    # project's assets.
+
+    def project_root(entry: dict[str, Any]) -> Path:
+        return (config.assets_dir / entry["project"]).resolve()
+
+    def inside(entry: dict[str, Any], rel: str) -> Path:
+        """A path relative to the assets root, if it is a file of this project; else 403/404."""
+        root = project_root(entry)
+        target = (config.assets_dir.resolve() / rel.strip("/")).resolve()
+        if root not in target.parents:
+            raise HTTPException(403, "outside this project's assets")
+        if not target.is_file():
+            raise HTTPException(404, "no such file")
+        return target
+
+    def game_widget(entry: dict[str, Any], w: Any) -> dict[str, Any]:
+        info = w.to_json()
+        # The same bundle, behind the game's token: /api/widgets/... -> /api/game-chat/<project>/widgets/...
+        info["url"] = info["url"].replace("/api/widgets/", f"{PREFIX}/{entry['project']}/widgets/", 1)
+        return info
+
+    @router.get("/{project}/tasks/{task_id}/previews")
+    async def task_previews(task_id: str, entry: dict = Depends(access)) -> dict[str, Any]:
+        from . import widgets  # noqa: PLC0415
+
+        _, members = await task_chain(entry, task_id)
+        latest = members[-1]
+        folder = (project_root(entry) / (latest.output_slug or latest.slug)).resolve()
+        rel = str(folder.relative_to(config.assets_dir.resolve()))
+        if project_root(entry) not in folder.parents or not folder.is_dir():
+            return {"dir": rel, "previews": []}
+        files = sorted(
+            str(f.resolve().relative_to(config.assets_dir.resolve()))
+            for f in folder.glob("**/*")
+            if f.is_file() and not any(part.startswith(".") for part in f.relative_to(folder).parts)
+            and not f.name.endswith(".sections.json") and folder in f.resolve().parents
+        )
+        found = widgets.resolve_many(config.assets_dir, config.workspace, files)
+        return {
+            "dir": rel,
+            "previews": [{"path": f, "name": f[len(rel) + 1:], "widget": game_widget(entry, found[f])} for f in files if f in found],
+        }
+
+    @router.get("/{project}/widgets/{skill}/{version}/{widget}/index.js")
+    async def widget_bundle(skill: str, version: str, widget: str, entry: dict = Depends(access)) -> Any:
+        from fastapi.responses import FileResponse  # noqa: PLC0415
+
+        from . import widgets  # noqa: PLC0415
+
+        found = widgets.bundle_path(config.workspace, skill, version, widget)
+        if found is None:
+            raise HTTPException(404, "no such widget")
+        return FileResponse(found, media_type="text/javascript", headers={"cache-control": "private, max-age=31536000, immutable"})
+
+    @router.get("/{project}/files")
+    async def project_file(path: str = Query(...), entry: dict = Depends(access)) -> Any:
+        import mimetypes  # noqa: PLC0415
+
+        from fastapi.responses import FileResponse  # noqa: PLC0415
+
+        target = inside(entry, path)
+        media_type, _ = mimetypes.guess_type(target.name)
+        return FileResponse(target, media_type=media_type or "application/octet-stream")
+
     async def act(entry: dict, chat_id: str, run: Any) -> dict[str, Any]:
         members = await chain(entry, chat_id)
         result = await run(members[-1].id)
