@@ -192,6 +192,24 @@ def test_a_todo_message_inside_a_chat_starts_its_own(client):
     assert second["delivered"] == "started"
 
 
+def test_the_task_graph_and_any_tasks_activity(client):
+    t = client.thread_id
+    chat = client.post(f"/api/game-chat/ml/threads/{t}/messages", headers=AUTH, json={"text": "please wait"}).json()["chatId"]
+    wait_state(client, chat, {"running"})
+    assert client.get("/api/game-chat/ml/graph").status_code == 401
+    graph = client.get("/api/game-chat/ml/graph", headers=AUTH).json()
+    assert graph["project"] == "ml"
+    assert chat in [n["id"] for n in graph["nodes"] if n["kind"] == "task"]
+    # The same graph as dex's own view.
+    assert graph["nodes"] == client.get("/api/dag", params={"project": "ml"}).json()["nodes"]
+    feed = client.get(f"/api/game-chat/ml/tasks/{chat}/events", headers=AUTH).json()
+    assert feed["chat"]["state"] == "running" and feed["chat"]["chatId"] == chat
+    assert any(e["type"] == "text_delta" for e in feed["events"])
+    assert client.get("/api/game-chat/ml/tasks/nope/events", headers=AUTH).status_code == 404
+    client.post(f"/api/game-chat/ml/chats/{chat}/cancel", headers=AUTH)
+    wait_state(client, chat, {"cancelled"})
+
+
 def test_cancel_and_unknown_chats(client):
     t = client.thread_id
     assert client.post("/api/game-chat/ml/chats/nope/cancel", headers=AUTH).status_code == 404

@@ -557,14 +557,8 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         members = await chain(entry, body.chatId)
         return {"chatId": body.chatId, "taskId": members[-1].id, "delivered": "followup"}
 
-    @router.get("/{project}/chats/{chat_id}/events")
-    async def chat_events(
-        chat_id: str,
-        after: int | None = Query(default=None, description="the last seq seen; none or 0 = from the start"),
-        limit: int = Query(default=PAGE, ge=1, le=PAGE),
-        entry: dict = Depends(access),
-    ) -> dict[str, Any]:
-        members = await chain(entry, chat_id)
+    async def feed(chain_id: str, members: list[Task], after: int | None, limit: int) -> dict[str, Any]:
+        """A chain's events after `after`, merged, with its summary (a chat's, or any task's)."""
         since = after or 0
         rows = await db.pool.fetch(
             """SELECT seq, task_id, type, data, extract(epoch from ts)::float8 AS ts
@@ -583,13 +577,61 @@ def build_game_chat_router(config: Config, db: Any, tasks: Any, threads: Any, pu
         last = rows[-1]["seq"] if rows else since
         live = [tasks.merge_live(t) for t in members]
         return {
-            "chat": _summary(chat_id, live, await CostStore(db).by_tasks([t.id for t in live])),
+            "chat": _summary(chain_id, live, await CostStore(db).by_tasks([t.id for t in live])),
             "attempts": [{"taskId": t.id, "attempt": t.attempt, "state": t.state.value} for t in live],
             "events": _merge(events),
             "last": last,
             "more": more,
             "now": time.time(),
         }
+
+    @router.get("/{project}/chats/{chat_id}/events")
+    async def chat_events(
+        chat_id: str,
+        after: int | None = Query(default=None, description="the last seq seen; none or 0 = from the start"),
+        limit: int = Query(default=PAGE, ge=1, le=PAGE),
+        entry: dict = Depends(access),
+    ) -> dict[str, Any]:
+        return await feed(chat_id, await chain(entry, chat_id), after, limit)
+
+    # The project's task graph, as dex's own Task graph view draws it (store.graph,
+    # GET /api/dag), and any task's activity: the game's task map (engine design 14).
+
+    @router.get("/{project}/graph")
+    async def task_graph(entry: dict = Depends(access)) -> dict[str, Any]:
+        return {"project": entry["project"], **await tasks.graph.store.graph(entry["project"])}
+
+    async def task_chain(entry: dict[str, Any], task_id: str) -> tuple[str, list[Task]]:
+        """The chain a task of this project belongs to: its root id and attempts, oldest first."""
+        task = await tasks.tasks.get(task_id)
+        if task is None or task.project != entry["project"]:
+            raise HTTPException(404, "no such task in this project")
+        seen = {task.id}
+        while task.parent_id and task.parent_id not in seen:
+            parent = await tasks.tasks.get(task.parent_id)
+            if parent is None:
+                break
+            seen.add(parent.id)
+            task = parent
+        ids = await db.pool.fetch(
+            """WITH RECURSIVE c AS (SELECT id FROM tasks WHERE id = $1
+                                    UNION SELECT t.id FROM tasks t JOIN c ON t.parent_id = c.id)
+               SELECT id FROM c""",
+            task.id,
+        )
+        members = [m for m in [await tasks.tasks.get(r["id"]) for r in ids] if m is not None]
+        members.sort(key=lambda t: (t.attempt, t.created_at))
+        return task.id, members
+
+    @router.get("/{project}/tasks/{task_id}/events")
+    async def task_events(
+        task_id: str,
+        after: int | None = Query(default=None, description="the last seq seen; none or 0 = from the start"),
+        limit: int = Query(default=PAGE, ge=1, le=PAGE),
+        entry: dict = Depends(access),
+    ) -> dict[str, Any]:
+        root, members = await task_chain(entry, task_id)
+        return await feed(root, members, after, limit)
 
     async def act(entry: dict, chat_id: str, run: Any) -> dict[str, Any]:
         members = await chain(entry, chat_id)
