@@ -336,3 +336,47 @@ def test_the_backfill_leaves_a_stray_even_share_untimed():
     (row,) = b.rows(calls, [{"hour": hour, "skill": "", "in_tokens": 100_000, "out_tokens": 1000}])
     assert row["in_tokens"] == 0
     assert row["out_tokens"] == 1000
+
+
+def test_a_call_with_no_usage_does_not_take_the_next_calls():
+    """OpenCode compacting its session writes a summary and reports no usage:
+    the relay's next request closes it, and the next usage is the next call's."""
+    meter = Meter()
+    meter.boundary(0.0)
+    meter.token(17.0); meter.token(134.0); meter.stream()    # the summary
+    meter.boundary(250.0)                                     # the relay: a new request
+    meter.token(266.0); meter.token(269.0); meter.stream()
+    change = meter.usage(269.0, in_tokens=34_000, out_tokens=74, ends=True)
+    assert change["in_seconds"] == pytest.approx(16.0)
+    assert change["out_seconds"] == pytest.approx(3.0)
+    # And the summary's call is gone, not waiting to take a later usage.
+    meter.boundary(270.0)
+    meter.token(271.0); meter.token(272.0); meter.stream()
+    assert meter.usage(272.0, out_tokens=10, ends=True)["out_seconds"] == pytest.approx(1.0)
+
+
+def test_the_relay_marks_each_model_request(tmp_path):
+    from claude_agent_sdk import SystemMessage
+    from dex.opencode import OpencodeClient
+
+    client = OpencodeClient.__new__(OpencodeClient)
+    client._messages = asyncio.Queue()
+    client._stream_block = None
+    client._stream("start")
+    message = client._messages.get_nowait()
+    assert isinstance(message, SystemMessage) and message.subtype == "model_request"
+
+
+async def test_the_runner_starts_a_call_at_each_model_request(runner, monkeypatch):
+    from claude_agent_sdk import SystemMessage
+
+    run, _ = runner
+    clock = [0.0]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    run._meter.boundary(0.0)
+    clock[0] = 5.0
+    run._translate(SystemMessage(subtype="model_request", data={}))
+    clock[0] = 7.0
+    run._meter.token(7.0); run._meter.token(9.0); run._meter.stream()
+    change = run._meter.usage(9.0, in_tokens=100, out_tokens=20, ends=True)
+    assert change["in_seconds"] == pytest.approx(2.0)

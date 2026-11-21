@@ -693,6 +693,10 @@ class OpencodeClient:
         and text, each as a streamed block, closed when its reply ends."""
         if kind in ("start", "end"):
             self._close_stream()
+            if kind == "start":
+                # A new model request: the runner times each one as a call,
+                # including those that report no usage (compacting the session).
+                self._messages.put_nowait(SystemMessage(subtype="model_request", data={}))
             return
         want = "thinking" if kind == "reasoning" else "text"
         if self._stream_block and self._stream_block[0] != want:

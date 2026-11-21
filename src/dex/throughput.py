@@ -35,7 +35,10 @@ Usage does not always arrive while its call is current. Claude reports each
 message's usage as the message comes, before its tool runs; OpenCode reports a
 step's usage after its tools have run and returned. So a boundary closes the
 current call, and a usage that names no call it has seen claims the oldest
-closed call nobody claimed yet, or else the current one. A usage that comes at
+closed call nobody claimed yet, or else the current one, unless the current
+one has already written: then the usage is its, and the closed calls still
+waiting never got one (OpenCode compacting its session reports none; the local
+model relay starts a new call at each request, which is what closes it). A usage that comes at
 its call's end (OpenCode's, Codex's and Antigravity's usage-only messages,
 Claude's `message_delta`) also ends the call, if it is the current one: a step
 that called no tool is followed by the next with no boundary in between.
@@ -180,7 +183,13 @@ class Meter:
         state = self._lane(lane, at)
         call = self._by_id.get(message_id) if message_id else None
         if call is None:
-            if state.closed:
+            if state.current.first is not None and not state.current.claimed:
+                # The current call has written and nobody claimed it: this is
+                # its usage. Closed calls still waiting got none, and never will
+                # (OpenCode compacting its session reports no usage).
+                call = state.current
+                state.closed.clear()
+            elif state.closed:
                 call = state.closed.popleft()
             else:
                 call = state.current

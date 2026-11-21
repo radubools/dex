@@ -2204,6 +2204,10 @@ class TaskRunner:
             return
 
         if isinstance(message, SystemMessage):
+            if message.subtype == "model_request":
+                # The local model relay saw a request go out: a new call.
+                self._meter.boundary(time.time())
+                return
             if message.subtype == "init":
                 session_id = message.data.get("session_id")
                 if session_id and session_id != self.task.session_id:
