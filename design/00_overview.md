@@ -43,6 +43,7 @@ This document is the map. Each feature has its own document:
 | [24](24_todos.md) | Todos and ideation |
 | [25](25_line_changes.md) | Line changes |
 | [26](26_intent_routing.md) | One chat — every message is routed to its task or thread |
+| [30](30_context_window.md) | A task agent's context window — what fills it at start, on resume, from skills and tools, and what summaries replace |
 
 ---
 
