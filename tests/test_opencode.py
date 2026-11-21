@@ -382,3 +382,14 @@ def test_an_exit_code_after_a_session_that_succeeded_is_not_a_failure(tmp_path: 
     last = asyncio.run(run())[-1]
     assert last.is_error is failed
     assert (last.result == "OpenCode exited (1)") if failed else (last.result == "Done: package validated.")
+
+
+def test_dex_instructions_say_dex_tools_stay_even_when_the_first_catalog_lacks_them() -> None:
+    options = SimpleNamespace(cwd=str(CWD), model="oc:qwen3.8-flash", effort=None, can_use_tool=None,
+                              system_prompt={"type": "preset", "append": "Be dex."}, resume=None,
+                              mcp_servers={"dex": object()}, env={}, stderr=None)
+    client = OpencodeClient(options)
+    assert client.system.startswith("Be dex.") and "tools.dex.<name>" in client.system
+    assert "start_power_task" in client.system and "`read` tool" in client.system
+    bare = OpencodeClient(SimpleNamespace(**{**vars(options), "mcp_servers": {}}))
+    assert bare.system == "Be dex."

@@ -417,9 +417,9 @@ def test_the_brief_runs_from_what_tasks_share_to_what_is_the_tasks_own(tmp_path:
     tail = a.split("\n# Request\n")[1]
     assert "Make story one" in tail and str(tmp_path / "proj" / "t1") in tail
     assert f"`<skills>` in the skills list above is `{tmp_path / 'skill-work' / 't1' / 'work'}`" in tail
-    # The thread's skill and those its SKILL.md names are described; the rest named.
-    assert "- `game-story` — game-story things" in head_a and "- `game-voice` — game-voice things" in head_a
-    assert "game-sfx things" not in head_a and "`game-sfx` (`<skills>/game-sfx`)" in head_a
+    # Every skill keeps its line and where to read it.
+    for name in ("game-story", "game-voice", "game-sfx"):
+        assert f"- `{name}` — {name} things\n  Read `<skills>/{name}/SKILL.md`." in head_a
     assert "# Finish" in head_a
 
 
@@ -428,3 +428,19 @@ def test_without_a_thread_skill_every_skill_is_described() -> None:
 
     listed, root = skills_listing([("a", "does a", "/s/a/v1", False), ("b", "does b", "/s/b/v2", False)])
     assert root is None and "does a" in listed and "does b" in listed and "/s/a/v1/SKILL.md" in listed
+
+
+def test_skills_outside_the_thread_are_described_in_their_first_sentence(tmp_path: Path) -> None:
+    from dex.prompts import skills_listing
+
+    (tmp_path / "work" / "game-story").mkdir(parents=True)
+    (tmp_path / "work" / "game-story" / "SKILL.md").write_text("Stories.")
+    skills = [(n, d, str(tmp_path / "work" / n), False) for n, d in (
+        ("game-story", "Lesson scripts. With many details after."),
+        ("game-sfx", "Procedural, seeded sound effects: a DSP toolkit and more."),
+        ("power", "Arbitrary code changes to dex itself. Overrides the restrictions."))]
+    listed, root = skills_listing(skills, "game-story")
+    assert root == str(tmp_path / "work")
+    assert "- `game-story` — Lesson scripts. With many details after." in listed
+    assert "- `game-sfx` — Procedural, seeded sound effects\n" in listed
+    assert "- `power` — Arbitrary code changes to dex itself. Overrides the restrictions." in listed

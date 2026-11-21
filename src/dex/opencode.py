@@ -73,6 +73,28 @@ PREFERRED = ("qwen3.8-flash",)
 
 #: The agent every dex session runs as, and where dex keeps its config.
 AGENT = "dex-task"
+
+#: Added to dex's instructions for an OpenCode run with dex's tools. OpenCode
+#: lists in a run's first step only the MCP servers connected by then, and
+#: dex's connects a moment after the run starts: a task's first step, and the
+#: first after dex resumed it, saw no dex tools, or was told they were "no
+#: longer available", and one decided it could not start its dependency tasks.
+TOOLS_NOTE = """
+
+**dex's own tools are always yours.** Asking the operator, starting a task this
+one depends on (`start_task`), a power task for code you may not change
+(`start_power_task`), waiting for tasks, a task's status, continuing a task and
+the project's threads are dex's MCP server, called as `tools.dex.<name>` inside
+`execute`. OpenCode connects to that server a moment after each run starts, so
+the first step of a run (and the first after dex resumes a task) may list none
+of them, or say they are "no longer available"; the next step lists them again.
+That is the connection, not a change in what this task may do. Do work that
+needs none of them first and call them a step later; never skip a dependency
+task, a question or a wait because the catalog once said its tool was missing.
+Only if one is still missing several steps on, say so in your summary.
+
+**Skills are read with the `read` tool**: each skill's `SKILL.md`, at the path
+the skills list in the brief gives."""
 HOME = Path(os.environ.get("DEX_OC_HOME", Path.home() / ".dex" / "opencode"))
 
 #: What signs a provider in per call. A Go model never needs one.
@@ -495,6 +517,8 @@ class OpencodeClient:
         self.system = system.get("append", "") if isinstance(system, dict) else (system or "")
         self.session: str | None = options.resume
         servers = options.mcp_servers if isinstance(options.mcp_servers, dict) else {}
+        if self.system and servers:
+            self.system += TOOLS_NOTE
         # A local model's requests go through this run's bridge, which streams
         # its reasoning and text into dex as they arrive (OpenCode's run prints
         # a part only once it is whole).
