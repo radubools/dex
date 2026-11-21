@@ -239,3 +239,22 @@ def test_the_relay_takes_the_session_directory_out_of_the_system_prompt() -> Non
     assert "Platform: darwin" in one["messages"][0]["content"]
     assert one["messages"][1]["content"].endswith("task-1 stays in a message")
     assert not steady_system(one) and not steady_system({"prompt": "x"})
+
+
+def test_a_bridge_leaves_the_process_signals_to_dex_s_own_server() -> None:
+    """A stop signal must reach dex's server, not the newest task's bridge."""
+    import asyncio
+    import signal
+
+    from dex.antigravity import Bridge
+
+    async def run() -> tuple:
+        before = signal.getsignal(signal.SIGTERM)
+        bridge = Bridge({}, lambda _payload: None)
+        await bridge.start()
+        during = signal.getsignal(signal.SIGTERM)
+        await bridge.stop()
+        return before, during
+
+    before, during = asyncio.run(run())
+    assert during is before

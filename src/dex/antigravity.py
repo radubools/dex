@@ -341,7 +341,7 @@ class Bridge:
             return await reply(send, 404, b"{}")
 
         config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="off")
-        self._server = uvicorn.Server(config)
+        self._server = _BridgeServer(config)
         self._serving = asyncio.create_task(self._server.serve(), name="dex-agy-bridge")
         for _ in range(500):
             if self._server.started:
@@ -422,6 +422,37 @@ class Bridge:
 #: They sit before its tool list and dex's whole brief, so they made every
 #: task's prompt differ from the others' a few thousand tokens in.
 _SESSION_DIR = re.compile(r"^(\s*(?:Working directory|Workspace root folder)): .+$", re.MULTILINE)
+
+
+def _bridge_server_class() -> type:
+    import uvicorn
+
+    class BridgeServer(uvicorn.Server):
+        """A bridge's server, which leaves the process's signals alone.
+
+        `uvicorn.Server.serve` takes SIGINT and SIGTERM for itself while it
+        runs, in the main thread, which is where dex's own server runs too.
+        Every task's bridge did so in turn, so a stop signal reached only the
+        newest bridge: it shut down, cutting its task off from dex's tools
+        (OpenCode then said they were "no longer available"), and dex's server
+        never heard it, so a reload waited forever. A bridge ends when its
+        task does, through `Bridge.stop`."""
+
+        @contextlib.contextmanager
+        def capture_signals(self):  # noqa: ANN202 -- uvicorn's signature
+            yield
+
+    return BridgeServer
+
+
+def _BridgeServer(config: Any) -> Any:  # noqa: N802 -- a class, made on first use (uvicorn is imported lazily)
+    global _BRIDGE_SERVER
+    if _BRIDGE_SERVER is None:
+        _BRIDGE_SERVER = _bridge_server_class()
+    return _BRIDGE_SERVER(config)
+
+
+_BRIDGE_SERVER: Any = None
 
 
 def steady_system(sent: Any) -> bool:
