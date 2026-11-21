@@ -1,4 +1,5 @@
 import type { DexEvent, Task, TaskMessage, TaskState, ThreadMessage } from './types'
+import { trimmed, type SpeedSample } from './throughput'
 
 /** One entry in a task's activity feed. */
 export type FeedItem =
@@ -20,6 +21,8 @@ export type TaskView = {
   queued: TaskMessage[]
   /** Assets seen for this task, newest first, as `<slug>/<file>` paths. */
   assets: string[]
+  /** Its model calls' timed tokens over the last minute, for tokens per second. */
+  speed?: SpeedSample[]
 }
 
 export type State = {
@@ -310,6 +313,9 @@ function applyEvent(state: State, event: DexEvent): State {
           // The agent's final total carries no context size; keep the last one.
           contextTokens: event.contextTokens ?? view.task.contextTokens,
         },
+        ...(event.throughput
+          ? { speed: trimmed([...(view.speed ?? []), { ts: event.ts, ...event.throughput }]) }
+          : {}),
       })
 
     case 'task_message': {

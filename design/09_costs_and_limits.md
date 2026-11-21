@@ -9,6 +9,8 @@ windows** that, once exhausted, fail every task in flight. dex tracks both:
   authoritative total when it finishes.
 - **Tokens** — input, cache reads and writes, output, and **thinking split out of
   output**, so "what did the thinking cost" is answerable.
+- **Throughput** — input and output tokens per second, for every agent kind,
+  live in the task panel (the last minute) and per bucket on the dashboard.
 - **Usage limits** — dex reads how much of each window is gone and **holds new
   work just short of the edge**, releasing it by itself when the window rolls
   over.
@@ -19,6 +21,8 @@ windows** that, once exhausted, fail every task in flight. dex tracks both:
 | `src/dex/runner.py` | `_accrue`, result handling, rate-limit readings |
 | `src/dex/store.py` | `CostStore`, `SettingsStore.record_limit`, `work_held` |
 | `src/dex/usage.py` | `UsageWatcher` — hold, release, probe |
+| `src/dex/throughput.py` | `Meter` — times model calls for tokens per second |
+| `scripts/backfill_throughput.py` | Times past tasks' calls from their stored events |
 | `web/src/components/CostDashboard.tsx` | Spend over time, by model or project |
 
 ---
@@ -265,4 +269,41 @@ token.
 - **Limit windows are read, not predicted.** dex holds work just short of the
   edge but cannot tell a task that will take ten minutes from one that will
   take an hour, so a long task started just inside the window still fails.
+
+---
+
+## Throughput: tokens per second
+
+Every agent dex runs hands the runner the same three things, whatever its
+transport: a **boundary** (the turn's prompt, a tool's result: new input), a
+**token** (a block starting, a delta, a block ending, a tool call) and a
+**usage** (a model call's tokens). `throughput.Meter` turns them into calls:
+
+| | Measured over | Tokens |
+|---|---|---|
+| **in t/s** | boundary → first token (prefill) | input + cache write (cache reads are not read again) |
+| **out t/s** | first token → last token (decode) | output, thinking included |
+
+- A turn's first call also waits for the agent's process to start, so it has no
+  prefill ("cold").
+- A transport that hands over whole parts (OpenCode on a Go model, Antigravity
+  when it does not stream) has no token where decoding began: such a call has
+  no in t/s, and its out t/s runs from boundary to last token.
+- Claude reports a message's usage per block and its final output count only in
+  `message_delta`, which the runner now reads; OpenCode reports a step's usage
+  after its tools have run, so a usage that names no call claims the oldest
+  closed one. A usage-only message (OpenCode, Codex, Antigravity) or a
+  `message_delta` ends its call.
+
+`task_throughput` keeps, per task, hour and skill, the timed tokens and their
+seconds; a bucket's rate is always its tokens over its seconds, never an
+average of rates. Each `cost` event carries the change as `throughput`
+(`in`, `inS`, `out`, `outS`), which the task panel sums over the last minute.
+`scripts/backfill_throughput.py` times older tasks from their stored events
+(the same meter), shares each hour's `task_usage` tokens over its calls, and
+marks the rows `inferred`.
+
+Before this, `task_usage.output_tokens` for Claude held each message's output
+as its first block began (a few percent of the real count); the backfill scales
+a Claude task's output up to its result's total where that total is its own.
 

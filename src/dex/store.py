@@ -513,6 +513,26 @@ class TaskStore:
             counts.get("thinking_tokens", 0),
         )
 
+    async def add_throughput(
+        self, task_id: str, hour: datetime, skill: str, sums: dict[str, float],
+        *, inferred: bool = False,
+    ) -> None:
+        """Add timed tokens and their seconds to the throughput rollup (throughput.py)."""
+        await self.db.pool.execute(
+            """INSERT INTO task_throughput (task_id, hour, skill, in_tokens, in_seconds,
+                   out_tokens, out_seconds, inferred)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (task_id, hour, skill) DO UPDATE SET
+                   in_tokens = task_throughput.in_tokens + EXCLUDED.in_tokens,
+                   in_seconds = task_throughput.in_seconds + EXCLUDED.in_seconds,
+                   out_tokens = task_throughput.out_tokens + EXCLUDED.out_tokens,
+                   out_seconds = task_throughput.out_seconds + EXCLUDED.out_seconds""",
+            task_id, hour, skill,
+            int(sums.get("in_tokens", 0)), float(sums.get("in_seconds", 0.0)),
+            int(sums.get("out_tokens", 0)), float(sums.get("out_seconds", 0.0)),
+            inferred,
+        )
+
     async def session_usage(self, task_id: str, session_id: str | None) -> float:
         """What a task's whole agent session has cost so far, over all its tasks."""
         value = await self.db.pool.fetchval(
@@ -546,6 +566,20 @@ class TaskStore:
                 task_id, skill,
             )
             await conn.execute("DELETE FROM task_usage WHERE task_id = $1 AND skill = ''", task_id)
+            # Throughput is keyed like spend, so it moves with it.
+            await conn.execute(
+                """INSERT INTO task_throughput (task_id, hour, skill, in_tokens, in_seconds,
+                       out_tokens, out_seconds, inferred)
+                   SELECT task_id, hour, $2, in_tokens, in_seconds, out_tokens, out_seconds, inferred
+                   FROM task_throughput WHERE task_id = $1 AND skill = ''
+                   ON CONFLICT (task_id, hour, skill) DO UPDATE SET
+                       in_tokens = task_throughput.in_tokens + EXCLUDED.in_tokens,
+                       in_seconds = task_throughput.in_seconds + EXCLUDED.in_seconds,
+                       out_tokens = task_throughput.out_tokens + EXCLUDED.out_tokens,
+                       out_seconds = task_throughput.out_seconds + EXCLUDED.out_seconds""",
+                task_id, skill,
+            )
+            await conn.execute("DELETE FROM task_throughput WHERE task_id = $1 AND skill = ''", task_id)
 
     async def set_context_tokens(self, task_id: str, tokens: int) -> None:
         """Record how full the context window is after the latest model call."""
@@ -1250,8 +1284,24 @@ class CostStore:
                 ORDER BY 1""",
             projects,
         )
+        timed = await self.db.pool.fetch(
+            f"""SELECT date_trunc('{width}', u.hour) AS bucket,
+                       {expression} AS series,
+                       sum(u.in_tokens)::bigint AS in_tokens,
+                       sum(u.in_seconds)::float8 AS in_seconds,
+                       sum(u.out_tokens)::bigint AS out_tokens,
+                       sum(u.out_seconds)::float8 AS out_seconds
+                FROM task_throughput u JOIN tasks t ON t.id = u.task_id
+                WHERE {_window(since, width, offset)}
+                  AND ($1::text[] IS NULL OR t.project = ANY($1))
+                GROUP BY 1, 2""",
+            projects,
+        )
+        speed = {(r["bucket"], r["series"]): r for r in timed}
+        none = {"in_tokens": 0, "in_seconds": 0.0, "out_tokens": 0, "out_seconds": 0.0}
         return [
             {
+                **_speed(speed.get((row["bucket"], row["series"]), none)),
                 "bucket": row["bucket"].isoformat(),
                 "series": row["series"],
                 "cost": row["cost"],
@@ -1264,6 +1314,14 @@ class CostStore:
             }
             for row in rows
         ]
+
+
+def _speed(row: Any) -> dict[str, float]:
+    """A bucket's throughput sums, as the dashboard averages them: tokens over seconds."""
+    return {
+        "timedIn": int(row["in_tokens"] or 0), "inSeconds": float(row["in_seconds"] or 0),
+        "timedOut": int(row["out_tokens"] or 0), "outSeconds": float(row["out_seconds"] or 0),
+    }
 
 
 #: Whitelists, because these land in SQL text rather than as parameters.

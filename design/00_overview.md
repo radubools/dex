@@ -191,6 +191,7 @@ flowchart TB
 | `watcher` | New files → `asset` events, manifest tags → index |
 | `usage` / `pricing` | Limit windows, cost estimates, token accounting |
 | `transcripts` | A task's context size from its Claude session transcript, for tasks from before it was kept |
+| `throughput` | Input and output tokens per second: times every agent's model calls (prefill, decode) for `task_throughput`, the task panel and the cost dashboard |
 | `widgets` | Which widget opens which file |
 | `feed` / `animation` / `gifinfo` | The review reel and animation playback |
 | `fake_agent` | A scripted runner for offline UI work |

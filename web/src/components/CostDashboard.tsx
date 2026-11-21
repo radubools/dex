@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getCosts } from '../api'
 import type { CostPoint, CostsResponse } from '../types'
 import { bucketKey, bucketLabel, bucketTitle, hasOlder, timeline, type Granularity } from './costTimeline'
+import { formatRate, rate } from '../throughput'
 
 /** Each period offers only the granularities that make a readable chart. */
 const PERIODS: { id: string; label: string; granularities: Granularity[] }[] = [
@@ -112,6 +113,14 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
                    data?.earliest, data?.offset ?? 0)
   }, [data, metric, view, period, granularity, picked, pickedKinds, stacksKinds])
   const breakdown = useMemo(() => buildBreakdown(data?.series ?? []), [data])
+  // Throughput is about models, not lines or token kinds: by bucket, and by
+  // series where the chart's series are the group's.
+  const speed = useMemo(
+    () => metric === 'code' || metric === 'assets' ? undefined
+      : speedByBucket(data?.series ?? [], (data?.granularity ?? granularity) as Granularity,
+                      stacksKinds ? undefined : chart.members),
+    [data, metric, granularity, stacksKinds, chart],
+  )
   const format = metric === 'cost' ? money : count
   const picks = stacksKinds ? pickedKinds : picked
   const setPicks = stacksKinds ? setPickedKinds : setPicked
@@ -246,7 +255,7 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
               </p>
             ) : (
               <>
-                <StackedBars key={offset} chart={chart} format={format} />
+                <StackedBars key={offset} chart={chart} format={format} speed={speed} />
                 <ul className="legend">
                   <li>
                     <button
@@ -422,12 +431,18 @@ function collect(
   }
 }
 
-type Row = { name: string; cost: number; input: number; cached: number; output: number; thinking: number }
+type Row = {
+  name: string; cost: number; input: number; cached: number; output: number; thinking: number
+  speed: Sums
+}
 
 function buildBreakdown(points: CostPoint[]): Row[] {
   const rows: Record<string, Row> = {}
   for (const p of points) {
-    const r = (rows[p.series] ??= { name: p.series, cost: 0, input: 0, cached: 0, output: 0, thinking: 0 })
+    const r = (rows[p.series] ??= {
+      name: p.series, cost: 0, input: 0, cached: 0, output: 0, thinking: 0, speed: noSums(),
+    })
+    addSums(r.speed, p)
     r.cost += p.cost
     r.input += p.input
     r.cached += p.cacheRead + p.cacheWrite
@@ -450,12 +465,17 @@ function Breakdown({ rows, picked, onPick }: {
     cached: sum((r) => r.cached),
     output: sum((r) => r.output),
     thinking: sum((r) => r.thinking),
+    speed: rows.reduce((a, r) => plus(a, r.speed), noSums()),
   }
   return (
     <div className="chart-scroll">
       <table className="cost-table">
         <thead>
-          <tr><th /><th>Cost</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th></tr>
+          <tr>
+            <th /><th>Cost</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th>
+            <th title="Average input tokens read per second (uncached), over timed model calls">In t/s</th>
+            <th title="Average output tokens written per second, over timed model calls">Out t/s</th>
+          </tr>
         </thead>
         <tbody>
           {[all, ...rows].map((r) => (
@@ -470,10 +490,52 @@ function Breakdown({ rows, picked, onPick }: {
               <td>{count(r.cached)}</td>
               <td>{count(r.output)}</td>
               <td>{count(r.thinking)}</td>
+              <td>{formatRate(rate(r.speed.timedIn, r.speed.inSeconds))}</td>
+              <td>{formatRate(rate(r.speed.timedOut, r.speed.outSeconds))}</td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+/** A span's throughput sums: rates are always these divided, never averaged. */
+type Sums = { timedIn: number; inSeconds: number; timedOut: number; outSeconds: number }
+type SpeedMap = Record<string, Record<string, Sums>>
+
+const noSums = (): Sums => ({ timedIn: 0, inSeconds: 0, timedOut: 0, outSeconds: 0 })
+const plus = (a: Sums, b: Sums): Sums => ({
+  timedIn: a.timedIn + b.timedIn, inSeconds: a.inSeconds + b.inSeconds,
+  timedOut: a.timedOut + b.timedOut, outSeconds: a.outSeconds + b.outSeconds,
+})
+function addSums(into: Sums, p: CostPoint) {
+  into.timedIn += p.timedIn ?? 0
+  into.inSeconds += p.inSeconds ?? 0
+  into.timedOut += p.timedOut ?? 0
+  into.outSeconds += p.outSeconds ?? 0
+}
+
+/** Each bucket's sums, overall under '' and by the chart's series (Other folded). */
+function speedByBucket(points: CostPoint[], g: Granularity, members?: Record<string, string[]>): SpeedMap {
+  const other = new Set(members?.Other ?? [])
+  const map: SpeedMap = {}
+  for (const p of points) {
+    const key = bucketKey(p.bucket, g)
+    const bucket = (map[key] ??= {})
+    addSums((bucket[''] ??= noSums()), p)
+    if (members) addSums((bucket[other.has(p.series) ? 'Other' : p.series] ??= noSums()), p)
+  }
+  return map
+}
+
+function SpeedLine({ sums, className }: { sums: Sums; className?: string }) {
+  const tin = rate(sums.timedIn, sums.inSeconds)
+  const tout = rate(sums.timedOut, sums.outSeconds)
+  if (tin == null && tout == null) return null
+  return (
+    <div className={`muted small ${className ?? ''}`} title="Average tokens per second over timed model calls">
+      in {formatRate(tin)} t/s · out {formatRate(tout)} t/s
     </div>
   )
 }
@@ -498,7 +560,7 @@ const CARD_WIDTH = 200
 const PIN_MS = 5000
 
 /** Plain SVG: a chart library would be a large dependency for one view. */
-function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => string }) {
+function StackedBars({ chart, format, speed }: { chart: Chart; format: (n: number) => string; speed?: SpeedMap }) {
   const height = 180
   const scroller = useRef<HTMLDivElement>(null)
   const [room, setRoom] = useState(320)
@@ -609,17 +671,22 @@ function StackedBars({ chart, format }: { chart: Chart; format: (n: number) => s
         })}
       </svg>
       </div>
-      {hovered !== null && <BucketCard chart={chart} index={hovered} format={format} left={cardLeft} />}
+      {hovered !== null && (
+        <BucketCard chart={chart} index={hovered} format={format} left={cardLeft}
+                    speed={speed?.[chart.buckets[hovered]]} />
+      )}
     </div>
   )
 }
 
 /** A bar's values, largest first, so nothing has to be read off the chart. */
-function BucketCard({ chart, index, format, left }: {
+function BucketCard({ chart, index, format, left, speed }: {
   chart: Chart
   index: number
   format: (n: number) => string
   left: number
+  /** This bucket's throughput, overall ('') and by series. */
+  speed?: Record<string, Sums>
 }) {
   const values = chart.values[chart.buckets[index]] ?? {}
   const rows = chart.series
@@ -634,12 +701,16 @@ function BucketCard({ chart, index, format, left }: {
         <span>{chart.titles[index]}</span>
         <strong>{format(total)}</strong>
       </div>
+      {speed?.[''] && <SpeedLine sums={speed['']} className="cost-card-speed" />}
       {rows.length === 0 && <div className="muted small">Nothing spent</div>}
       {rows.map((r) => (
-        <div key={r.name} className="cost-card-row">
-          <span className="swatch" style={{ background: r.color }} />
-          <span className="cost-card-name">{r.name}</span>
-          <span>{format(r.value)}</span>
+        <div key={r.name}>
+          <div className="cost-card-row">
+            <span className="swatch" style={{ background: r.color }} />
+            <span className="cost-card-name">{r.name}</span>
+            <span>{format(r.value)}</span>
+          </div>
+          {speed?.[r.name] && <SpeedLine sums={speed[r.name]} className="cost-card-speed indent" />}
         </div>
       ))}
     </div>

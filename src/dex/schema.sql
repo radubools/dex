@@ -349,6 +349,24 @@ CREATE TABLE IF NOT EXISTS task_usage (
 );
 CREATE INDEX IF NOT EXISTS task_usage_hour ON task_usage (hour);
 
+-- How fast models read and write (throughput.py), beside `task_usage` and keyed
+-- like it: the tokens of model calls that were timed, and the seconds they
+-- took. in = uncached input (input + cache write) over prefill seconds, out =
+-- output over decode seconds; a bucket's rate is its tokens over its seconds.
+-- `inferred` marks history timed from stored events by backfill_throughput.py.
+CREATE TABLE IF NOT EXISTS task_throughput (
+    task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    hour        TIMESTAMPTZ NOT NULL,
+    skill       TEXT NOT NULL DEFAULT '',
+    in_tokens   BIGINT NOT NULL DEFAULT 0,
+    in_seconds  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    out_tokens  BIGINT NOT NULL DEFAULT 0,
+    out_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+    inferred    BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (task_id, hour, skill)
+);
+CREATE INDEX IF NOT EXISTS task_throughput_hour ON task_throughput (hour);
+
 -- How many lines each task added or modified (changes.py), as they happen.
 -- `inferred` marks history counted by backfill_changes.py.
 CREATE TABLE IF NOT EXISTS task_changes (

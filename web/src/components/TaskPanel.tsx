@@ -4,6 +4,7 @@ import {
   rerunTask, resolveApproval, resumeTask, sendTaskMessage,
 } from '../api'
 import { formatContextTokens } from '../contextTokens'
+import { WINDOW_S, formatRate, windowRates } from '../throughput'
 import { progressOf, type FeedItem, type TaskView } from '../store'
 import type { Routed, SourceAnchor, Task, TaskMessage, TaskState } from '../types'
 
@@ -63,6 +64,17 @@ export function TaskPanel({
   // paused task is still live: dex will start it again by itself.
   const live = !['succeeded', 'failed', 'cancelled'].includes(task.state)
   const context = formatContextTokens(task.contextTokens)
+  // The last minute's tokens per second, moving on as the clock does: a run
+  // waiting on a long tool drops to nothing rather than holding its last rate.
+  const [now, setNow] = useState(() => Date.now() / 1000)
+  const running = task.state === 'running'
+  useEffect(() => {
+    if (!running) return
+    setNow(Date.now() / 1000)
+    const tick = setInterval(() => setNow(Date.now() / 1000), 2000)
+    return () => clearInterval(tick)
+  }, [running])
+  const speed = windowRates(view.speed, Math.max(now, ...(view.speed ?? []).map((s) => s.ts)))
 
   // The activity opens at its end and stays there while it loads and grows
   // (its events arrive after the panel opens, and images and code blocks grow
@@ -139,6 +151,14 @@ export function TaskPanel({
         {context && (
           <span className="muted small context-tokens" title="Tokens in the context window after the latest model call">
             {context}{task.costUsd ? ' ·' : ''}
+          </span>
+        )}
+        {running && (
+          <span
+            className="muted small throughput"
+            title={`Tokens per second over the last ${WINDOW_S} s: input read (uncached) and output written`}
+          >
+            in {formatRate(speed.in)} t/s · out {formatRate(speed.out)} t/s ·
           </span>
         )}
         {task.costUsd ? (

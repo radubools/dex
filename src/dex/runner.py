@@ -35,7 +35,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import antigravity, codex, opencode, pricing
+from . import antigravity, codex, opencode, pricing, throughput
 from .artifacts import is_artifact
 from .bus import EventBus
 from .config import Config
@@ -264,6 +264,14 @@ class TaskRunner:
         #: content block, each repeating its usage, so counting them as they
         #: come would bill most messages about three times.
         self._message_usage: dict[str, dict[str, float]] = {}
+        #: Each message's raw usage so far, merged over its parts.
+        self._message_raw: dict[str, dict[str, Any]] = {}
+        #: Times each model call, for input and output tokens per second.
+        self._meter = throughput.Meter()
+        #: When each streamed block's first delta came, by index.
+        self._block_started: dict[tuple[Any, int], float] = {}
+        #: The API message each lane is streaming, to file its final usage under.
+        self._streaming_message: dict[Any, str | None] = {}
         #: This run's cost per rollup row, to correct to the agent's own total.
         self._run_costs: dict[tuple[datetime, str], float] = {}
         #: The skill spend goes to now. '' until the task touches one.
@@ -1207,14 +1215,14 @@ class TaskRunner:
                 async with self._client(options) as client:
                     if compact:
                         await self._compact(client)
-                    await client.query(prompt)
+                    await self._query(client, prompt)
                     await self._converse(client)
                     # A session resumed after it was cut off mid-turn (a server
                     # restart, a pause for capacity) can answer with an empty
                     # turn: nothing ran. Nudge it once to carry on.
                     if resume_session and self.task.turns == 0 and not self.task.is_chat:
                         self.emit("text", text="The resumed session did not run; asking it to carry on.")
-                        await client.query(RESUME_NUDGE)
+                        await self._query(client, RESUME_NUDGE)
                         async for message in client.receive_response():
                             self._observe(message)
                 # Still nothing: that session cannot go on. Start a fresh one on
@@ -1224,7 +1232,7 @@ class TaskRunner:
                     self.emit("text", text="The resumed session still did not run; starting a fresh session on the same package.")
                     import dataclasses
                     async with self._client(dataclasses.replace(options, resume=None)) as client:
-                        await client.query(FRESH_AFTER_LOST_SESSION + brief_prompt)
+                        await self._query(client, FRESH_AFTER_LOST_SESSION + brief_prompt)
                         async for message in client.receive_response():
                             self._observe(message)
         except asyncio.CancelledError:
@@ -1334,7 +1342,7 @@ class TaskRunner:
         summary. A compaction that fails leaves the session whole."""
         self.emit("text", text="The previous attempt succeeded; compacting its session to a summary first.")
         try:
-            await client.query(COMPACT)
+            await self._query(client, COMPACT)
             async for message in client.receive_response():
                 # Its result is not a turn of this task: only a failure is told.
                 if isinstance(message, ResultMessage) and message.is_error:
@@ -1389,7 +1397,15 @@ class TaskRunner:
             self.task.activity = line
             self.set_state(TaskState.RUNNING)
 
-    def _accrue(self, usage: Any, message_id: str | None = None, *, subagent: bool = False) -> None:
+    async def _query(self, client: Any, prompt: str) -> None:
+        """Start a turn: the model is given new input, after its process starts."""
+        self._meter.boundary(time.time(), cold=True)
+        await client.query(prompt)
+
+    def _accrue(
+        self, usage: Any, message_id: str | None = None, *, subagent: bool = False, lane: Any = None,
+        ends: bool = False,
+    ) -> None:
         """Add one message's usage to the rollup and the running estimate.
 
         Guarded separately from `_observe` so a pricing problem costs only the
@@ -1399,6 +1415,16 @@ class TaskRunner:
             return
         try:
             as_dict = usage if isinstance(usage, dict) else getattr(usage, "__dict__", None)
+            if message_id and isinstance(as_dict, dict):
+                # A message's usage arrives in parts (each block's, then the
+                # final output count alone): price what it amounts to so far.
+                merged = self._message_raw.setdefault(message_id, {})
+                for key, value in as_dict.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        merged[key] = max(merged.get(key) or 0, value)
+                    elif value:
+                        merged[key] = value
+                as_dict = dict(merged)
             seen = self._message_usage.get(message_id, {}) if message_id else {}
             now = {
                 "cost": pricing.estimate(self.task.model or self.config.model, as_dict),
@@ -1411,13 +1437,21 @@ class TaskRunner:
             log.exception("could not price usage for task %s", self.task.id)
             return
         cost = added.pop("cost")
-        if not any(added.values()) and cost <= 0:
+        speed = None
+        try:
+            speed = self._meter.usage(time.time(), throughput.in_tokens(added),
+                                      int(added.get("output_tokens", 0)), message_id, lane, ends=ends)
+        except Exception:
+            log.exception("could not time usage for task %s", self.task.id)
+        if not any(added.values()) and cost <= 0 and not speed:
             return
         hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
         key = (hour, self._skill)
         self._run_costs[key] = self._run_costs.get(key, 0.0) + cost
         self._write_usage(self.store.add_usage, self.task.id, hour, self._skill, cost,
                           {k: int(v) for k, v in added.items()})
+        if speed:
+            self._write_usage(self.store.add_throughput, self.task.id, hour, self._skill, speed)
         # The context window is this call's whole usage, not what it added: each
         # call rereads everything before it. A subagent's calls have a window of
         # their own, so only the main agent's move it.
@@ -1431,9 +1465,13 @@ class TaskRunner:
             self._estimated_cost += cost
             self.task.cost_usd = self._estimated_cost
             self.task.cost_is_estimate = True
-        if cost > 0 or resized:
+        if cost > 0 or resized or speed:
+            extra = {"throughput": {
+                "in": int(speed["in_tokens"]), "inS": round(speed["in_seconds"], 3),
+                "out": int(speed["out_tokens"]), "outS": round(speed["out_seconds"], 3),
+            }} if speed else {}
             self.emit("cost", costUsd=self.task.cost_usd or 0.0, estimate=self.task.cost_is_estimate,
-                      contextTokens=self.task.context_tokens)
+                      contextTokens=self.task.context_tokens, **extra)
         if cost > 0:
             asyncio.create_task(self._store_cost(self._estimated_cost, estimate=True))
 
@@ -1661,7 +1699,7 @@ class TaskRunner:
                 due += 1
                 who = "player" if self.task.is_chat else "operator"
                 self.emit("text", text=f"The {who} sent a message: taking it into account.")
-                await client.query(chat_interjection(text, chat=self.task.is_chat))
+                await self._query(client, chat_interjection(text, chat=self.task.is_chat))
 
         feeder = asyncio.create_task(feed(), name=f"dex-chat-inbox-{self.task.slug}")
         try:
@@ -1680,7 +1718,7 @@ class TaskRunner:
                     self.emit("text", text=f"{(message.result or '').strip()} - trying again in "
                                            f"{delay:.0f}s ({retries} of {CONNECTION_RETRIES}).")
                     await asyncio.sleep(delay)
-                    await client.query(CARRY_ON)
+                    await self._query(client, CARRY_ON)
                     continue
                 if isinstance(message, ResultMessage) and self._park_cut:
                     break  # the parked turn dex cut short: blocked by `run`, not failed
@@ -1928,6 +1966,35 @@ class TaskRunner:
             # An index is a convenience. Never fail a task over one.
             log.exception("could not refresh the utils index for %s", project_dir)
 
+    def _time_delta(self, message: Any) -> None:
+        """Mark a model's output as it streams, for its tokens per second."""
+        event = getattr(message, "event", None) or {}
+        kind, index = event.get("type"), event.get("index")
+        lane = getattr(message, "parent_tool_use_id", None)
+        now = time.time()
+        if kind == "message_start":
+            self._streaming_message[lane] = (event.get("message") or {}).get("id")
+        elif kind == "message_delta":
+            # A message's final output count comes only here: the per-block
+            # messages carry what had been written when each block began.
+            message_id = self._streaming_message.get(lane)
+            if message_id and event.get("usage"):
+                self._accrue(event["usage"], message_id, subagent=lane is not None, lane=lane, ends=True)
+        elif kind == "content_block_start":
+            # The model has begun this block: a thinking block's text may only
+            # arrive whole, at its end, so its first delta is no first token.
+            self._meter.token(now, lane)
+            self._block_started[(lane, index)] = now
+        elif kind == "content_block_delta":
+            self._meter.token(now, lane)
+            self._block_started.setdefault((lane, index), now)
+        elif kind == "content_block_stop":
+            started = self._block_started.pop((lane, index), None)
+            if started is not None:
+                self._meter.token(now, lane)
+                if now - started > throughput.STREAM_GAP:
+                    self._meter.stream(lane)
+
     def _translate_delta(self, message: Any) -> None:
         """One Anthropic stream event -> an append to a text or thinking block."""
         event = getattr(message, "event", None) or {}
@@ -2132,6 +2199,7 @@ class TaskRunner:
 
     def _translate(self, message: Any) -> None:
         if isinstance(message, StreamEvent):
+            self._time_delta(message)
             self._translate_delta(message)
             return
 
@@ -2146,8 +2214,14 @@ class TaskRunner:
             return
 
         if isinstance(message, AssistantMessage):
+            lane = getattr(message, "parent_tool_use_id", None)
+            if message.content:
+                # A finished block (a tool call, a whole part) is output too.
+                self._meter.token(time.time(), lane)
+            # A message of usage alone (OpenCode, Codex, Antigravity) closes
+            # its model call; Claude's come with each block, mid-call.
             self._accrue(getattr(message, "usage", None), getattr(message, "message_id", None),
-                         subagent=getattr(message, "parent_tool_use_id", None) is not None)
+                         subagent=lane is not None, lane=lane, ends=not message.content)
             for block in message.content:
                 # Text already arrived as deltas; re-emitting the completed
                 # block here would duplicate every word.
@@ -2187,6 +2261,9 @@ class TaskRunner:
 
         if isinstance(message, UserMessage):
             content = message.content if isinstance(message.content, list) else []
+            if any(isinstance(block, ToolResultBlock) for block in content):
+                # The model reads the result next: its next call starts here.
+                self._meter.boundary(time.time(), getattr(message, "parent_tool_use_id", None))
             for block in content:
                 if isinstance(block, ToolResultBlock):
                     self._settle_change(block.tool_use_id, ok=not block.is_error)

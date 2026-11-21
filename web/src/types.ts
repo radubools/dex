@@ -194,7 +194,11 @@ type Base = { seq: number; ts: number; taskId: string | null }
 export type DexEvent = Base &
   (
     | { type: 'settings'; settings: Settings }
-    | { type: 'cost'; costUsd: number; estimate: boolean; contextTokens?: number | null }
+    | {
+        type: 'cost'; costUsd: number; estimate: boolean; contextTokens?: number | null
+        /** Timed tokens and their seconds for this change (throughput.py). */
+        throughput?: { in: number; inS: number; out: number; outS: number }
+      }
     | { type: 'task_message'; message: TaskMessage }
     | { type: 'task_message_delivered'; count: number; startedTaskId: string }
     | { type: 'thread_message'; threadId: string; message: ThreadMessage }
@@ -343,6 +347,11 @@ export type CostPoint = {
   output: number
   /** The part of `output` spent reasoning. */
   thinking: number
+  /** Throughput sums: timed input and output tokens, and their seconds. An older server sends none. */
+  timedIn?: number
+  inSeconds?: number
+  timedOut?: number
+  outSeconds?: number
 }
 
 export type CostsResponse = {
