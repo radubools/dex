@@ -64,17 +64,11 @@ export function TaskPanel({
   // paused task is still live: dex will start it again by itself.
   const live = !['succeeded', 'failed', 'cancelled'].includes(task.state)
   const context = formatContextTokens(task.contextTokens)
-  // The last minute's tokens per second, moving on as the clock does: a run
-  // waiting on a long tool drops to nothing rather than holding its last rate.
-  const [now, setNow] = useState(() => Date.now() / 1000)
-  const running = task.state === 'running'
-  useEffect(() => {
-    if (!running) return
-    setNow(Date.now() / 1000)
-    const tick = setInterval(() => setNow(Date.now() / 1000), 2000)
-    return () => clearInterval(tick)
-  }, [running])
-  const speed = windowRates(view.speed, Math.max(now, ...(view.speed ?? []).map((s) => s.ts)))
+  // Tokens per second over the minute up to the task's latest timed call: it
+  // stays on the task between calls (a local model can take minutes on one)
+  // and after it ends, and changes only when another call is timed.
+  const latest = (view.speed ?? []).reduce((a, s) => Math.max(a, s.ts), 0)
+  const speed = windowRates(view.speed, latest)
 
   // The activity opens at its end and stays there while it loads and grows
   // (its events arrive after the panel opens, and images and code blocks grow
@@ -153,10 +147,11 @@ export function TaskPanel({
             {context}{task.costUsd ? ' ·' : ''}
           </span>
         )}
-        {running && (
+        {latest > 0 && (speed.in != null || speed.out != null) && (
           <span
             className="muted small throughput"
-            title={`Tokens per second over the last ${WINDOW_S} s: input read (uncached) and output written`}
+            title={`Tokens per second over the ${WINDOW_S} s up to the latest timed model call `
+              + `(${new Date(latest * 1000).toLocaleTimeString()}): input read (uncached) and output written`}
           >
             in {formatRate(speed.in)} t/s · out {formatRate(speed.out)} t/s ·
           </span>
