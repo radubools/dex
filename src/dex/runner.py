@@ -1164,6 +1164,7 @@ class TaskRunner:
                 datasets_dir=self.config.project_datasets(self.task.project),
                 skills=self._enabled_skills(),
                 linked=self._linked_sources(),
+                focus=await self._thread_skill(),
             )
 
         # Tests switched off by whoever started it (a game chat's switch),
@@ -1810,6 +1811,17 @@ class TaskRunner:
             await self.store.set_session(self.task.id, session_id)
         except Exception:
             log.exception("could not record session for %s", self.task.id)
+
+    async def _thread_skill(self) -> str | None:
+        """The skill of the thread this task runs in, if any (design/26)."""
+        if not self.task.thread_id:
+            return None
+        try:
+            thread = await ThreadStore(self.store.db).get(self.task.thread_id)
+        except Exception:
+            log.exception("could not read the thread of %s", self.task.id)
+            return None
+        return thread.skill if thread else None
 
     def _enabled_skills(self) -> list[tuple[str, str, str, bool]]:
         """Every enabled skill: name, description, directory, and whether it

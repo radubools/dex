@@ -223,7 +223,9 @@ def test_a_turn_runs_the_model_at_its_effort_and_resumes_the_session() -> None:
     client = _client(None)
     args = client._args("hello")
     assert args[args.index("-m") + 1] == "opencode-go/qwen3.8-flash#medium"
-    assert args[-2:] == ["--", "hello"] and "--session" not in args
+    # The message goes in on stdin, never as an argument (OpenCode 2.2 recorded
+    # an argument message twice).
+    assert "hello" not in args and "--" not in args and "--session" not in args
     client.session = "ses_9"
     assert args != client._args("again") and "ses_9" in client._args("again")
 

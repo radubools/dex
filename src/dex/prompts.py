@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 #: The guide every project shares, at the workspace root. Not `AGENTS.md`
@@ -438,6 +439,50 @@ def power_prompt(problem: str, task_dir: Path, workspace: Path) -> str:
     )
 
 
+def skills_listing(skills: list[tuple[str, str, str, bool]], focus: str | None = None) -> tuple[str, str | None]:
+    """The skills list of a brief, and the directory its `<skills>` stands for.
+
+    A task's skills are its own copies, under a directory named after the
+    task, so their paths are written against `<skills>` (said once, at the
+    end of the brief): the list is then the same for every task of a thread,
+    and a model server's prompt cache keeps it. With a `focus` (the thread's
+    skill), that skill and the ones its `SKILL.md` mentions get their line;
+    the others are named, with where to read them if the work turns to one.
+    """
+    if not skills:
+        return "", None
+    parents = {str(Path(path).parent) for _, _, path, _ in skills}
+    root = parents.pop() if len(parents) == 1 and Path(skills[0][2]).parent.name == "work" else None
+
+    def where(name: str, path: str) -> str:
+        return f"<skills>/{name}" if root else path
+
+    names = {name for name, *_ in skills}
+    described = names
+    if focus in names:
+        path = next(p for n, _, p, _ in skills if n == focus)
+        try:
+            guide = (Path(path) / "SKILL.md").read_text()
+        except OSError:
+            guide = ""
+        described = {focus} | {n for n in names if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", guide)}
+    lines = [
+        f"- `{name}` — {description}\n"
+        f"  Read `{where(name, path)}/SKILL.md`."
+        + (f" Promote a helper into `{where(name, path)}/utils/`." if has_utils else "")
+        for name, description, path, has_utils in skills
+        if name in described
+    ]
+    others = [(name, path) for name, _, path, _ in skills if name not in described]
+    if others:
+        lines.append(
+            "\nAlso enabled, for work outside this thread's own (read its `SKILL.md` first\n"
+            "if the work turns to one): "
+            + ", ".join(f"`{name}` (`{where(name, path)}`)" for name, path in others) + "."
+        )
+    return "\n".join(lines), root
+
+
 def generation_prompt(
     *,
     problem: str,
@@ -453,6 +498,9 @@ def generation_prompt(
     #: on the machine. Named in the brief because a task that has to discover
     #: them spends turns on it, and one that never does ignores the material.
     linked: list[tuple[str, str]] | None = None,
+    #: The skill of the thread the task runs in, if it has one: that skill,
+    #: and those its `SKILL.md` names, are described; the rest only named.
+    focus: str | None = None,
 ) -> str:
     """The full brief for one task.
 
@@ -525,6 +573,12 @@ def generation_prompt(
     #
     # The description is therefore load-bearing: it is the only thing the agent
     # sees when deciding whether to look further.
+    listed, skills_root = skills_listing(skills or [], focus)
+    skills_note = (
+        f"\n`<skills>` in the skills list above is `{skills_root}`: this task's own copies\n"
+        "of the skills, the ones to read and to promote a helper into.\n"
+        if skills_root else ""
+    )
     skills_block = (
         "\n**Skills enabled for this project.** Each is a capability with its"
         " own\ninstructions. The line here is a summary; `SKILL.md` is the"
@@ -533,12 +587,7 @@ def generation_prompt(
         " importing one\nof its modules or changing anything in it. It says"
         " what the modules are for,\nwhat they will not do, and what to know"
         " before touching them.\n\n"
-        + "\n".join(
-            f"- `{name}` — {description}\n"
-            f"  Read `{path}/SKILL.md`."
-            + (f" Promote a helper into `{path}/utils/`." if has_utils else "")
-            for name, description, path, has_utils in skills
-        )
+        + listed
         + "\n\n`utils/` in the project is materialised from these. Never write"
         " there:\nthe next materialise erases it, and the skill it should have"
         " joined never\nlearns it exists. Write to the path above, exactly as"
@@ -633,22 +682,25 @@ them, how you checked it, what you moved into `utils/` (or why you did not),
 and anything you deliberately left alone.
 """
 
+    # The brief runs from what every task in this project shares to what is
+    # this task's alone, so that a model server's prompt cache (a local model
+    # keeps the start of each prompt it has read) reads the long common part
+    # once per project, not once per task: everything above `# Request` is
+    # word for word the same for every task of a thread. The task's
+    # directory, its skills' copies and the request come last.
     return f"""\
 {guide}
-# Request
+# How a task works here
 
-{problem}
-
-# Where it goes
-
-**Your working directory is `{task_dir}`.** Every command starts there, so a
-relative path is already inside your package and that is the simplest way to
-work. It exists; you do not need to create it.
+**Your working directory is named at the end of this brief**, under "This
+task". Every command starts there, so a relative path is already inside your
+package and that is the simplest way to work. It exists; you do not need to
+create it.
 
 Use `{python}` for every command — it is the environment the project's tooling
 is installed in.
 
-`{task_dir}` is the only thing you may change. A tool that writes where it is
+Your working directory is the only thing you may change. A tool that writes where it is
 run — `manim` on its own is the usual one — writes inside your directory, which
 is correct. Reach for an absolute path outside it to *write* and you are
 somewhere you should not be.
@@ -728,8 +780,8 @@ outside your directory, and it is narrow:{no_skills_note}
   is ruled out: write it in your package, and never edit that list yourself.
 
 Outside that protocol, nothing beyond
-`{task_dir}` is yours to write.
-{existing_note}{"" if manim_available else _ANIMATION_UNAVAILABLE}
+your working directory is yours to write.
+{"" if manim_available else _ANIMATION_UNAVAILABLE}
 # Finish
 
 When everything the project instructions ask for exists and every check you can
@@ -744,6 +796,16 @@ Then reply with a short summary of what you produced and how you verified it.
 Say what you moved into `utils/` and how you re-checked it afterwards — or, if
 sharing was off or a write was declined, what you would have shared — and
 mention anything you could not complete and why.
+
+# Request
+
+{problem}
+
+# This task
+
+**Your working directory is `{task_dir}`.** Write there and only there.
+{skills_note}{existing_note}
+When the request is done, finish as "Finish" above says.
 """
 
 

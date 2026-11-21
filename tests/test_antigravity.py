@@ -222,3 +222,20 @@ def test_edit_file_and_summaries() -> None:
         "Edit", {"file_path": "/work/task/b.txt", "old_string": "WORLD", "new_string": "THERE"})
     assert claude_shape("run_command", {"CommandLine": "wc -c a", "toolSummary": "Count bytes"}, CWD)[1][
         "description"] == "Count bytes"
+
+
+def test_the_relay_takes_the_session_directory_out_of_the_system_prompt() -> None:
+    from dex.antigravity import steady_system
+
+    def request(cwd: str) -> dict:
+        return {"messages": [
+            {"role": "system", "content": f"Tools...\n<env>\n  Working directory: {cwd}\n  Workspace root folder: {cwd}\n  Platform: darwin\n</env>"},
+            {"role": "user", "content": f"Working directory: {cwd} stays in a message"}]}
+
+    one, two = request("/a/task-1"), request("/a/task-2")
+    assert steady_system(one) and steady_system(two)
+    assert one["messages"][0] == two["messages"][0]
+    assert "  Working directory: named in the task's brief" in one["messages"][0]["content"]
+    assert "Platform: darwin" in one["messages"][0]["content"]
+    assert one["messages"][1]["content"].endswith("task-1 stays in a message")
+    assert not steady_system(one) and not steady_system({"prompt": "x"})

@@ -370,6 +370,8 @@ class Bridge:
             sent = json.loads(body) if body else {}
         except ValueError:
             sent = {}
+        if steady_system(sent):
+            body = json.dumps(sent, ensure_ascii=False).encode()
         watch = isinstance(sent, dict) and bool(sent.get("stream")) and bool(sent.get("tools"))
         hop = {b"host", b"content-length", b"transfer-encoding", b"connection", b"accept-encoding"}
         headers = [(k.decode(), v.decode()) for k, v in scope.get("headers") or [] if k.lower() not in hop]
@@ -414,6 +416,40 @@ class Bridge:
                 await asyncio.wait_for(self._serving, 5)
         with contextlib.suppress(Exception):
             await self._stack.aclose()
+
+
+#: The lines of OpenCode's system prompt that name the session's directory.
+#: They sit before its tool list and dex's whole brief, so they made every
+#: task's prompt differ from the others' a few thousand tokens in.
+_SESSION_DIR = re.compile(r"^(\s*(?:Working directory|Workspace root folder)): .+$", re.MULTILINE)
+
+
+def steady_system(sent: Any) -> bool:
+    """Takes the session's directory out of a chat request's system prompt, in
+    place, and says whether it changed anything.
+
+    A local model's server keeps the start of the prompts it has read and
+    reads again only from where a new prompt differs: with the directory out,
+    the system prompt and the tools, and the part of dex's brief every task of
+    a thread shares, are read once rather than once per task. The brief names
+    the directory itself, at its end."""
+    messages = sent.get("messages") if isinstance(sent, dict) else None
+    if not isinstance(messages, list):
+        return False
+    changed = False
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "system":
+            continue
+        content = message.get("content")
+        parts = [message] if isinstance(content, str) else [
+            p for p in content if isinstance(p, dict) and isinstance(p.get("text"), str)
+        ] if isinstance(content, list) else []
+        key = "content" if isinstance(content, str) else "text"
+        for part in parts:
+            steady = _SESSION_DIR.sub(r"\1: named in the task's brief", part[key])
+            if steady != part[key]:
+                part[key], changed = steady, True
+    return changed
 
 
 def _read_sse(line: bytes, on_stream: Callable[..., None]) -> None:

@@ -529,6 +529,7 @@ class OpencodeClient:
         self._announced = False
         #: How the turn's process is started, for a start that stalls.
         self._launch: tuple[list[str], dict[str, str]] = ([], {})
+        self._stdin = b""
 
     @property
     def _startup_timeout(self) -> float:
@@ -572,9 +573,7 @@ class OpencodeClient:
 
     def _args(self, prompt: str) -> list[str]:
         return [str(cli()), "run", "--standalone", "--format", "json", "--thinking", "--agent", AGENT,
-                "-m", self.model_ref, *(["--session", self.session] if self.session else []),
-                # The prompt is the message, never a flag, whatever it starts with.
-                "--", prompt]
+                "-m", self.model_ref, *(["--session", self.session] if self.session else [])]
 
     async def _end_process(self) -> None:
         proc, self._proc = self._proc, None
@@ -613,16 +612,29 @@ class OpencodeClient:
                     # OpenCode takes its directory from PWD, not the process's.
                     "PWD": str(self.cwd)})
         self._launch = (self._args(prompt), env)
+        # The message goes in on stdin, as it is. Given as arguments (after
+        # `--`, so that one starting with a dash is not read as a flag),
+        # OpenCode 2.2 recorded it twice, each copy in quotes: every task's
+        # brief was sent to the model twice over.
+        self._stdin = prompt.encode()
         self._proc = await self._start()
         self._runner = asyncio.create_task(self._run(self._proc), name="dex-opencode-run")
 
     async def _start(self) -> asyncio.subprocess.Process:
         args, env = self._launch
-        return await asyncio.create_subprocess_exec(
+        message = self._stdin
+        proc = await asyncio.create_subprocess_exec(
             *args, cwd=str(self.cwd), env=env, start_new_session=True,
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE if message else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=64 * 1024 * 1024,
         )
+        if message and proc.stdin is not None:
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                proc.stdin.write(message)
+                await proc.stdin.drain()
+            proc.stdin.close()
+        return proc
 
     async def interrupt(self) -> None:
         """Stop the turn under way: the process ends, the session stays."""

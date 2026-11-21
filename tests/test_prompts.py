@@ -393,3 +393,38 @@ def test_ideation_is_told_which_game_it_is_for():
     assert "`model-workshop`: `/games/model-workshop`" in told
     assert "game" not in ideation_prompt("Look.", Path("/ideas/ml"), Path("/assets/ml"), [])
 
+
+
+def test_the_brief_runs_from_what_tasks_share_to_what_is_the_tasks_own(tmp_path: Path) -> None:
+    """Everything before `# Request` is the same for every task of a thread, so
+    a local model's prompt cache reads it once (the task's directory, its
+    skills' copies and the request come last)."""
+    from dex.prompts import generation_prompt
+
+    def brief(task: str, request: str) -> str:
+        work = tmp_path / "skill-work" / task / "work"
+        for name in ("game-story", "game-voice", "game-sfx"):
+            (work / name).mkdir(parents=True, exist_ok=True)
+        (work / "game-story" / "SKILL.md").write_text("Stories ask `game-voice` for their captions.")
+        skills = [(n, f"{n} things", str(work / n), True) for n in ("game-story", "game-voice", "game-sfx")]
+        return generation_prompt(problem=request, task_dir=tmp_path / "proj" / task, python=Path("/py"),
+                                 manim_available=True, workspace=tmp_path, skills=skills, focus="game-story")
+
+    a, b = brief("t1", "Make story one"), brief("t2", "Make story two")
+    head_a, head_b = a.split("\n# Request\n")[0], b.split("\n# Request\n")[0]
+    assert head_a == head_b
+    assert "t1" not in head_a and "skill-work" not in head_a
+    tail = a.split("\n# Request\n")[1]
+    assert "Make story one" in tail and str(tmp_path / "proj" / "t1") in tail
+    assert f"`<skills>` in the skills list above is `{tmp_path / 'skill-work' / 't1' / 'work'}`" in tail
+    # The thread's skill and those its SKILL.md names are described; the rest named.
+    assert "- `game-story` — game-story things" in head_a and "- `game-voice` — game-voice things" in head_a
+    assert "game-sfx things" not in head_a and "`game-sfx` (`<skills>/game-sfx`)" in head_a
+    assert "# Finish" in head_a
+
+
+def test_without_a_thread_skill_every_skill_is_described() -> None:
+    from dex.prompts import skills_listing
+
+    listed, root = skills_listing([("a", "does a", "/s/a/v1", False), ("b", "does b", "/s/b/v2", False)])
+    assert root is None and "does a" in listed and "does b" in listed and "/s/a/v1/SKILL.md" in listed
