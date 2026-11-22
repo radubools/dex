@@ -217,6 +217,8 @@ def test_token_rates_and_tflops_come_from_counter_deltas():
     clock = iter([100.0, 105.0])
 
     def metrics(request):
+        if request.url.path == "/slots":
+            return httpx.Response(200, json=[])
         p, o = next(counts)
         return httpx.Response(200, text=METRICS.format(p=p, o=o))
     backend = make_backend()
@@ -279,3 +281,40 @@ def test_gpu_busy_share_clock_and_ceiling():
     g = mac.gpu_state([("OFF", 100), ("P1", 0), ("P8", 300), ("P6", 600)], clocks, 40)
     assert g["active"] == 0.9 and g["mhz"] == round((1182 * 300 + 1056 * 600) / 900)
     assert g["ceiling_tflops"] == round(40 * 128 * 2 * g["mhz"] * 1e6 / 1e12, 1)
+
+
+def test_running_requests_count_before_they_finish():
+    slots = [{"id": 0, "is_processing": True, "n_prompt_tokens_processed": 5000,
+              "next_token": [{"n_decoded": 0}]},
+             {"id": 1, "is_processing": True, "n_prompt_tokens_processed": 300, "next_token": [{"n_decoded": 40}]},
+             {"id": 2, "is_processing": False}]
+    assert proxy.in_progress(slots) == {"prompt_tokens_total": 5300.0, "tokens_predicted_total": 40.0}
+
+
+def test_a_request_finishing_moves_its_count_without_a_jump():
+    """5 s apart: a prefill goes 2000 -> 4000 tokens; a decode at 90 tokens finishes at 100."""
+    reads = iter([
+        (dict(p=10000, o=500), [{"is_processing": True, "n_prompt_tokens_processed": 2000},
+                                {"is_processing": True, "n_prompt_tokens_processed": 50, "next_token": [{"n_decoded": 90}]}]),
+        (dict(p=10050, o=600), [{"is_processing": True, "n_prompt_tokens_processed": 4000}]),
+    ])
+    current = {}
+
+    def server(request):
+        if request.url.path == "/metrics":
+            current["c"], current["s"] = next(reads)
+            return httpx.Response(200, text=METRICS.format(**current["c"]))
+        return httpx.Response(200, json=current["s"])
+    clock = iter([0.0, 5.0])
+    backend = make_backend()
+    backend.http = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    backend.state = "awake"
+    machine = proxy.Machine.__new__(proxy.Machine)
+    machine.backend, machine.gflop_per_token, machine.counters = backend, 0.0, None
+    machine.clock = lambda: next(clock)
+
+    async def run():
+        await machine._rates()
+        return await machine._rates()
+    # prompt: (10050 + 4000) - (10000 + 2050) = 2000 in 5 s; output: 600 - (500 + 90) = 10 in 5 s
+    assert asyncio.run(run()) == {"in_tps": 400.0, "out_tps": 2.0}

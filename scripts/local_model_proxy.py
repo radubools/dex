@@ -20,7 +20,7 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
   - dram: average and p95 DRAM bandwidth, read, write and total, and gpu: its busy share,
     clock and the FP16 ceiling at that clock (scripts/mac_metrics.py, IOReport, no root);
   - tokens: the server's prompt and output tokens per second, from llama-server's `/metrics`
-    counters (start it with `--metrics`), and the FP16 work they take in TFLOPS when the
+    counters (start it with `--metrics`) plus its running requests' progress in `/slots`, and the FP16 work they take in TFLOPS when the
     model's entry in ~/.dex/local-models.json gives `active_params_b`. llama.cpp dequantizes
     quantized weights to FP16 in its kernels, so its work is FLOPs, not integer TOPS.
   While requests are in flight each snapshot is logged as a `machine:` line.
@@ -116,8 +116,24 @@ _COUNTER = re.compile(r"^llamacpp:(prompt_tokens_total|tokens_predicted_total)\s
 
 
 def parse_counters(metrics: str) -> dict[str, float]:
-    """llama-server's Prometheus token counters (`--metrics`): prompt tokens read, tokens written."""
+    """llama-server's Prometheus token counters (`--metrics`): prompt tokens read, tokens written.
+    It adds a request to them only once the request finishes."""
     return {k: float(v) for k, v in _COUNTER.findall(metrics)}
+
+
+def in_progress(slots: list) -> dict[str, float]:
+    """What the requests still running have done so far, from llama-server's `/slots`: prompt
+    tokens processed and tokens decoded, keyed like the counters. Finished totals plus this is
+    all the work done, and it grows while a request runs: when one finishes, its count moves
+    from here into the totals, so the sum neither drops nor counts it twice."""
+    prompt = decoded = 0.0
+    for s in slots if isinstance(slots, list) else []:
+        if isinstance(s, dict) and s.get("is_processing"):
+            prompt += float(s.get("n_prompt_tokens_processed") or 0)
+            nxt = s.get("next_token")
+            nxt = nxt[0] if isinstance(nxt, list) and nxt else nxt
+            decoded += float((nxt or {}).get("n_decoded") or 0) if isinstance(nxt, dict) else 0.0
+    return {"prompt_tokens_total": prompt, "tokens_predicted_total": decoded}
 
 
 def model_gflop_per_token(model: str, path: str | None = None) -> float:
@@ -167,8 +183,13 @@ class Machine:
             return None
         try:
             r = await self.backend.http.get(f"{self.backend.url}/metrics", timeout=3)
-            now = (self.clock(), parse_counters(r.text)) if r.status_code == 200 else None
-        except httpx.HTTPError:
+            done = parse_counters(r.text) if r.status_code == 200 else {}
+            running = {}
+            if done:
+                sr = await self.backend.http.get(f"{self.backend.url}/slots", timeout=3)
+                running = in_progress(sr.json()) if sr.status_code == 200 else {}
+            now = (self.clock(), {k: v + running.get(k, 0.0) for k, v in done.items()}) if done else None
+        except (httpx.HTTPError, ValueError):
             now = None
         if not now or not now[1]:
             return None
