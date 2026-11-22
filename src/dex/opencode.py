@@ -126,7 +126,7 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 #: server's /v1), served (its model name there), context, output, priced_as
 #: (the Go model whose list rates price its tokens), images (true when its
 #: server takes images), and optionally thinking and answer_tokens (see
-#: LOCAL_THINKING) and effort_fields}. dex's effort picks the run's variant, which carries its
+#: LOCAL_THINKING), effort_fields, and working, tool_output and compaction (see LOCAL_WORKING)}. dex's effort picks the run's variant, which carries its
 #: thinking budget and reply cap to the server. An entry with `"effort_fields": true`
 #: (a server that reads the OpenAI names, such as Splash) also sends the effort itself as
 #: `reasoning_effort` and the budget as `thinking_token_budget`. Offered only while its
@@ -150,6 +150,21 @@ LOCAL_ANSWER_TOKENS = 8192
 LOCAL_BUDGET_MESSAGE = ("\n\nThinking budget reached. Stop deliberating and act now: make the next tool call "
                         "(write the file, run the command), and refine it in later steps.\n")
 _local_up: dict[str, tuple[float, bool]] = {}
+#: How a local model is asked to work, after dex's instructions: in small steps that each
+#: change something, so its context fills with work done rather than with reads and plans,
+#: and a compaction (OpenCode's, when the context is full) loses less. An entry's
+#: `"working": false` leaves it out.
+LOCAL_WORKING = """How to work: in small steps, each one a change you can check.
+- Read only what your next change needs: search first (grep, glob), then read the part of a file you need (offset and limit), not whole large files.
+- Make each change as soon as you know it: write a first, working version of a file early, then grow it with small edits. Do not draft a whole file, or the whole plan, in your thinking before writing anything.
+- One change per reply, then check it (run it, validate it, test it) before the next.
+- Keep your thinking short: when you notice you are planning far ahead, stop and make the next tool call."""
+#: What one tool result may put in a local model's context (OpenCode's `tool_output`,
+#: 2,000 lines and 51,200 bytes by default): the rest is saved to a file it can read in parts.
+LOCAL_TOOL_OUTPUT = {"max_lines": 800, "max_bytes": 32768}
+#: The recent work a compaction keeps word for word under its summary (OpenCode's
+#: `compaction.keep.tokens`), so the session goes on from it rather than from the summary alone.
+LOCAL_COMPACTION = {"keep": {"tokens": 30000}}
 
 #: Offered before the plan's list has been read, or when it cannot be.
 FALLBACK_MODELS = [
@@ -523,6 +538,9 @@ class OpencodeClient:
         servers = options.mcp_servers if isinstance(options.mcp_servers, dict) else {}
         if self.system and servers:
             self.system += TOOLS_NOTE
+        local = _local(self.model) if is_local(self.model) else None
+        if local and local.get("working", True):
+            self.system = (self.system + "\n\n" if self.system else "") + LOCAL_WORKING
         # A local model's requests go through this run's bridge, which streams
         # its reasoning and text into dex as they arrive (OpenCode's run prints
         # a part only once it is whole).
@@ -597,6 +615,8 @@ class OpencodeClient:
             if self._bridge.relay and self._bridge.port:
                 provider["options"]["baseURL"] = self._bridge.url("llm")
             config["provider"] = {"local": provider}
+            config["tool_output"] = {**LOCAL_TOOL_OUTPUT, **(entry.get("tool_output") or {})}
+            config["compaction"] = {**LOCAL_COMPACTION, **(entry.get("compaction") or {})}
         return json.dumps(config)
 
     def _args(self, prompt: str) -> list[str]:

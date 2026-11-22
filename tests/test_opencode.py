@@ -325,6 +325,41 @@ def test_a_local_model_runs_on_the_local_provider_at_its_efforts_variant(local) 
     assert "provider" not in _json.loads(_client(None)._config())
 
 
+def _local_client(system: str = "the brief") -> OpencodeClient:
+    return OpencodeClient(SimpleNamespace(cwd=str(CWD), model="oc:local/qwen3.8-27b", effort="medium",
+                                          can_use_tool=None, system_prompt={"append": system}, resume=None,
+                                          mcp_servers={}, env={}, stderr=None))
+
+
+def test_a_local_model_is_asked_to_work_in_small_steps_after_dex_s_instructions(local) -> None:
+    client = _local_client()
+    assert client.system.startswith("the brief") and client.system.endswith(opencode.LOCAL_WORKING)
+    assert _local_client("").system == opencode.LOCAL_WORKING
+    # A Go model is not.
+    assert opencode.LOCAL_WORKING not in _client(None).system
+
+
+def test_an_entry_can_leave_the_small_steps_guidance_out(local, tmp_path: Path) -> None:
+    import json as _json
+    opencode.LOCAL_FILE.write_text(_json.dumps([{**LOCAL_27B, "working": False}]))
+    assert _local_client().system == "the brief"
+
+
+def test_a_local_models_run_caps_tool_output_and_keeps_a_tail_through_compaction(local) -> None:
+    import json as _json
+    config = _json.loads(_local_client()._config())
+    assert config["tool_output"] == opencode.LOCAL_TOOL_OUTPUT
+    assert config["compaction"] == {"keep": {"tokens": 30000}}
+    opencode.LOCAL_FILE.write_text(_json.dumps([{**LOCAL_27B, "tool_output": {"max_bytes": 1000},
+                                                 "compaction": {"auto": False}}]))
+    config = _json.loads(_local_client()._config())
+    assert config["tool_output"] == {"max_lines": 800, "max_bytes": 1000}
+    assert config["compaction"] == {"keep": {"tokens": 30000}, "auto": False}
+    # A Go model's run leaves OpenCode's own limits.
+    plain = _json.loads(_client(None)._config())
+    assert "tool_output" not in plain and "compaction" not in plain
+
+
 def test_a_local_model_is_priced_at_its_go_models_rates(local) -> None:
     assert opencode.rates("oc:local/qwen3.8-27b") == opencode.rates("oc:qwen3.8-flash")
 
