@@ -458,7 +458,8 @@ def _summary(chat_id: str, members: list[Task], costs: dict[str, float]) -> dict
 
 def _merge(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Fewer events, same feed: runs of deltas for one block become one delta,
-    and only the last cost tick of a run is kept. Tool output is trimmed."""
+    and only the last cost tick (or machine reading) of a run is kept. Tool
+    output is trimmed."""
     out: list[dict[str, Any]] = []
     for e in events:
         prev = out[-1] if out else None
@@ -467,7 +468,7 @@ def _merge(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             prev["delta"] = prev.get("delta", "") + e.get("delta", "")
             prev["seq"] = e["seq"]
             continue
-        if kind == "cost" and prev and prev.get("type") == "cost" and prev.get("taskId") == e.get("taskId"):
+        if kind in ("cost", "machine") and prev and prev.get("type") == kind and prev.get("taskId") == e.get("taskId"):
             out[-1] = e
             continue
         if kind == "tool_result" and isinstance(e.get("output"), str) and len(e["output"]) > MAX_OUTPUT:

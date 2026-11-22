@@ -199,6 +199,7 @@ export type DexEvent = Base &
         /** Timed tokens and their seconds for this change (throughput.py). */
         throughput?: { in: number; inS: number; out: number; outS: number }
       }
+    | ({ type: 'machine' } & MachineReading)
     | { type: 'task_message'; message: TaskMessage }
     | { type: 'task_message_delivered'; count: number; startedTaskId: string }
     | { type: 'thread_message'; threadId: string; message: ThreadMessage }
@@ -223,6 +224,23 @@ export type DexEvent = Base &
     | { type: 'error'; message: string; fatal?: boolean }
     | { type: 'thread_busy'; threadId: string; busy: boolean }
   )
+
+/**
+ * What dex's local model proxy read of the Mac and its model server while a
+ * task's model ran (scripts/local_model_proxy.py, a `machine` event). Every
+ * part can be missing: a Mac without IOReport has no DRAM or GPU figures, a
+ * server without `--metrics` no token rates.
+ */
+export type MachineReading = {
+  /** Watts in from the power adapter, the estimate at the wall, and the battery's flow (+ while charging). */
+  power?: { adapter_w?: number; wall_w?: number; battery_w?: number; adapter_rating_w?: number | null; fresh_s?: number }
+  /** DRAM bandwidth in GB/s: the interval's average, and the band its 95th percentile reached. */
+  dram?: Partial<Record<'read' | 'write' | 'total', { avg_gbs: number; p95_gbs: number }>>
+  /** The GPU's busy share (0-1), its clock while busy, and the FP16 rate that clock allows. */
+  gpu?: { active?: number; mhz?: number; ceiling_tflops?: number; busy_ceiling_tflops?: number }
+  /** The model server's tokens per second over all its requests, and the FP16 work they take. */
+  tokens?: { in_tps?: number; out_tps?: number; tflops?: number } | null
+}
 
 export type AssetKind =
   | 'code' | 'markdown' | 'manifest' | 'animation' | 'image' | 'video'

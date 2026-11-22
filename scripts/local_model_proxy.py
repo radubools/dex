@@ -15,8 +15,9 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
 - `GET /proxy/power` (also in `/proxy/status` as `machine`) is a snapshot, taken every
   POWER_EVERY seconds (`--power-every`, default 5; 0 reads on request instead), of:
   - power: what comes in from the power adapter, the estimate at the wall, and the battery's
-    share, from the battery controller (`ioreg`, no root). macOS refreshes these about once a
-    minute, so `fresh_s` says how long ago the reading last changed;
+    flow (positive while it charges, negative while it helps power the Mac), from the battery
+    controller (`ioreg`, no root). macOS refreshes these about once a minute, so `fresh_s` says
+    how long ago the reading last changed;
   - dram: average and p95 DRAM bandwidth, read, write and total, and gpu: its busy share,
     clock and the FP16 ceiling at that clock (scripts/mac_metrics.py, IOReport, no root);
   - tokens: the server's prompt and output tokens per second, from llama-server's `/metrics`
@@ -24,6 +25,11 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
     model's entry in ~/.dex/local-models.json gives `active_params_b`. llama.cpp dequantizes
     quantized weights to FP16 in its kernels, so its work is FLOPs, not integer TOPS.
   While requests are in flight each snapshot is logged as a `machine:` line.
+- every chat completion it forwards carries the latest snapshot as an extra `dex_machine`
+  field: in a stream, on the first `data:` chunk, on any chunk once a newer snapshot exists,
+  and on the closing one (a finish reason or usage); in a JSON reply, at its top level.
+  OpenAI-compatible clients ignore fields they do not know; dex's bridge reads it (dex_machine
+  in antigravity.py) and shows it in the task's activity.
 
     python local_model_proxy.py --serve ~/.dex/vllm-qwen27b.sh --model qwen3.8-27b
 
@@ -44,6 +50,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -70,8 +77,10 @@ def parse_power(ioreg: str) -> dict | None:
     """The power fields of `ioreg -rw0 -c AppleSmartBattery`, in watts, or None off a battery Mac.
 
     `adapter_w` is what comes in from the power adapter (SystemPowerIn); `wall_w` adds the
-    adapter's own loss; `battery_w` is the battery's flow, positive when it powers the Mac and
-    negative when it charges (ioreg prints the signed value as unsigned 64-bit)."""
+    adapter's own loss; `battery_w` is the battery's flow, positive while it charges (from the
+    adapter's watts) and negative while it helps power the Mac (ioreg prints the signed value as
+    unsigned 64-bit). Seen on an M4 Max: +9.2 W with pmset saying "charging", -1 to -6 W while
+    the battery slowly ran down from 80% to 75% under load."""
     fields = {k: int(v) for k, v in _FIELD.findall(ioreg)}
     if "SystemPowerIn" not in fields:
         return None
@@ -87,6 +96,15 @@ def parse_power(ioreg: str) -> dict | None:
         "amps": round(fields.get("SystemCurrentIn", 0) / 1000, 2),
         "adapter_rating_w": int(rating.group(1)) if rating else None,
     }
+
+
+def battery_text(watts: float) -> str:
+    """'battery charging 9.2 W', 'battery discharging 1.2 W' or 'battery idle'."""
+    if watts > 0:
+        return f"battery charging {watts:.1f} W"
+    if watts < 0:
+        return f"battery discharging {-watts:.1f} W"
+    return "battery idle"
 
 
 class Power:
@@ -219,7 +237,7 @@ class Machine:
         parts = []
         if p := s.get("power"):
             parts.append(f"{p['adapter_w']:.1f} W from the adapter (~{p['wall_w']:.1f} W at the wall), "
-                         f"battery {p['battery_w']:+.1f} W (reading {p['fresh_s']} s old)")
+                         f"{battery_text(p['battery_w'])} (reading {p['fresh_s']} s old)")
         if (d := s.get("dram")) and "total" in d:
             parts.append(f"DRAM {d['total']['avg_gbs']:.0f} GB/s (read {d.get('read', {}).get('avg_gbs', 0):.0f}, "
                          f"write {d.get('write', {}).get('avg_gbs', 0):.0f}, p95 {d['total']['p95_gbs']:.0f})")
@@ -368,6 +386,64 @@ class Done:
             self.backend.last = time.time()
 
 
+#: The field a chat completion carries the machine snapshot in; OpenAI-compatible clients
+#: ignore fields they do not know.
+MACHINE_FIELD = "dex_machine"
+#: A stream's closing chunk: it names a finish reason or carries the usage.
+_CLOSING = re.compile(rb'"finish_reason"\s*:\s*"|"usage"\s*:\s*\{')
+
+
+class Tagger:
+    """Adds the latest machine snapshot to a chat completion on its way to the client.
+
+    A stream gets it on its first `data:` chunk, on any chunk once a newer snapshot exists, and
+    on its closing chunk (one with a finish reason or usage), so a client that reads only the
+    end still sees it; a JSON reply gets it at its top level. Only whole lines are changed, so
+    a chunk boundary inside a line is kept until the line ends."""
+
+    def __init__(self, latest, stream: bool) -> None:
+        self.latest, self.stream = latest, stream
+        self.pending = b""
+        self.sent_at: object = None
+
+    def _tag(self, raw: bytes, force: bool = False) -> bytes:
+        snap = self.latest()
+        if not snap or (not force and snap.get("at") == self.sent_at):
+            return raw
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            return raw
+        if not isinstance(obj, dict):
+            return raw
+        obj[MACHINE_FIELD] = snap
+        self.sent_at = snap.get("at")
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()
+
+    def _line(self, line: bytes) -> bytes:
+        body = line.rstrip(b"\r")
+        if not body.startswith(b"data:") or body.strip().endswith(b"[DONE]"):
+            return line
+        payload = body[5:].strip()
+        closing = bool(_CLOSING.search(payload))
+        tagged = self._tag(payload, force=closing or self.sent_at is None)
+        return line if tagged is payload else b"data: " + tagged + line[len(body):]
+
+    def feed(self, chunk: bytes) -> bytes:
+        if not self.stream:
+            self.pending += chunk
+            return b""
+        self.pending += chunk
+        *lines, self.pending = self.pending.split(b"\n")
+        return b"".join(self._line(line) + b"\n" for line in lines)
+
+    def close(self) -> bytes:
+        rest, self.pending = self.pending, b""
+        if not self.stream:
+            return self._tag(rest, force=True) if rest else rest
+        return self._line(rest) if rest else rest
+
+
 class Forwarded(StreamingResponse):
     """The server's streamed reply. Ends the request's time in flight even when the client goes
     before the reply starts, when the body generator never runs and so never cleans up."""
@@ -445,10 +521,17 @@ def app_for(backend: Backend, power_every: float = 5, gflop_per_token: float = 0
             done()
             raise
 
+        kind = r.headers.get("content-type", "")
+        tag = (request.url.path.endswith("/chat/completions") and not r.headers.get("content-encoding")
+               and ("text/event-stream" in kind or "application/json" in kind))
+        tagger = Tagger(lambda: machine.latest, stream="text/event-stream" in kind) if tag else None
+
         async def body():
             try:
                 async for chunk in r.aiter_raw():
-                    yield chunk
+                    yield tagger.feed(chunk) if tagger else chunk
+                if tagger and (rest := tagger.close()):
+                    yield rest
             finally:
                 await r.aclose()
                 done()
@@ -471,13 +554,15 @@ def app_for(backend: Backend, power_every: float = 5, gflop_per_token: float = 0
                 logger.cancel()
             await backend.stop()
 
-    return Starlette(routes=[
+    app = Starlette(routes=[
         Route("/v1/models", models, methods=["GET"]),
         Route("/proxy/status", status, methods=["GET"]),
         Route("/proxy/power", power_now, methods=["GET"]),
         Route("/proxy/release", release, methods=["POST"]),
         Route("/{path:path}", forward, methods=["GET", "POST", "PUT", "DELETE", "PATCH"]),
     ], lifespan=lifespan)
+    app.state.machine = machine
+    return app
 
 
 def main() -> None:

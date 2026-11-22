@@ -60,6 +60,13 @@ AGENT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
 
 log = logging.getLogger("dex.runner")
 
+#: The parts of the local model proxy's machine snapshot a `machine` event keeps
+#: (scripts/local_model_proxy.py): power draw, DRAM bandwidth, the GPU's busy
+#: share and clock, and the server's tokens per second with their TFLOPS.
+MACHINE_KEYS = ("power", "dram", "gpu", "tokens")
+#: Fewest seconds between two `machine` events of one run.
+MACHINE_EVERY_S = 5.0
+
 #: Why a run that raised nothing can still have failed. A package task that
 #: ends its turn with an empty directory has not done its job, however calmly
 #: it said so — and the usual way to get here is an agent that decided to wait
@@ -268,6 +275,8 @@ class TaskRunner:
         self._message_raw: dict[str, dict[str, Any]] = {}
         #: Times each model call, for input and output tokens per second.
         self._meter = throughput.Meter()
+        #: When this run last emitted the local model proxy's machine snapshot.
+        self._machine_sent = 0.0
         #: When each streamed block's first delta came, by index.
         self._block_started: dict[tuple[Any, int], float] = {}
         #: The API message each lane is streaming, to file its final usage under.
@@ -1398,6 +1407,20 @@ class TaskRunner:
             self.task.activity = line
             self.set_state(TaskState.RUNNING)
 
+    def _machine(self, snapshot: Any) -> None:
+        """The local model proxy's latest reading of the Mac and its server
+        (power, DRAM, GPU, tokens per second), as a `machine` event for the task
+        panel: at most one per MACHINE_EVERY_S, since the proxy tags every reply
+        and a fresh reading comes only every few seconds."""
+        now = time.time()
+        if not isinstance(snapshot, dict) or now - self._machine_sent < MACHINE_EVERY_S:
+            return
+        keep = {k: snapshot[k] for k in MACHINE_KEYS if isinstance(snapshot.get(k), dict)}
+        if not keep:
+            return
+        self._machine_sent = now
+        self.emit("machine", **keep)
+
     async def _query(self, client: Any, prompt: str) -> None:
         """Start a turn: the model is given new input, after its process starts."""
         self._meter.boundary(time.time(), cold=True)
@@ -2219,6 +2242,9 @@ class TaskRunner:
             if message.subtype == "model_request":
                 # The local model relay saw a request go out: a new call.
                 self._meter.boundary(time.time())
+                return
+            if message.subtype == "machine":
+                self._machine(message.data)
                 return
             if message.subtype == "init":
                 session_id = message.data.get("session_id")

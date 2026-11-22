@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 from pathlib import Path
 
 import httpx
@@ -169,14 +170,18 @@ SAMPLE = ('"AdapterDetails"={"UsbHvcMenu"=({"Index"=0}),"AdapterVoltage"=20000,"
           '"BatteryPower"=18446744073709550398 "SystemVoltageIn"=19734 "SystemCurrentIn"=3757')
 
 
-def test_power_reads_the_adapter_the_wall_and_a_charging_battery():
+def test_power_reads_the_adapter_the_wall_and_a_discharging_battery():
     assert proxy.parse_power(SAMPLE) == {"adapter_w": 74.1, "wall_w": 76.4, "battery_w": -1.2, "volts": 19.73,
                                          "amps": 3.76, "adapter_rating_w": 94}
 
 
-def test_power_on_battery_is_positive_and_a_mac_without_one_reads_none():
-    assert proxy.parse_power('"SystemPowerIn"=20000 "BatteryPower"=20000')["battery_w"] == 20.0
+def test_a_charging_battery_is_positive_and_a_mac_without_one_reads_none():
+    # seen with pmset saying "charging"
+    assert proxy.parse_power('"SystemPowerIn"=20000 "BatteryPower"=9160')["battery_w"] == 9.2
     assert proxy.parse_power("") is None
+    assert proxy.battery_text(9.2) == "battery charging 9.2 W"
+    assert proxy.battery_text(-1.2) == "battery discharging 1.2 W"
+    assert proxy.battery_text(0) == "battery idle"
 
 
 def test_power_is_served_and_says_how_old_it_is(monkeypatch):
@@ -259,9 +264,83 @@ def test_a_snapshot_reads_as_one_log_line():
         "dram": {"read": {"avg_gbs": 109.1}, "write": {"avg_gbs": 26.5}, "total": {"avg_gbs": 127.3, "p95_gbs": 256.0}},
         "gpu": {"active": 0.995, "mhz": 1182, "busy_ceiling_tflops": 12.0},
         "tokens": {"in_tps": 0.0, "out_tps": 43.2, "tflops": 0.58}}, 2)
-    assert line == ("machine: 74.1 W from the adapter (~76.4 W at the wall), battery -1.2 W (reading 12 s old); "
+    assert line == ("machine: 74.1 W from the adapter (~76.4 W at the wall), battery discharging 1.2 W (reading 12 s old); "
                     "DRAM 127 GB/s (read 109, write 26, p95 256); GPU 100% busy at 1182 MHz (ceiling 12.0 TFLOPS); "
                     "0 t/s in, 43.2 t/s out, ~0.58 TFLOPS of FP16 work; 2 in flight")
+
+
+SNAP1 = {"at": 1, "power": {"adapter_w": 74.1}}
+SNAP2 = {"at": 2, "power": {"adapter_w": 80.0}}
+
+
+def sse(obj) -> bytes:
+    return b"data: " + json.dumps(obj).encode() + b"\n\n"
+
+
+def events(raw: bytes) -> list:
+    return [json.loads(line[5:]) for line in raw.split(b"\n")
+            if line.startswith(b"data:") and not line.strip().endswith(b"[DONE]")]
+
+
+def test_a_stream_carries_the_snapshot_first_when_it_changes_and_at_its_end():
+    latest = {"v": SNAP1}
+    tagger = proxy.Tagger(lambda: latest["v"], stream=True)
+    first = sse({"choices": [{"delta": {"content": "Hel"}, "finish_reason": None}]})
+    # a chunk boundary inside the second event's line: kept until the line ends
+    second = sse({"choices": [{"delta": {"content": "lo"}, "finish_reason": None}]})
+    out = tagger.feed(first + second[:20]) + tagger.feed(second[20:])
+    latest["v"] = SNAP2
+    out += tagger.feed(sse({"choices": [{"delta": {"content": "!"}, "finish_reason": None}]}))
+    out += tagger.feed(sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}) + b"data: [DONE]\n\n")
+    out += tagger.close()
+    got = events(out)
+    assert [e["choices"][0]["delta"].get("content") for e in got] == ["Hel", "lo", "!", None]
+    assert [e.get("dex_machine", {}).get("at") for e in got] == [1, None, 2, 2]
+    assert out.endswith(b"data: [DONE]\n\n")
+
+
+def test_a_stream_with_no_snapshot_yet_passes_unchanged():
+    tagger = proxy.Tagger(lambda: None, stream=True)
+    raw = sse({"choices": [{"delta": {"content": "x"}}]}) + b": keep-alive\n\n"
+    assert tagger.feed(raw) + tagger.close() == raw
+
+
+def test_a_json_reply_carries_the_snapshot_at_its_top_level():
+    tagger = proxy.Tagger(lambda: SNAP1, stream=False)
+    raw = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode()
+    assert tagger.feed(raw[:7]) + tagger.feed(raw[7:]) == b""
+    out = json.loads(tagger.close())
+    assert out["choices"][0]["message"]["content"] == "hi" and out["dex_machine"] == SNAP1
+
+
+def test_a_forwarded_stream_is_tagged_and_other_paths_are_not():
+    def upstream(chunks: int = 3, delay: float = 0.0):
+        async def chat(request):
+            await request.body()
+
+            async def gen():
+                for i in range(chunks):
+                    yield sse({"choices": [{"delta": {"content": str(i)},
+                                            "finish_reason": "stop" if i == chunks - 1 else None}]})
+                yield b"data: [DONE]\n\n"
+            return StreamingResponse(gen(), media_type="text/event-stream")
+        return Starlette(routes=[Route("/v1/chat/completions", chat, methods=["POST"]),
+                                 Route("/v1/completions", chat, methods=["POST"])])
+    backend = make_backend(upstream())
+    app = proxy.app_for(backend, power_every=0)
+    app.state.machine.latest = SNAP1  # what the snapshot loop would hold
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://p") as c:
+            return ((await c.post("/v1/chat/completions", json={"stream": True})).content,
+                    (await c.post("/v1/completions", json={"stream": True})).content)
+    chat, other = asyncio.run(run())
+    got = events(chat)
+    assert [e["choices"][0]["delta"]["content"] for e in got] == ["0", "1", "2"]
+    assert [e.get("dex_machine", {}).get("at") for e in got] == [1, None, 1]  # first and closing chunk
+    assert chat.endswith(b"data: [DONE]\n\n")
+    assert all("dex_machine" not in e for e in events(other))  # only chat completions
+    assert backend.active == 0
 
 
 mspec = importlib.util.spec_from_file_location("mac_metrics", SCRIPT.parent / "mac_metrics.py")

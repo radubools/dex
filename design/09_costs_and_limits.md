@@ -325,3 +325,22 @@ Before this, `task_usage.output_tokens` for Claude held each message's output
 as its first block began (a few percent of the real count); the backfill scales
 a Claude task's output up to its result's total where that total is its own.
 
+
+### The machine behind a local model
+
+A local model (`oc:local/…`) runs behind `scripts/local_model_proxy.py`, which
+reads the Mac and its model server every few seconds: power from the adapter
+and the battery's flow, DRAM bandwidth and the GPU's busy share and clock
+(`scripts/mac_metrics.py`, IOReport, no root), the server's tokens per second
+and the FP16 work they take. Every chat completion it forwards carries the
+latest reading as an extra `dex_machine` field (on a stream's first chunk, any
+chunk once a newer reading exists, and its closing chunk), which
+OpenAI-compatible clients ignore. The run's bridge reads it
+(`antigravity._read_sse`), OpenCode's client hands it to the runner as a
+`machine` system message, and the runner records a `machine` event at most
+every 5 s (`MACHINE_EVERY_S`).
+
+The task panel's first header item opens them, one figure a line
+(`web/src/machine.ts`): a local model's popup always has every line, a dash
+where a value is missing; a cloud model's only the lines it has (its tokens
+per second), and no button with nothing to show.

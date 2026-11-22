@@ -965,6 +965,31 @@ body.resizing iframe { pointer-events: none; }
 .cost-card-speed { font-size: 10px; margin: 0 0 3px; white-space: nowrap; }
 .cost-card-speed.indent { padding-left: 14px; margin: 0 0 2px; }
 .throughput { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Read to a screen reader, not shown; also tells IconTips a button has words. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+/* The machine behind a task's model, first in its header row (MachineButton). */
+.machine { position: relative; display: inline-flex; }
+.machine-btn {
+  min-width: 28px; min-height: 24px; padding: 0 6px; border-radius: 999px; line-height: 1;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: 13px;
+}
+.machine-btn[aria-expanded="true"], .machine-btn:hover { border-color: var(--accent); }
+.machine-pop {
+  position: absolute; z-index: 50; top: calc(100% + 6px); left: 0;
+  /* A phone's width, less the panel's own padding. */
+  width: max-content; max-width: min(380px, calc(100vw - 28px));
+  padding: 8px 10px; border-radius: 10px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--panel); border: 1px solid var(--line); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.machine-line { display: flex; gap: 8px; align-items: baseline; }
+.machine-line .machine-emoji { width: 1.4em; text-align: center; flex: none; }
+/* A long line wraps under its own text, past the emoji, rather than being cut. */
+.machine-line .machine-text { min-width: 0; overflow-wrap: anywhere; }
+.machine-line.missing { color: var(--muted); }
 .cost-chart .tick { fill: var(--muted); font-size: 9px; text-anchor: middle; }
 
 .legend { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

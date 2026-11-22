@@ -483,9 +483,16 @@ def steady_system(sent: Any) -> bool:
     return changed
 
 
+#: The field dex's local model proxy (scripts/local_model_proxy.py) adds to a
+#: chat completion's chunks: what the Mac and the model's server are doing.
+MACHINE_FIELD = "dex_machine"
+
+
 def _read_sse(line: bytes, on_stream: Callable[..., None]) -> None:
     """One line of an OpenAI-style chat completion stream: its reasoning and
-    text deltas, to `on_stream("reasoning" | "text", delta)`."""
+    text deltas, to `on_stream("reasoning" | "text", delta)`, and the machine
+    snapshot the local model proxy adds (power, DRAM, GPU, tokens per second),
+    to `on_stream("machine", snapshot)`."""
     line = line.strip()
     if not line.startswith(b"data:") or line.endswith(b"[DONE]"):
         return
@@ -493,6 +500,11 @@ def _read_sse(line: bytes, on_stream: Callable[..., None]) -> None:
         event = json.loads(line[5:])
     except ValueError:
         return
+    if not isinstance(event, dict):
+        return
+    machine = event.get(MACHINE_FIELD)
+    if isinstance(machine, dict):
+        on_stream("machine", machine)
     for choice in event.get("choices") or []:
         delta = choice.get("delta") or {}
         thought = delta.get("reasoning_content") or delta.get("reasoning")

@@ -12,6 +12,7 @@ import type { Routed, SourceAnchor, Task, TaskMessage, TaskState } from '../type
 const WORKING_STATES = new Set<TaskState>(['queued', 'running', 'awaiting_input', 'paused', 'blocked'])
 import { Attachments, namesOf, type Attached } from './Attachments'
 import { ErrorNote } from './ErrorNote'
+import { MachineButton } from './MachineButton'
 import { Prose } from './Prose'
 import { AssetExplorer } from './AssetExplorer'
 import type { ViewerTarget } from './Viewer'
@@ -139,6 +140,7 @@ export function TaskPanel({
       <div className="panel-meta">
         {/* Which run this is, since the package's name heads the pane. */}
         {embedded && <span className="embedded-title" title={task.title}>{task.title}</span>}
+        <MachineButton model={task.model} machine={view.machine} speed={latest > 0 ? speed : { in: null, out: null }} />
         <span className={`badge ${task.state}`}>{task.state.replace('_', ' ')}</span>
         <span className="muted small">{label}</span>
         {task.turns != null && <span className="muted small">{task.turns} turns</span>}

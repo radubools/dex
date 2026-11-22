@@ -724,9 +724,15 @@ class OpencodeClient:
         self._messages.put_nowait(StreamEvent(
             uuid=f"oc-{self.session}-{self._turn_started}", session_id=self.session or "", event=event))
 
-    def _stream(self, kind: str, delta: str = "") -> None:
+    def _stream(self, kind: str, delta: Any = "") -> None:
         """A local model's tokens as they arrive (the bridge's relay): reasoning
-        and text, each as a streamed block, closed when its reply ends."""
+        and text, each as a streamed block, closed when its reply ends. The
+        proxy's machine snapshot (power, DRAM, GPU, tokens per second) goes to
+        the runner as a `machine` system message."""
+        if kind == "machine":
+            if isinstance(delta, dict):
+                self._messages.put_nowait(SystemMessage(subtype="machine", data=delta))
+            return
         if kind in ("start", "end"):
             self._close_stream()
             if kind == "start":

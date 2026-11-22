@@ -105,6 +105,9 @@ EventType = Literal[
     "tags",
     #: A package's order of magnitude changed, because a task wrote to it (changes.py).
     "package_sizes",
+    #: The local model proxy's reading of the Mac and its server while a task's
+    #: model runs: power, DRAM, GPU, tokens per second (runner._machine).
+    "machine",
     "result",
     "error",
 ]

@@ -1,4 +1,4 @@
-import type { DexEvent, Task, TaskMessage, TaskState, ThreadMessage } from './types'
+import type { DexEvent, MachineReading, Task, TaskMessage, TaskState, ThreadMessage } from './types'
 import { trimmed, type SpeedSample } from './throughput'
 
 /** One entry in a task's activity feed. */
@@ -23,6 +23,8 @@ export type TaskView = {
   assets: string[]
   /** Its model calls' timed tokens over the last minute, for tokens per second. */
   speed?: SpeedSample[]
+  /** The local model proxy's latest reading of the machine (a `machine` event), and when it came. */
+  machine?: MachineReading & { ts: number }
 }
 
 export type State = {
@@ -303,6 +305,12 @@ function applyEvent(state: State, event: DexEvent): State {
         turns: event.turns,
         costUsd: event.costUsd,
         summary: event.summary,
+      })
+
+    // The machine's latest reading while a local model runs; not a feed entry.
+    case 'machine':
+      return next({
+        machine: { ts: event.ts, power: event.power, dram: event.dram, gpu: event.gpu, tokens: event.tokens },
       })
 
     // Cost ticks up while the task runs; it is not a feed entry.
