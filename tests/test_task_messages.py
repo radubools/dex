@@ -152,3 +152,94 @@ async def test_a_note_on_an_already_finished_task_is_delivered_at_once(manager, 
 
 async def test_messages_for_an_unknown_task_are_refused(manager):
     assert await manager.queue_message("nope", "hello") is None
+
+
+async def test_a_note_for_a_live_run_is_flagged_for_its_next_step_not_a_new_attempt(manager, db):
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    await manager.tasks.create(task)
+    await manager.tasks.set_state(task.id, TaskState.RUNNING)
+    task.inbox = asyncio.Queue()
+    manager.live[task.id] = task
+
+    await manager.queue_message(task.id, "also handle duplicates")
+
+    # Not into the inbox, which would cut the turn under way short: the run
+    # takes it at its next step.
+    assert task.notes_waiting and task.inbox.empty()
+    assert [m["body"] for m in await TaskMessageStore(db).pending(task.id)] == ["also handle duplicates"]
+    assert [t.id for t in await manager.tasks.list()] == [task.id]
+
+
+def _runner(config, db, task):
+    from dex.runner import TaskRunner
+
+    runner = TaskRunner(task, config, EventBus(db), TaskManager(config, EventBus(db), db).tasks, None)
+    runner._observe = lambda message: None
+    return runner
+
+
+async def test_the_next_tool_call_gives_way_to_a_note_queued_while_it_works(config, db):
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
+    from dex.runner import note_between_steps
+
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    runner = _runner(config, db, task)
+    await runner.store.create(task)
+    task.inbox = asyncio.Queue()
+
+    async def allow(*_args):
+        return PermissionResultAllow()
+
+    decide = runner._with_diffs(allow)
+    ctx = type("Ctx", (), {"tool_use_id": "t1"})()
+    assert isinstance(await decide("Read", {"file_path": "x"}, ctx), PermissionResultAllow)
+
+    await TaskMessageStore(db).add(task.id, "make it blue", {"e2e": False})
+    task.notes_waiting = True
+    refused = await decide("Read", {"file_path": "x"}, ctx)
+    assert isinstance(refused, PermissionResultDeny)
+    assert refused.message == note_between_steps(["make it blue"], call=True)
+    assert task.options["e2e"] is False and await TaskMessageStore(db).pending(task.id) == []
+    # Taken once: the call after it runs.
+    assert isinstance(await decide("Read", {"file_path": "x"}, ctx), PermissionResultAllow)
+
+
+async def test_a_note_that_misses_every_call_is_the_runs_next_turn(config, db):
+    from claude_agent_sdk import ResultMessage
+
+    from dex.runner import note_between_steps
+
+    class Client:
+        def __init__(self):
+            self.sent, self.interrupts = [], 0
+            self.results = asyncio.Queue()
+
+        async def query(self, text):
+            self.sent.append(text)
+            asyncio.get_running_loop().call_later(0.05, self.results.put_nowait, ResultMessage(
+                subtype="result", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1, session_id="s"))
+
+        async def interrupt(self):
+            self.interrupts += 1
+
+        async def receive_messages(self):
+            while True:
+                yield await self.results.get()
+
+    task = Task(problem="Two Sum", title="Two Sum", slug="two-sum")
+    runner = _runner(config, db, task)
+    await runner.store.create(task)
+    client = Client()
+    await client.query("opening")
+    run = asyncio.create_task(runner._converse(client))
+    await asyncio.sleep(0.01)
+    await TaskMessageStore(db).add(task.id, "make it blue")
+    task.notes_waiting = True
+
+    await asyncio.wait_for(run, timeout=3)
+
+    # The opening turn was not cut short; the note followed it in the same run.
+    assert client.interrupts == 0
+    assert client.sent == ["opening", note_between_steps(["make it blue"], call=False)]
+    assert await TaskMessageStore(db).pending(task.id) == [] and not task.notes_waiting

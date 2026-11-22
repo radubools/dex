@@ -312,8 +312,13 @@ interrupts work that has not yet shown the helper is worth sharing.
 
 As the **last step before your summary** — after the deliverable is built and
 every check you can run has passed, so the code has actually run and done its
-job — look back at what you wrote. Two things are worth raising, and both use
-the same single question at the same moment:
+job — look back once at what you wrote. **Most tasks have nothing to raise and
+skip this step entirely**: a package that is content (a story, a model, a
+sound), with probes and scratch scripts that were one-offs, has no candidate.
+Then do not call `mcp__dex__utility_proposals_enabled`, do not ask, and never
+write a new helper at the end just to have something to propose; finish. Only
+two things are worth raising, both about code already in your package that ran
+in this task, and both use the same single question at the same moment:
 
 **A local module that should be shared.** It is **generic** — nothing in it is
 specific to this package — and **reusable**: you can name another package that

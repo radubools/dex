@@ -27,7 +27,7 @@ beside `ask_user`:
 | `project_threads` | Lists the project's threads (asset work has one per kind of asset). |
 | `find_tasks(query, thread?)` | Finds existing tasks by words in title, slug, package or brief: one entry per package, its latest attempt. |
 | `start_task(title, brief, slug, skill?, thread?)` | Starts a new task in the thread of the skill that makes it (design/26), or an existing thread named, of the same project. The thread records who asked. |
-| `continue_task(task, message)` | Asks an existing task for a change: a follow-up note to its latest attempt (`queue_message`), which becomes a new attempt in the same package. |
+| `continue_task(task, message)` | Asks an existing task for a change: a follow-up note to its latest attempt (`queue_message`). A run under way takes it at its next step (below); otherwise it becomes a new attempt in the same package. |
 | `task_status(tasks?)` | Where tasks stand now: state, done, package directory, summary or error. |
 | `wait_for_tasks(tasks?)` | Parks the task as **blocked** (below) unless they are all done. It never waits in the turn: a waiting run would hold the slot the tasks it waits on need. |
 
@@ -116,7 +116,7 @@ sequenceDiagram
   <task-dir>`, from `game_chat.pull_command`), so they get the game's checks
   (validation, a story's passing in-game test) and nothing else that happens
   to be ready comes along. A message the person sends while one
-  is blocked is held and starts the next attempt once it has finished.
+  is blocked resumes it at once (below).
 - A blocked task holds **no worker slot** and **no timeout runs**: its run
   ended. The next run, after waking, gets the full `task_timeout_s` again.
   This is what keeps the queue from deadlocking: with six slots, six parents
@@ -136,7 +136,20 @@ sequenceDiagram
   stories raises them to 1, and a story waiting on its captions raises those
   to 2, ahead of the stories still queued. Each waker pass carries it one
   level further down a chain. The pass covers a follow-up attempt that
-  a `continue_task` note starts only once its target's current run ends.
+  a `continue_task` note starts when its target is not running.
+- **A note reaches a running target at its next step.** `queue_message`
+  flags the live task (`notes_waiting`) instead of holding the note for the
+  run's end. The target's next tool call is refused with the note in its
+  place (`note_between_steps`; the agent repeats the call if it still needs
+  it), or, when the turn ends before any call, the note is sent as the next
+  turn of the same session. Nothing is cut short mid-step, unlike a person's
+  message (`say`), which interrupts the turn under way. The note's run
+  options (e2e off) apply from then on. A note for a **blocked** task
+  resumes it now (`wake_for_note`), in its session and first in line, told
+  what it still waits on; it acts on the note and blocks again until they
+  are done. So does a note that arrived after a run's last step when that
+  run ended blocked. A queued task takes its notes when it starts, and a
+  finished one gets them as its next attempt.
 - The resumed session is sent only the note (it already has the brief). If the
   session cannot be resumed, the fresh one gets the brief and the note.
 - A failed or cancelled dependency still wakes its waiter: the note says so,

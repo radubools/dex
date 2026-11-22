@@ -749,8 +749,9 @@ outside your directory, and it is narrow:{no_skills_note}
   does not settle whether it fits. A project with no skills enabled has neither
   the file nor the directory, which is not an error — there is simply nothing
   shared here yet.
-- **Writing happens only at the very end.** You build and prove the helper
-  inside your own directory first. Once your checks are green, you call
+- **Writing happens only at the very end, and only for a helper you already
+  have.** You build and prove the helper inside your own directory, as part of
+  the work. With no such helper there is no step (see "Finish"). Once your checks are green, you call
   `mcp__dex__utility_proposals_enabled`. If it answers `disabled`, the operator
   has switched sharing off: change nothing outside your directory and say in one
   line of your summary what you would have shared. If it answers `enabled`, you
@@ -786,12 +787,21 @@ your working directory is yours to write.
 # Finish
 
 When everything the project instructions ask for exists and every check you can
-run is green, and before you write your summary, do the shared-utilities step if
-this project defines one. Look back over what you wrote: if a helper turned out
-to be generic and reusable, or a shared module you read nearly fitted and should
-gain something additive, check whether sharing is switched on and promote it if
-it is. It belongs here, at the end, because by now the code has actually run and
-you know the helper works.
+run is green, you are done: finish within a few steps. Do not start new work,
+re-run checks that already passed, or reopen decisions you have made.
+
+The shared-utilities step is **optional and usually skipped**. It applies only
+when a module already in your package, one that ran in this task, is something
+another package would import as it is, or a shared module you used nearly fitted
+and needs something additive. Decide that in one look back over your files:
+- Nothing like that (the usual case: your package is content, and your probes
+  and scratch scripts were one-offs): skip the step. Do not call
+  `mcp__dex__utility_proposals_enabled`, do not ask, and never write a new
+  helper at the end just to have something to propose. Say in one line of your
+  summary what tooling you missed, if any.
+- Something like that: check whether sharing is on and promote it, as the
+  protocol above says. It belongs here, at the end, because by now the code has
+  actually run and you know it works.
 
 Then reply with a short summary of what you produced and how you verified it.
 Say what you moved into `utils/` and how you re-checked it afterwards — or, if

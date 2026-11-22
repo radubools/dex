@@ -308,7 +308,11 @@ class TaskManager:
                             options: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Hold a follow-up note, and deliver it now if the task has stopped.
 
-        `options` go with it to the attempt it starts (design/18: run options).
+        A task running here takes it at its next step, without waiting for the
+        run to end (`TaskRunner.take_notes`); a blocked one is resumed for it
+        now (`Dependencies.wake_for_note`); a queued one takes it when it
+        starts; a finished one gets it as the next attempt. `options` go with
+        it (design/18: run options).
         """
         task = await self.tasks.get(task_id)
         if task is None:
@@ -317,7 +321,15 @@ class TaskManager:
         self.bus.publish(
             Event(type="task_message", task_id=task_id, data={"message": message})
         )
-        if task.state.terminal:
+        live = self.live.get(task_id)
+        if live is not None:
+            # Running: taken at its next step (a run not yet in its turns
+            # takes everything held when they start).
+            live.notes_waiting = True
+        elif task.state is TaskState.BLOCKED:
+            # Waiting on other tasks: resumed now for it, not when they finish.
+            await self.graph.wake_for_note(task)
+        elif task.state.terminal:
             await self.deliver_messages(task_id)
         return message
 
@@ -910,7 +922,13 @@ class TaskManager:
                 # once the run's final state is written (deliver_messages reads it).
                 with contextlib.suppress(Exception):
                     await runner.settled()
-                    await self.deliver_messages(task.id)
+                    if await self.deliver_messages(task.id) is None:
+                        # Typed after its last step, and the run ended blocked:
+                        # resumed for it now, not when what it waits on is done.
+                        ended = await self.tasks.get(task.id)
+                        if (ended is not None and ended.state is TaskState.BLOCKED
+                                and await self.messages.pending(task.id)):
+                            await self.graph.wake_for_note(ended)
 
     def _runner_for(self, task: Task) -> TaskRunner:
         """The scripted runner when DEX_FAKE_AGENT is set, otherwise the agent."""

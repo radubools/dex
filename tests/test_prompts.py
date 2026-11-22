@@ -105,8 +105,12 @@ def test_the_brief_opens_a_door_for_shared_utilities():
     assert '`kind` set to `"utility"`' in text
     assert "may come back instantly" in text
     assert "stops for the operator" in text
-    # And it fires at the finish, not mid-task.
-    assert "before you write your summary" in text
+    # And it fires at the finish, not mid-task, and only for a helper the task
+    # already has: with none, the step is skipped (an agent once spent twenty
+    # minutes of a finished task deciding whether to write one to propose).
+    assert "at the end, because by now the code has" in text
+    assert "optional and usually skipped" in text
+    assert "never write a new\n  helper at the end just to have something to propose" in text
 
 
 def test_a_project_wide_sweep_can_promote_a_utility_too():

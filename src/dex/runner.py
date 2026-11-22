@@ -173,6 +173,21 @@ def chat_interjection(text: str, chat: bool = True) -> str:
 
 
 
+def note_between_steps(bodies: list[str], *, call: bool) -> str:
+    """Follow-up notes that arrived while the task was working, at its next step.
+
+    At a tool call they take that call's place (it is refused); at the end of
+    a turn they are the next one.
+    """
+    notes = "\n\n".join(f"- {b.strip()}" for b in bodies)
+    head = ("Not run: a follow-up note for this task arrived while you were working, and it comes "
+            "first. Take it into account, then carry on with whatever still makes sense (make this "
+            "call again if you still need it):" if call else
+            "A follow-up note for this task arrived while you were working. Take it into account "
+            "before you finish, then carry on:")
+    return f"{head}\n\n{notes}"
+
+
 #: Sent to a resumed session that answered with an empty turn.
 #: Appended to the brief of a task whose end-to-end tests are off.
 E2E_OFF = (
@@ -936,6 +951,12 @@ class TaskRunner:
                 return PermissionResultDeny(message=(
                     "This task is parked: it waits on other tasks (wait_for_tasks). End your turn now, "
                     "with no further work; dex resumes this session when they are done, with their results."))
+            if held := await self.take_notes():
+                # A note queued while it works (a parent's follow-up): handed
+                # over at this step, in place of the call, not after the run.
+                from claude_agent_sdk import PermissionResultDeny  # noqa: PLC0415
+
+                return PermissionResultDeny(message=note_between_steps(held, call=True))
             try:
                 change = preview_change(tool_name, input_data, self.config.workspace)
             except Exception:
@@ -1680,6 +1701,31 @@ class TaskRunner:
         root = game_root(self.config, self.task.project)
         return (root,) if root else ()
 
+    async def take_notes(self) -> list[str]:
+        """The follow-up notes queued for this run since it started, marked delivered.
+
+        `TaskManager.queue_message` flags them on the live task; nothing is
+        read from the database until it has. Their run options apply from now.
+        """
+        if not self.task.notes_waiting or self.task.inbox is None:
+            return []
+        self.task.notes_waiting = False
+        try:
+            notes = TaskMessageStore(self.store.db)
+            options = await notes.pending_options(self.task.id)
+            held = await notes.take(self.task.id)
+        except Exception:
+            log.exception("could not take the notes for %s", self.task.id)
+            return []
+        if held:
+            if options:
+                self.task.options = {**(self.task.options or {}), **options}
+                await self.store.set_options(self.task.id, self.task.options)
+            self.emit("task_message_delivered", count=len(held), startedTaskId=self.task.id)
+            self.emit("text", text=f"A follow-up note arrived: taking it into account now "
+                                   f"({len(held)} note{'s' if len(held) != 1 else ''}).")
+        return held
+
     async def _converse(self, client: ClaudeSDKClient) -> None:
         """Run a task: its turns, plus whatever a person types meanwhile.
 
@@ -1695,6 +1741,7 @@ class TaskRunner:
         self.task.inbox = inbox
         notes = TaskMessageStore(self.store.db)
         options = await notes.pending_options(self.task.id)
+        self.task.notes_waiting = False  # what is held now is taken here
         if held := await notes.take(self.task.id):
             inbox.put_nowait("\n\n".join(held))
             self.task.options = {**(self.task.options or {}), **options}
@@ -1765,12 +1812,20 @@ class TaskRunner:
                     continue
                 due = max(0, due - 1)
                 if due == 0 and inbox.empty() and interrupted is None:
+                    if not self._park_on and (held := await self.take_notes()):
+                        # Queued while the turn ran, and it ended before another
+                        # call took them: the next turn, in this same session.
+                        due += 1
+                        await self._query(client, note_between_steps(held, call=False))
+                        continue
                     break
         finally:
             feeder.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await feeder
             self.task.inbox = None
+            # Still unread in the database: delivered as the next attempt.
+            self.task.notes_waiting = False
             # Typed after the last turn ended: kept for the follow-up attempt.
             while not inbox.empty():
                 text = inbox.get_nowait()

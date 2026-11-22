@@ -205,6 +205,12 @@ class Task:
     #: as the next one, so the player can steer without waiting. None for a
     #: task that is not running, or not a chat.
     inbox: asyncio.Queue[str] | None = field(default=None, repr=False)
+    #: Set when a follow-up note is queued for this task while it runs (a
+    #: parent task's `follow_up`, design/18). The run takes the note at its
+    #: next step: the next tool call is refused with the note in its place,
+    #: or, if the turn ends first, the note is sent as the next turn. Before,
+    #: it waited for the whole run to end and started another attempt.
+    notes_waiting: bool = field(default=False, repr=False)
     #: Human-readable note about what the agent is doing right now.
     activity: str | None = None
     #: Claim order among queued work: higher first (deps.py). 1 is a task

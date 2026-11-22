@@ -645,3 +645,26 @@ async def test_a_parked_run_that_carries_on_is_ended_by_dex_and_blocked(manager,
     decide = runner._with_diffs(lambda *a: None)
     refused = await decide("Bash", {"command": "node story-e2e.mjs"}, SimpleNamespace(tool_use_id="x"))
     assert "parked" in refused.message
+
+
+async def test_a_note_to_a_blocked_task_resumes_it_now_not_when_its_tasks_are_done(manager, db):
+    from dex.store import TaskMessageStore
+
+    await threads(db)
+    parent = await manager.submit("story", title="Story")
+    child = await manager.graph.spawn(parent, thread="Backgrounds", title="Prop", brief="prop")
+    await manager.tasks.set_state(parent.id, TaskState.RUNNING, started_at=1.0)
+    parent.session_id = "sess-1"
+    await manager.graph.park(parent, [child.id])
+
+    await manager.queue_message(parent.id, "make the finale shorter")
+
+    stored = await manager.tasks.get(parent.id)
+    # Resumed in its own session, first in line, with the note still held for
+    # the run to take when it starts; told what it still waits on.
+    assert stored.state is TaskState.QUEUED and stored.priority >= deps_mod.WOKEN
+    assert stored.resumed_from == "sess-1" and stored.waiting_on is None
+    assert "A note arrived while you waited" in stored.wake_note and "Prop" in stored.wake_note
+    assert [m["body"] for m in await TaskMessageStore(db).pending(parent.id)] == ["make the finale shorter"]
+    # No new attempt: the same task goes on.
+    assert not [t for t in await manager.tasks.list() if t.parent_id == parent.id]

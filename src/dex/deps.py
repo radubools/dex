@@ -440,6 +440,39 @@ class Dependencies:
             log.info("woke %d blocked task(s)", woken)
         return woken
 
+    async def wake_for_note(self, task: Task) -> bool:
+        """Resume a blocked task now, for a note queued while it waits.
+
+        The note would otherwise wait until everything the task waits on is
+        done. The run takes it at its start (`TaskRunner._converse`); what it
+        waits on is still open, so its turn ends blocked again, and it is woken
+        once more when they are done.
+        """
+        ids = task.waiting_on or await self.store.of(task.id)
+        open_ = [s for s in await self.statuses(ids) if not s.get("done", True)]
+        waiting = "\n".join(f"- {s.get('title')} ({s.get('package')}): {s.get('state')}" for s in open_)
+        note = (
+            "## A note arrived while you waited\n\n"
+            "dex resumed this session now, for the note that follows, rather than when the tasks "
+            "you wait on are done. "
+            + (f"These are not done yet:\n\n{waiting}\n\n" if waiting else "")
+            + "Act on the note (a change it asks of a task you started goes to that task with "
+            "`continue_task`), then end your turn: dex resumes you again when they are done."
+        )
+        landed = await self.m.tasks.set_state(
+            task.id, TaskState.QUEUED, waiting_on=None, wake_note=note,
+            priority=max(WOKEN, task.priority),
+            resumed_from=task.resumed_from or task.session_id, finished_at=None,
+            activity="a note arrived; resuming for it",
+        )
+        if not landed:
+            return False
+        self.m.bus.publish(Event(type="task_state", task_id=task.id, project=task.project,
+                                 data={"state": TaskState.QUEUED.value,
+                                       "activity": "a note arrived; resuming for it"}))
+        self.m._wake_workers()
+        return True
+
     async def _wake_loop(self) -> None:
         while True:
             await asyncio.sleep(WAKE_EVERY_S)
