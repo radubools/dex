@@ -405,3 +405,35 @@ def test_the_backend_waits_on_its_ready_path_which_defaults_to_health() -> None:
     # Splash answers /health at once and /ready only once its model is loaded.
     assert proxy.Backend("true", 0, "m", sleep_after=0, stop_after=3600).ready_path == "/health"
     assert proxy.Backend("true", 0, "m", sleep_after=0, stop_after=3600, ready_path="ready").ready_path == "/ready"
+
+
+SPLASH_METRICS = """splash_prefill_input_tokens_total {p}
+splash_prefill_tokens_per_second 518.19
+splash_decode_output_tokens_total {o}
+splash_decode_tokens_per_second 68.99
+"""
+
+
+def test_splash_counters_are_read_under_llama_server_names_without_slots():
+    assert proxy.parse_counters(SPLASH_METRICS.format(p=457102, o=93175)) == {
+        "prompt_tokens_total": 457102.0, "tokens_predicted_total": 93175.0}
+    counts = iter([(1000, 10), (3600, 360)])
+    clock = iter([100.0, 105.0])
+    asked = []
+
+    def metrics(request):
+        asked.append(request.url.path)
+        p, o = next(counts)
+        return httpx.Response(200, text=SPLASH_METRICS.format(p=p, o=o))
+    backend = make_backend()
+    backend.http = httpx.AsyncClient(transport=httpx.MockTransport(metrics))
+    backend.state = "awake"
+    machine = proxy.Machine.__new__(proxy.Machine)
+    machine.backend, machine.gflop_per_token, machine.counters = backend, 13.4, None
+    machine.clock = lambda: next(clock)
+
+    async def run():
+        return await machine._rates(), await machine._rates()
+    first, second = asyncio.run(run())
+    assert first is None and asked == ["/metrics", "/metrics"]  # Splash counts running replies itself
+    assert second == {"in_tps": 520.0, "out_tps": 70.0, "tflops": round(590 * 13.4 / 1000, 2)}

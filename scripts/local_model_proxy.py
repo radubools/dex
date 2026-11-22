@@ -21,7 +21,8 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
   - dram: average and p95 DRAM bandwidth, read, write and total, and gpu: its busy share,
     clock and the FP16 ceiling at that clock (scripts/mac_metrics.py, IOReport, no root);
   - tokens: the server's prompt and output tokens per second, from llama-server's `/metrics`
-    counters (start it with `--metrics`) plus the running replies' tokens in `/slots`, and the FP16 work they take in TFLOPS when the
+    counters (start it with `--metrics`) plus the running replies' tokens in `/slots`, or from
+    Splash's `/metrics` counters, and the FP16 work they take in TFLOPS when the
     model's entry in ~/.dex/local-models.json gives `active_params_b`. llama.cpp dequantizes
     quantized weights to FP16 in its kernels, so its work is FLOPs, not integer TOPS.
   While requests are in flight each snapshot is logged as a `machine:` line.
@@ -132,12 +133,25 @@ class Power:
 
 
 _COUNTER = re.compile(r"^llamacpp:(prompt_tokens_total|tokens_predicted_total)\s+([\d.eE+]+)\s*$", re.M)
+#: Splash's counters for the same two things, by the names llama-server's take here. Both move
+#: while a request runs (input per prefill batch, output per decode cycle), so Splash needs no
+#: /slots added.
+_SPLASH_COUNTER = re.compile(r"^splash_(prefill_input_tokens_total|decode_output_tokens_total)\s+([\d.eE+]+)\s*$",
+                             re.M)
+_SPLASH_NAMES = {"prefill_input_tokens_total": "prompt_tokens_total",
+                 "decode_output_tokens_total": "tokens_predicted_total"}
 
 
 def parse_counters(metrics: str) -> dict[str, float]:
-    """llama-server's Prometheus token counters (`--metrics`): prompt tokens read (counted as
-    they are read) and tokens written (counted when the request finishes)."""
-    return {k: float(v) for k, v in _COUNTER.findall(metrics)}
+    """The server's Prometheus token counters: llama-server's (`--metrics`: prompt tokens read,
+    counted as they are read, and tokens written, counted when the request finishes), else
+    Splash's, under llama-server's names."""
+    found = {k: float(v) for k, v in _COUNTER.findall(metrics)}
+    return found or {_SPLASH_NAMES[k]: float(v) for k, v in _SPLASH_COUNTER.findall(metrics)}
+
+
+def is_splash(metrics: str) -> bool:
+    return bool(_SPLASH_COUNTER.search(metrics))
 
 
 def in_progress(slots: list) -> dict[str, float]:
@@ -204,7 +218,7 @@ class Machine:
             r = await self.backend.http.get(f"{self.backend.url}/metrics", timeout=3)
             done = parse_counters(r.text) if r.status_code == 200 else {}
             running = {}
-            if done:
+            if done and not is_splash(r.text):
                 sr = await self.backend.http.get(f"{self.backend.url}/slots", timeout=3)
                 running = in_progress(sr.json()) if sr.status_code == 200 else {}
             now = (self.clock(), {k: v + running.get(k, 0.0) for k, v in done.items()}) if done else None
