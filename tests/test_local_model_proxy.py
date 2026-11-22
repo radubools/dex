@@ -163,3 +163,37 @@ def test_a_peer_may_release_once_the_client_is_gone():
         await call(app, receive, send)
         return await backend.release()
     assert asyncio.run(run()) == {"stopped": True}
+
+
+SAMPLE = ('"AdapterDetails"={"UsbHvcMenu"=({"Index"=0}),"AdapterVoltage"=20000,"UsbHvcHvcIndex"=3,"Watts"=94} "SystemPowerIn"=74149 "AdapterEfficiencyLoss"=2207 '
+          '"BatteryPower"=18446744073709550398 "SystemVoltageIn"=19734 "SystemCurrentIn"=3757')
+
+
+def test_power_reads_the_adapter_the_wall_and_a_charging_battery():
+    assert proxy.parse_power(SAMPLE) == {"adapter_w": 74.1, "wall_w": 76.4, "battery_w": -1.2, "volts": 19.73,
+                                         "amps": 3.76, "adapter_rating_w": 94}
+
+
+def test_power_on_battery_is_positive_and_a_mac_without_one_reads_none():
+    assert proxy.parse_power('"SystemPowerIn"=20000 "BatteryPower"=20000')["battery_w"] == 20.0
+    assert proxy.parse_power("") is None
+
+
+def test_power_is_served_and_says_how_old_it_is(monkeypatch):
+    class Proc:
+        async def communicate(self):
+            return SAMPLE.encode(), b""
+
+    async def fake_exec(*_a, **_k):
+        return Proc()
+    monkeypatch.setattr(proxy.asyncio, "create_subprocess_exec", fake_exec)
+    app = proxy.app_for(make_backend(upstream_app()), power_every=0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://p") as c:
+            power = (await c.get("/proxy/power")).json()
+            status = (await c.get("/proxy/status")).json()
+        return power, status
+    power, status = asyncio.run(run())
+    assert power["adapter_w"] == 74.1 and power["fresh_s"] == 0
+    assert status["power"]["wall_w"] == 76.4

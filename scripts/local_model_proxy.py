@@ -11,7 +11,12 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
   next request waits for it to load again, about two minutes for a 27B);
 - `GET /v1/models` is answered here, without waking anything, because dex asks
   every 15 seconds whether the model is there; `GET /proxy/status` says what
-  the server is doing.
+  the server is doing;
+- `GET /proxy/power` (also in `/proxy/status`) is the Mac's power draw, from the battery
+  controller (`ioreg`, no root needed): what comes in from the power adapter, the estimate at
+  the wall, and the battery's share. macOS refreshes these about once a minute, so `fresh_s`
+  says how long ago the reading last changed. While requests are in flight it is logged every
+  POWER_EVERY seconds (`--power-every`, default 5; 0 turns it off).
 
     python local_model_proxy.py --serve ~/.dex/vllm-qwen27b.sh --model qwen3.8-27b
 
@@ -34,6 +39,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import signal
 import time
 
@@ -48,6 +54,55 @@ log = logging.getLogger("local-model-proxy")
 
 #: Not forwarded either way: they describe one hop, not the message.
 HOP = {"host", "content-length", "transfer-encoding", "connection", "keep-alive"}
+
+_FIELD = re.compile(r'"(SystemPowerIn|AdapterEfficiencyLoss|BatteryPower|SystemVoltageIn|SystemCurrentIn)"=(\d+)')
+_RATING = re.compile(r'"AdapterVoltage"=\d+[^{}]*?"Watts"=(\d+)')
+
+
+def parse_power(ioreg: str) -> dict | None:
+    """The power fields of `ioreg -rw0 -c AppleSmartBattery`, in watts, or None off a battery Mac.
+
+    `adapter_w` is what comes in from the power adapter (SystemPowerIn); `wall_w` adds the
+    adapter's own loss; `battery_w` is the battery's flow, positive when it powers the Mac and
+    negative when it charges (ioreg prints the signed value as unsigned 64-bit)."""
+    fields = {k: int(v) for k, v in _FIELD.findall(ioreg)}
+    if "SystemPowerIn" not in fields:
+        return None
+    battery = fields.get("BatteryPower", 0)
+    if battery >= 1 << 63:
+        battery -= 1 << 64
+    rating = _RATING.search(ioreg)
+    return {
+        "adapter_w": round(fields["SystemPowerIn"] / 1000, 1),
+        "wall_w": round((fields["SystemPowerIn"] + fields.get("AdapterEfficiencyLoss", 0)) / 1000, 1),
+        "battery_w": round(battery / 1000, 1),
+        "volts": round(fields.get("SystemVoltageIn", 0) / 1000, 2),
+        "amps": round(fields.get("SystemCurrentIn", 0) / 1000, 2),
+        "adapter_rating_w": int(rating.group(1)) if rating else None,
+    }
+
+
+class Power:
+    """The Mac's power draw, read when asked, with how long ago the reading last changed."""
+
+    def __init__(self) -> None:
+        self.last: dict | None = None
+        self.changed = 0.0
+
+    async def read(self) -> dict | None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ioreg", "-rw0", "-c", "AppleSmartBattery",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(proc.communicate(), 5)
+        except (OSError, TimeoutError):
+            return None
+        now = parse_power(out.decode("utf8", "replace"))
+        if now is None:
+            return None
+        if now != self.last:
+            self.last, self.changed = now, time.time()
+        return {**now, "fresh_s": round(time.time() - self.changed)}
 
 
 class Backend:
@@ -203,7 +258,24 @@ class Forwarded(StreamingResponse):
                 self.done()
 
 
-def app_for(backend: Backend) -> Starlette:
+def app_for(backend: Backend, power_every: float = 5) -> Starlette:
+    power = Power()
+
+    async def log_power() -> None:
+        """While requests are in flight, the power draw every `power_every` seconds."""
+        while True:
+            await asyncio.sleep(power_every)
+            if not backend.active:
+                continue
+            p = await power.read()
+            if p:
+                log.info("power: %.1f W from the adapter (~%.1f W at the wall), battery %+.1f W, "
+                         "%d in flight (reading %d s old)", p["adapter_w"], p["wall_w"], p["battery_w"],
+                         backend.active, p["fresh_s"])
+
+    async def power_now(_: Request) -> Response:
+        return JSONResponse(await power.read())
+
     async def models(_: Request) -> Response:
         # Answered here: dex polls it, and asking must not wake or keep the model.
         return JSONResponse({"object": "list", "data": [
@@ -213,7 +285,7 @@ def app_for(backend: Backend) -> Starlette:
         return JSONResponse({"state": backend.state, "active": backend.active, "waiting": backend.waiting,
                              "peers": backend.peers,
                              "idle_s": round(time.time() - backend.last), "sleep_after_s": backend.sleep_after,
-                             "stop_after_s": backend.stop_after})
+                             "stop_after_s": backend.stop_after, "power": await power.read()})
 
     async def forward(request: Request) -> Response:
         # The body is read before the wait for the server: a start takes a minute or more, and a
@@ -259,15 +331,19 @@ def app_for(backend: Backend) -> Starlette:
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette):
         watcher = asyncio.create_task(backend.watch())
+        logger = asyncio.create_task(log_power()) if power_every > 0 else None
         try:
             yield
         finally:
             watcher.cancel()
+            if logger:
+                logger.cancel()
             await backend.stop()
 
     return Starlette(routes=[
         Route("/v1/models", models, methods=["GET"]),
         Route("/proxy/status", status, methods=["GET"]),
+        Route("/proxy/power", power_now, methods=["GET"]),
         Route("/proxy/release", release, methods=["POST"]),
         Route("/{path:path}", forward, methods=["GET", "POST", "PUT", "DELETE", "PATCH"]),
     ], lifespan=lifespan)
@@ -285,6 +361,8 @@ def main() -> None:
     ap.add_argument("--stop-after", type=float, default=3600, help="idle seconds before stopping (default 1 h)")
     ap.add_argument("--start-timeout", type=float, default=900,
                     help="seconds a start may take before the request gets a 503 (default 15 min)")
+    ap.add_argument("--power-every", type=float, default=5,
+                    help="seconds between power-draw log lines while requests are in flight; 0 turns them off")
     ap.add_argument("--stop-grace", type=float, default=30,
                     help="seconds a stopping server gets before it is killed (default 30; more for a remote "
                          "server whose release takes a while)")
@@ -295,7 +373,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     backend = Backend(a.serve, a.backend_port, a.model, a.sleep_after, a.stop_after, start_timeout=a.start_timeout,
                       peers=a.peer, stop_grace=a.stop_grace)
-    uvicorn.run(app_for(backend), host="127.0.0.1", port=a.port, log_level="warning",
+    uvicorn.run(app_for(backend, a.power_every), host="127.0.0.1", port=a.port, log_level="warning",
                 timeout_graceful_shutdown=max(40, a.stop_grace + 10))
 
 
