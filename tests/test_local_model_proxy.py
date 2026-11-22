@@ -195,5 +195,87 @@ def test_power_is_served_and_says_how_old_it_is(monkeypatch):
             status = (await c.get("/proxy/status")).json()
         return power, status
     power, status = asyncio.run(run())
-    assert power["adapter_w"] == 74.1 and power["fresh_s"] == 0
-    assert status["power"]["wall_w"] == 76.4
+    assert power["power"]["adapter_w"] == 74.1 and power["power"]["fresh_s"] == 0
+    assert status["machine"]["power"]["wall_w"] == 76.4
+
+
+METRICS = """# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
+# TYPE llamacpp:prompt_tokens_total counter
+llamacpp:prompt_tokens_total {p}
+llamacpp:prompt_seconds_total 12.5
+llamacpp:tokens_predicted_total {o}
+"""
+
+
+def test_counters_are_read_from_llama_server_metrics():
+    assert proxy.parse_counters(METRICS.format(p=1200, o=34)) == {
+        "prompt_tokens_total": 1200.0, "tokens_predicted_total": 34.0}
+
+
+def test_token_rates_and_tflops_come_from_counter_deltas():
+    counts = iter([(1000, 10), (2900, 180)])
+    clock = iter([100.0, 105.0])
+
+    def metrics(request):
+        p, o = next(counts)
+        return httpx.Response(200, text=METRICS.format(p=p, o=o))
+    backend = make_backend()
+    backend.http = httpx.AsyncClient(transport=httpx.MockTransport(metrics))
+    backend.state = "awake"
+    machine = proxy.Machine.__new__(proxy.Machine)
+    machine.backend, machine.gflop_per_token, machine.counters = backend, 13.4, None
+    machine.clock = lambda: next(clock)
+
+    async def run():
+        first = await machine._rates()
+        second = await machine._rates()
+        return first, second
+    first, second = asyncio.run(run())
+    assert first is None  # one reading: no rate yet
+    assert second == {"in_tps": 380.0, "out_tps": 34.0, "tflops": round(414 * 13.4 / 1000, 2)}
+
+
+def test_a_stopped_server_has_no_token_rates():
+    backend = make_backend()
+    backend.state = "stopped"
+    machine = proxy.Machine.__new__(proxy.Machine)
+    machine.backend, machine.gflop_per_token, machine.counters = backend, 13.4, (1.0, {"x": 1})
+    assert asyncio.run(machine._rates()) is None and machine.counters is None
+
+
+def test_work_per_token_is_twice_the_active_weights(tmp_path):
+    f = tmp_path / "local-models.json"
+    f.write_text('[{"id": "a", "served": "qwen3.8-flash-next", "active_params_b": 6.7}, {"id": "b"}]')
+    assert proxy.model_gflop_per_token("qwen3.8-flash-next", str(f)) == 13.4
+    assert proxy.model_gflop_per_token("b", str(f)) == 0.0
+    assert proxy.model_gflop_per_token("missing", str(tmp_path / "none.json")) == 0.0
+
+
+def test_a_snapshot_reads_as_one_log_line():
+    line = proxy.Machine.describe({
+        "power": {"adapter_w": 74.1, "wall_w": 76.4, "battery_w": -1.2, "fresh_s": 12},
+        "dram": {"read": {"avg_gbs": 109.1}, "write": {"avg_gbs": 26.5}, "total": {"avg_gbs": 127.3, "p95_gbs": 256.0}},
+        "gpu": {"active": 0.995, "mhz": 1182, "busy_ceiling_tflops": 12.0},
+        "tokens": {"in_tps": 0.0, "out_tps": 43.2, "tflops": 0.58}}, 2)
+    assert line == ("machine: 74.1 W from the adapter (~76.4 W at the wall), battery -1.2 W (reading 12 s old); "
+                    "DRAM 127 GB/s (read 109, write 26, p95 256); GPU 100% busy at 1182 MHz (ceiling 12.0 TFLOPS); "
+                    "0 t/s in, 43.2 t/s out, ~0.58 TFLOPS of FP16 work; 2 in flight")
+
+
+mspec = importlib.util.spec_from_file_location("mac_metrics", SCRIPT.parent / "mac_metrics.py")
+mac = importlib.util.module_from_spec(mspec)
+mspec.loader.exec_module(mac)
+
+
+def test_bandwidth_is_the_time_weighted_band_middle():
+    # half the time in 0-32 GB/s, half in 96-128: means 16 and 112, so 64; p95 in the top band
+    assert mac.bandwidth([("32GB/s", 50), ("64GB/s", 0), ("96GB/s", 0), ("128GB/s", 50)]) == {
+        "avg_gbs": 64.0, "p95_gbs": 128.0}
+    assert mac.bandwidth([("32GB/s", 0)]) is None
+
+
+def test_gpu_busy_share_clock_and_ceiling():
+    clocks = [0, 338, 618, 796, 924, 952, 1056, 1062, 1182]
+    g = mac.gpu_state([("OFF", 100), ("P1", 0), ("P8", 300), ("P6", 600)], clocks, 40)
+    assert g["active"] == 0.9 and g["mhz"] == round((1182 * 300 + 1056 * 600) / 900)
+    assert g["ceiling_tflops"] == round(40 * 128 * 2 * g["mhz"] * 1e6 / 1e12, 1)

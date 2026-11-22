@@ -12,11 +12,18 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
 - `GET /v1/models` is answered here, without waking anything, because dex asks
   every 15 seconds whether the model is there; `GET /proxy/status` says what
   the server is doing;
-- `GET /proxy/power` (also in `/proxy/status`) is the Mac's power draw, from the battery
-  controller (`ioreg`, no root needed): what comes in from the power adapter, the estimate at
-  the wall, and the battery's share. macOS refreshes these about once a minute, so `fresh_s`
-  says how long ago the reading last changed. While requests are in flight it is logged every
-  POWER_EVERY seconds (`--power-every`, default 5; 0 turns it off).
+- `GET /proxy/power` (also in `/proxy/status` as `machine`) is a snapshot, taken every
+  POWER_EVERY seconds (`--power-every`, default 5; 0 reads on request instead), of:
+  - power: what comes in from the power adapter, the estimate at the wall, and the battery's
+    share, from the battery controller (`ioreg`, no root). macOS refreshes these about once a
+    minute, so `fresh_s` says how long ago the reading last changed;
+  - dram: average and p95 DRAM bandwidth, read, write and total, and gpu: its busy share,
+    clock and the FP16 ceiling at that clock (scripts/mac_metrics.py, IOReport, no root);
+  - tokens: the server's prompt and output tokens per second, from llama-server's `/metrics`
+    counters (start it with `--metrics`), and the FP16 work they take in TFLOPS when the
+    model's entry in ~/.dex/local-models.json gives `active_params_b`. llama.cpp dequantizes
+    quantized weights to FP16 in its kernels, so its work is FLOPs, not integer TOPS.
+  While requests are in flight each snapshot is logged as a `machine:` line.
 
     python local_model_proxy.py --serve ~/.dex/vllm-qwen27b.sh --model qwen3.8-27b
 
@@ -103,6 +110,105 @@ class Power:
         if now != self.last:
             self.last, self.changed = now, time.time()
         return {**now, "fresh_s": round(time.time() - self.changed)}
+
+
+_COUNTER = re.compile(r"^llamacpp:(prompt_tokens_total|tokens_predicted_total)\s+([\d.eE+]+)\s*$", re.M)
+
+
+def parse_counters(metrics: str) -> dict[str, float]:
+    """llama-server's Prometheus token counters (`--metrics`): prompt tokens read, tokens written."""
+    return {k: float(v) for k, v in _COUNTER.findall(metrics)}
+
+
+def model_gflop_per_token(model: str, path: str | None = None) -> float:
+    """2 x the model's active parameters (billions), from ~/.dex/local-models.json's
+    `active_params_b`: the floating-point work one token takes through the weights. Attention is
+    not counted, so long prompts do somewhat more. 0 when the entry gives no size."""
+    import json
+    path = path or os.environ.get("DEX_LOCAL_MODELS", os.path.expanduser("~/.dex/local-models.json"))
+    try:
+        entries = json.loads(open(path).read())
+    except (OSError, ValueError):
+        return 0.0
+    for e in entries if isinstance(entries, list) else []:
+        if isinstance(e, dict) and model in (e.get("served"), e.get("id")) and e.get("active_params_b"):
+            return 2 * float(e["active_params_b"])
+    return 0.0
+
+
+class Machine:
+    """One snapshot every few seconds of what the Mac and the server are doing: power draw, DRAM
+    bandwidth, the GPU's busy share and clock (scripts/mac_metrics.py), the server's prompt and
+    output tokens per second (its /metrics counters), and the work those tokens take in TFLOPS.
+
+    Bandwidth, GPU and token rates are each over the time since the previous snapshot, so one
+    loop takes them all and `/proxy/power` returns the latest one rather than reading again."""
+
+    def __init__(self, backend: "Backend", gflop_per_token: float = 0.0) -> None:
+        self.backend, self.gflop_per_token = backend, gflop_per_token
+        self.power = Power()
+        self.bw = self.gpu = None
+        try:
+            import sys
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import mac_metrics
+            self.bw, self.gpu = mac_metrics.MemBW(), mac_metrics.GPUState()
+        except (ImportError, OSError) as e:
+            log.info("no bandwidth or GPU readings: %s", e)
+        self.counters: tuple[float, dict[str, float]] | None = None
+        self.latest: dict | None = None
+        self.clock = time.time
+
+    async def _rates(self) -> dict | None:
+        if self.backend.state != "awake":
+            self.counters = None
+            return None
+        try:
+            r = await self.backend.http.get(f"{self.backend.url}/metrics", timeout=3)
+            now = (self.clock(), parse_counters(r.text)) if r.status_code == 200 else None
+        except httpx.HTTPError:
+            now = None
+        if not now or not now[1]:
+            return None
+        before, self.counters = self.counters, now
+        if not before or now[0] <= before[0]:
+            return None
+        dt = now[0] - before[0]
+        rate = {k: max(0.0, (now[1].get(k, 0) - before[1].get(k, 0)) / dt) for k in now[1]}
+        in_tps, out_tps = rate.get("prompt_tokens_total", 0.0), rate.get("tokens_predicted_total", 0.0)
+        out = {"in_tps": round(in_tps, 1), "out_tps": round(out_tps, 1)}
+        if self.gflop_per_token:
+            out["tflops"] = round((in_tps + out_tps) * self.gflop_per_token / 1000, 2)
+        return out
+
+    async def snapshot(self) -> dict:
+        snap: dict = {"at": round(time.time()), "power": await self.power.read()}
+        if self.bw:
+            snap["dram"] = await asyncio.to_thread(self.bw.read)
+        if self.gpu:
+            snap["gpu"] = await asyncio.to_thread(self.gpu.read)
+        snap["tokens"] = await self._rates()
+        self.latest = snap
+        return snap
+
+    @staticmethod
+    def describe(s: dict, active: int) -> str:
+        parts = []
+        if p := s.get("power"):
+            parts.append(f"{p['adapter_w']:.1f} W from the adapter (~{p['wall_w']:.1f} W at the wall), "
+                         f"battery {p['battery_w']:+.1f} W (reading {p['fresh_s']} s old)")
+        if (d := s.get("dram")) and "total" in d:
+            parts.append(f"DRAM {d['total']['avg_gbs']:.0f} GB/s (read {d.get('read', {}).get('avg_gbs', 0):.0f}, "
+                         f"write {d.get('write', {}).get('avg_gbs', 0):.0f}, p95 {d['total']['p95_gbs']:.0f})")
+        if g := s.get("gpu"):
+            parts.append(f"GPU {g['active'] * 100:.0f}% busy at {g['mhz']} MHz "
+                         f"(ceiling {g['busy_ceiling_tflops']:.1f} TFLOPS)")
+        if t := s.get("tokens"):
+            parts.append(f"{t['in_tps']:.0f} t/s in, {t['out_tps']:.1f} t/s out"
+                         + (f", ~{t['tflops']:.2f} TFLOPS of FP16 work" if "tflops" in t else ""))
+        return f"machine: {'; '.join(parts)}; {active} in flight"
 
 
 class Backend:
@@ -258,23 +364,27 @@ class Forwarded(StreamingResponse):
                 self.done()
 
 
-def app_for(backend: Backend, power_every: float = 5) -> Starlette:
-    power = Power()
+def app_for(backend: Backend, power_every: float = 5, gflop_per_token: float = 0.0) -> Starlette:
+    machine = Machine(backend, gflop_per_token)
 
-    async def log_power() -> None:
-        """While requests are in flight, the power draw every `power_every` seconds."""
+    async def sample() -> None:
+        """A snapshot every `power_every` seconds, logged while requests are in flight."""
         while True:
             await asyncio.sleep(power_every)
-            if not backend.active:
+            try:
+                snap = await machine.snapshot()
+            except Exception:  # noqa: BLE001 - a reading must never take the proxy down
+                log.exception("machine snapshot failed")
                 continue
-            p = await power.read()
-            if p:
-                log.info("power: %.1f W from the adapter (~%.1f W at the wall), battery %+.1f W, "
-                         "%d in flight (reading %d s old)", p["adapter_w"], p["wall_w"], p["battery_w"],
-                         backend.active, p["fresh_s"])
+            if backend.active:
+                log.info(Machine.describe(snap, backend.active))
+
+    async def current() -> dict:
+        # Without the loop (power_every 0) there is no shared interval to keep, so read now.
+        return machine.latest if power_every > 0 and machine.latest else await machine.snapshot()
 
     async def power_now(_: Request) -> Response:
-        return JSONResponse(await power.read())
+        return JSONResponse(await current())
 
     async def models(_: Request) -> Response:
         # Answered here: dex polls it, and asking must not wake or keep the model.
@@ -285,7 +395,7 @@ def app_for(backend: Backend, power_every: float = 5) -> Starlette:
         return JSONResponse({"state": backend.state, "active": backend.active, "waiting": backend.waiting,
                              "peers": backend.peers,
                              "idle_s": round(time.time() - backend.last), "sleep_after_s": backend.sleep_after,
-                             "stop_after_s": backend.stop_after, "power": await power.read()})
+                             "stop_after_s": backend.stop_after, "machine": await current()})
 
     async def forward(request: Request) -> Response:
         # The body is read before the wait for the server: a start takes a minute or more, and a
@@ -331,7 +441,7 @@ def app_for(backend: Backend, power_every: float = 5) -> Starlette:
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette):
         watcher = asyncio.create_task(backend.watch())
-        logger = asyncio.create_task(log_power()) if power_every > 0 else None
+        logger = asyncio.create_task(sample()) if power_every > 0 else None
         try:
             yield
         finally:
@@ -373,7 +483,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     backend = Backend(a.serve, a.backend_port, a.model, a.sleep_after, a.stop_after, start_timeout=a.start_timeout,
                       peers=a.peer, stop_grace=a.stop_grace)
-    uvicorn.run(app_for(backend, a.power_every), host="127.0.0.1", port=a.port, log_level="warning",
+    uvicorn.run(app_for(backend, a.power_every, model_gflop_per_token(a.model)), host="127.0.0.1", port=a.port, log_level="warning",
                 timeout_graceful_shutdown=max(40, a.stop_grace + 10))
 
 
