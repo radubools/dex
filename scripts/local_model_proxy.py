@@ -171,6 +171,38 @@ class Backend:
                 await self.sleep()
 
 
+class Done:
+    """Ends one request's time in flight, once, whichever way the request ends. A count left
+    behind keeps the server loaded for good and makes every peer wait on it (2026-11-21: a
+    client that left while Qwen3.6 was starting kept it "busy" and Inkling waiting 30 min)."""
+
+    def __init__(self, backend: Backend) -> None:
+        self.backend, self.ended = backend, False
+
+    def __call__(self) -> None:
+        if not self.ended:
+            self.ended = True
+            self.backend.active -= 1
+            self.backend.last = time.time()
+
+
+class Forwarded(StreamingResponse):
+    """The server's streamed reply. Ends the request's time in flight even when the client goes
+    before the reply starts, when the body generator never runs and so never cleans up."""
+
+    def __init__(self, done: Done, upstream: httpx.Response, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.done, self.upstream = done, upstream
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if not self.done.ended:
+                await self.upstream.aclose()
+                self.done()
+
+
 def app_for(backend: Backend) -> Starlette:
     async def models(_: Request) -> Response:
         # Answered here: dex polls it, and asking must not wake or keep the model.
@@ -184,6 +216,9 @@ def app_for(backend: Backend) -> Starlette:
                              "stop_after_s": backend.stop_after})
 
     async def forward(request: Request) -> Response:
+        # The body is read before the wait for the server: a start takes a minute or more, and a
+        # client that left meanwhile must not be found out only once the request counts as in flight.
+        content = await request.body()
         backend.waiting += 1
         backend.last = time.time()
         try:
@@ -194,16 +229,18 @@ def app_for(backend: Backend) -> Starlette:
             return JSONResponse({"error": {"message": f"local model server unavailable: {e}"}}, status_code=503)
         finally:
             backend.waiting -= 1
-        headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
-        upstream = backend.http.build_request(request.method, f"{backend.url}{request.url.path}",
-                                              params=request.query_params, headers=headers,
-                                              content=await request.body())
+        done = Done(backend)
         try:
+            headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
+            upstream = backend.http.build_request(request.method, f"{backend.url}{request.url.path}",
+                                                  params=request.query_params, headers=headers, content=content)
             r = await backend.http.send(upstream, stream=True)
         except httpx.HTTPError as e:
-            backend.active -= 1
-            backend.last = time.time()
+            done()
             return JSONResponse({"error": {"message": f"local model server: {e}"}}, status_code=502)
+        except BaseException:
+            done()
+            raise
 
         async def body():
             try:
@@ -211,11 +248,10 @@ def app_for(backend: Backend) -> Starlette:
                     yield chunk
             finally:
                 await r.aclose()
-                backend.active -= 1
-                backend.last = time.time()
+                done()
 
-        return StreamingResponse(body(), status_code=r.status_code,
-                                 headers={k: v for k, v in r.headers.items() if k.lower() not in HOP})
+        return Forwarded(done, r, body(), status_code=r.status_code,
+                         headers={k: v for k, v in r.headers.items() if k.lower() not in HOP})
 
     async def release(_: Request) -> Response:
         return JSONResponse(await backend.release())
