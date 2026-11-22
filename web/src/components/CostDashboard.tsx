@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { getCosts } from '../api'
-import type { CostPoint, CostsResponse } from '../types'
+import { getCostTasks, getCosts } from '../api'
+import type { CostPoint, CostSlice, CostsResponse, CostTasksResponse } from '../types'
 import { bucketKey, bucketLabel, bucketTitle, hasOlder, timeline, type Granularity } from './costTimeline'
 import { formatRate, rate } from '../throughput'
 
@@ -63,25 +63,60 @@ const METRICS: { id: Metric; label: string }[] = [
   { id: 'assets', label: 'Asset lines' },
 ]
 
-export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack?: () => void }) {
-  const [metric, setMetric] = useState<Metric>('cost')
-  const [tokenView, setTokenView] = useState(TOKEN_VIEWS[0].id)
-  const [period, setPeriod] = useState('week')
-  const [group, setGroup] = useState('skill')
-  const [granularity, setGranularity] = useState<Granularity>('day')
+/** A clicked slice of the chart, and where its list of tasks is. */
+type Drill = {
+  /** The chart it was picked on: any other chart shows no selection. */
+  context: string
+  /** The bucket's key on the axis, and the segment clicked in it (none: the whole bar). */
+  key: string
+  segment: string | null
+  slice: CostSlice
+  label: string
+  sort: string
+  page: number
+}
+
+/**
+ * What the dashboard showed when it was left, so coming back from a task it
+ * opened (or any other step back) finds the same chart, slice and page.
+ */
+const remembered: {
+  metric?: Metric; tokenView?: string; period?: string; group?: string; granularity?: Granularity
+  projects?: string[]; offset?: number; picked?: string[]; pickedKinds?: string[]; drill?: Drill | null
+} = {}
+
+export function CostDashboard({ onClose, onBack, onOpenTask }: {
+  onClose: () => void
+  onBack?: () => void
+  /** Opens a task's own view, with its activity and files. */
+  onOpenTask?: (id: string) => void
+}) {
+  const [metric, setMetric] = useState<Metric>(remembered.metric ?? 'cost')
+  const [tokenView, setTokenView] = useState(remembered.tokenView ?? TOKEN_VIEWS[0].id)
+  const [period, setPeriod] = useState(remembered.period ?? 'week')
+  const [group, setGroup] = useState(remembered.group ?? 'skill')
+  const [granularity, setGranularity] = useState<Granularity>(remembered.granularity ?? 'day')
   const [data, setData] = useState<CostsResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [projects, setProjects] = useState<string[]>([])
+  const [projects, setProjects] = useState<string[]>(remembered.projects ?? [])
   /** How many periods back the chart is; 0 is the one ending now. */
-  const [offset, setOffset] = useState(0)
+  const [offset, setOffset] = useState(remembered.offset ?? 0)
   /** The series left on, by the group's names. Empty means all of them. */
-  const [picked, setPicked] = useState<string[]>([])
+  const [picked, setPicked] = useState<string[]>(remembered.picked ?? [])
   /** The same for the token kinds, when the chart stacks kinds. */
-  const [pickedKinds, setPickedKinds] = useState<string[]>([])
+  const [pickedKinds, setPickedKinds] = useState<string[]>(remembered.pickedKinds ?? [])
+  /** The slice whose tasks are listed under the chart. */
+  const [drill, setDrill] = useState<Drill | null>(remembered.drill ?? null)
+
+  useEffect(() => {
+    Object.assign(remembered, { metric, tokenView, period, group, granularity, projects, offset, picked, pickedKinds, drill })
+  }, [metric, tokenView, period, group, granularity, projects, offset, picked, pickedKinds, drill])
 
   // Grouping by project already separates them, so there the filter rests.
   const filter = group === 'project' ? [] : projects
   const filterKey = filter.join(',')
+  const context = [period, granularity, group, filterKey, offset, metric, tokenView].join('|')
+  const selected = drill?.context === context ? drill : null
 
   useEffect(() => {
     let live = true
@@ -125,6 +160,30 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
   const picks = stacksKinds ? pickedKinds : picked
   const setPicks = stacksKinds ? setPickedKinds : setPicked
   const allowed = PERIODS.find((p) => p.id === period)?.granularities ?? []
+
+  /** A click on a bar: its segment, or the whole bar above the stack. Again clears it. */
+  const select = (index: number, segment: string | null) => {
+    const key = chart.buckets[index]
+    const raw = chart.raws[key]
+    if (!raw || (selected && selected.key === key && selected.segment === segment)) {
+      setDrill(null)
+      return
+    }
+    // A token kind is not a set of tasks: its bar's tasks are the groups shown.
+    const groupSeg = stacksKinds ? null : segment
+    const series = groupSeg ? chart.members[groupSeg] ?? [groupSeg] : picked.length ? picked : null
+    const what = segment ?? (picked.length === 0 ? 'all series' : picked.length === 1 ? picked[0] : `${picked.length} series`)
+    setDrill({
+      context, key, segment,
+      slice: {
+        period, granularity, group, projects: filter, offset, bucket: raw, series,
+        source: metric === 'code' || metric === 'assets' ? 'lines' : 'usage',
+      },
+      label: `${chart.titles[index]} · ${what}${stacksKinds && segment && picked.length ? ` (${picked.join(', ')})` : ''}`,
+      sort: metric === 'code' || metric === 'assets' ? 'lines' : 'cost',
+      page: 0,
+    })
+  }
 
   return (
     <section className="viewer costs" role="dialog" aria-label="Cost dashboard">
@@ -255,7 +314,20 @@ export function CostDashboard({ onClose, onBack }: { onClose: () => void; onBack
               </p>
             ) : (
               <>
-                <StackedBars key={offset} chart={chart} format={format} speed={speed} />
+                <StackedBars key={offset} chart={chart} format={format} speed={speed}
+                             selected={selected ? { key: selected.key, segment: selected.segment } : null}
+                             onSelect={select} />
+                {selected ? (
+                  <SliceTasks
+                    drill={selected}
+                    onChange={(next) => setDrill({ ...selected, ...next })}
+                    onClear={() => setDrill(null)}
+                    onWhole={() => select(chart.buckets.indexOf(selected.key), null)}
+                    onOpen={onOpenTask}
+                  />
+                ) : (
+                  <p className="muted small cost-hint">Click a bar, or a part of one, to list its tasks.</p>
+                )}
                 <ul className="legend">
                   <li>
                     <button
@@ -346,6 +418,8 @@ function ProjectFilter({ all, chosen, onChange }: {
 
 type Chart = {
   buckets: string[]
+  /** Each bucket's start as the server sent it, which is how the drill-down names it. */
+  raws: Record<string, string>
   labels: string[]
   titles: string[]
   /** A week of hours can't label every few bars, so it labels each day. */
@@ -396,6 +470,8 @@ function collect(
   const values: Record<string, Record<string, number>> = {}
   const totals: Record<string, number> = {}
   const members: Record<string, string[]> = {}
+  const raws: Record<string, string> = {}
+  for (const m of marks) raws[bucketKey(m.bucket, g)] ??= m.bucket
   for (const m of on) {
     const key = bucketKey(m.bucket, g)
     values[key] = values[key] ?? {}
@@ -420,6 +496,7 @@ function collect(
   const dayTicks = g === 'hour' && buckets.length > 24
   return {
     buckets,
+    raws,
     dayTicks,
     labels: buckets.map((b) => bucketLabel(b, dayTicks ? 'day' : g)),
     titles: buckets.map((b) => bucketTitle(b, g)),
@@ -560,7 +637,14 @@ const CARD_WIDTH = 200
 const PIN_MS = 5000
 
 /** Plain SVG: a chart library would be a large dependency for one view. */
-function StackedBars({ chart, format, speed }: { chart: Chart; format: (n: number) => string; speed?: SpeedMap }) {
+function StackedBars({ chart, format, speed, selected, onSelect }: {
+  chart: Chart
+  format: (n: number) => string
+  speed?: SpeedMap
+  /** The slice listed below: a bucket, and the segment in it (none: the whole bar). */
+  selected?: { key: string; segment: string | null } | null
+  onSelect?: (index: number, segment: string | null) => void
+}) {
   const height = 180
   const scroller = useRef<HTMLDivElement>(null)
   const [room, setRoom] = useState(320)
@@ -631,8 +715,10 @@ function StackedBars({ chart, format, speed }: { chart: Chart; format: (n: numbe
         ))}
         {chart.buckets.map((bucket, i) => {
           let offset = 0
+          const picked = selected?.key === bucket
+          const classes = [hovered === i ? 'on' : '', selected && !picked ? 'dim' : '', picked ? 'picked' : '']
           return (
-            <g key={bucket} transform={`translate(${i * slot}, 0)`} className={hovered === i ? 'on' : undefined}>
+            <g key={bucket} transform={`translate(${i * slot}, 0)`} className={classes.filter(Boolean).join(' ') || undefined}>
               {chart.series.map((name, si) => {
                 const value = chart.values[bucket]?.[name] ?? 0
                 if (value <= 0) return null
@@ -647,6 +733,8 @@ function StackedBars({ chart, format, speed }: { chart: Chart; format: (n: numbe
                     height={Math.max(h, 1)}
                     fill={COLORS[si % COLORS.length]}
                     rx="2"
+                    data-series={name}
+                    className={picked && selected?.segment && selected.segment !== name ? 'dim' : undefined}
                   />
                 )
               })}
@@ -659,6 +747,13 @@ function StackedBars({ chart, format, speed }: { chart: Chart; format: (n: numbe
                 height={height}
                 onPointerEnter={(e) => e.pointerType === 'mouse' && setHovered(i)}
                 onPointerDown={(e) => (e.pointerType === 'mouse' ? setHovered(i) : pin(i))}
+                onClick={(e) => {
+                  if (!onSelect) return
+                  // The segment under the pointer, from the same stack the bars are drawn from.
+                  const box = e.currentTarget.getBoundingClientRect()
+                  const y = box.height ? ((e.clientY - box.top) / box.height) * height : height
+                  onSelect(i, segmentAt(chart, bucket, height - y, height))
+                }}
               />
               {(chart.dayTicks ? bucket.endsWith('T00') : (chart.buckets.length - 1 - i) % everyTick === 0) && (
                 <text x={i === chart.buckets.length - 1 ? barWidth : barWidth / 2} y={height + 16} className="tick"
@@ -676,6 +771,117 @@ function StackedBars({ chart, format, speed }: { chart: Chart; format: (n: numbe
                     speed={speed?.[chart.buckets[hovered]]} />
       )}
     </div>
+  )
+}
+
+/** Which series' segment of a bar sits `up` pixels above its foot; none above the stack. */
+function segmentAt(chart: Chart, bucket: string, up: number, height: number): string | null {
+  let top = 0
+  for (const name of chart.series) {
+    const value = chart.values[bucket]?.[name] ?? 0
+    if (value <= 0) continue
+    top += (value / chart.max) * height
+    if (up <= top) return name
+  }
+  return null
+}
+
+const PAGE_SIZE = 10
+
+const when = (seconds: number | null) =>
+  seconds == null ? '' : new Date(seconds * 1000).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+
+/** The tasks a clicked slice sums, a page at a time, largest first. */
+function SliceTasks({ drill, onChange, onClear, onWhole, onOpen }: {
+  drill: Drill
+  onChange: (next: Partial<Pick<Drill, 'sort' | 'page'>>) => void
+  onClear: () => void
+  /** From a segment to its whole bar: the tallest bar has no room above it to click. */
+  onWhole: () => void
+  onOpen?: (id: string) => void
+}) {
+  const [data, setData] = useState<CostTasksResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const ask = JSON.stringify([drill.slice, drill.sort, drill.page])
+
+  useEffect(() => {
+    let live = true
+    setError(null)
+    getCostTasks(drill.slice, drill.sort, drill.page, PAGE_SIZE)
+      .then((d) => live && setData(d))
+      .catch((e: Error) => live && setError(e.message))
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `ask` is the request, by value
+  }, [ask])
+
+  const lines = drill.slice.source === 'lines'
+  const pages = data ? Math.max(1, Math.ceil(data.total / (data.limit || PAGE_SIZE))) : 1
+  const sorter = (id: string, label: string) => (
+    <button
+      className={`cost-sort ${drill.sort === id ? 'on' : ''}`}
+      aria-pressed={drill.sort === id}
+      onClick={() => onChange({ sort: id, page: 0 })}
+    >{label}</button>
+  )
+
+  return (
+    <section className="cost-tasks" aria-label="Tasks in this slice">
+      <div className="cost-tasks-head">
+        <span className="cost-tasks-label">{drill.label}</span>
+        {data && (
+          <span className="muted small">
+            {data.total} {data.total === 1 ? 'task' : 'tasks'}
+            {lines ? ` · ${count((data.code ?? 0) + (data.assets ?? 0))} lines` : ` · ${money(data.cost ?? 0)}`}
+          </span>
+        )}
+        {drill.segment && <button className="ghost-btn" onClick={onWhole}>Whole bar</button>}
+        <button className="icon-btn" aria-label="Clear selection" onClick={onClear}>✕</button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {data && data.tasks.length === 0 && <p className="muted small">No tasks in this slice.</p>}
+      {data && data.tasks.length > 0 && (
+        <div className="chart-scroll">
+          <table className="cost-table cost-task-table">
+            <thead>
+              <tr>
+                <th>Task</th><th>Model</th><th>State</th>
+                {lines ? <th>{sorter('lines', 'Lines')}</th> : <><th>{sorter('cost', 'Cost')}</th><th>{sorter('tokens', 'Tokens')}</th></>}
+                <th>{sorter('date', 'Date')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.tasks.map((t) => (
+                <tr key={t.id} onClick={() => onOpen?.(t.id)}>
+                  <th scope="row">
+                    <button className="cost-task-title" onClick={(e) => { e.stopPropagation(); onOpen?.(t.id) }}>
+                      {t.title || t.slug}
+                    </button>
+                    {t.project && <span className="muted"> · {t.project}</span>}
+                  </th>
+                  <td>{t.model ?? ''}</td>
+                  <td className="cost-task-state"><span className={`state-dot ${t.state}`} />{t.state.replace('_', ' ')}</td>
+                  {lines
+                    ? <td title={`${count(t.code ?? 0)} code, ${count(t.assets ?? 0)} asset`}>{count((t.code ?? 0) + (t.assets ?? 0))}</td>
+                    : <><td>{money(t.cost ?? 0)}</td><td>{count(t.tokens ?? 0)}</td></>}
+                  <td>{when(t.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data && pages > 1 && (
+        <div className="cost-pager">
+          <button className="icon-btn" aria-label="Previous page of tasks" disabled={drill.page === 0}
+                  onClick={() => onChange({ page: drill.page - 1 })}>‹</button>
+          <span className="cost-range">Page {drill.page + 1} of {pages}</span>
+          <button className="icon-btn" aria-label="Next page of tasks" disabled={drill.page + 1 >= pages}
+                  onClick={() => onChange({ page: drill.page + 1 })}>›</button>
+        </div>
+      )}
+    </section>
   )
 }
 

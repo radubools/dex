@@ -1226,22 +1226,12 @@ class CostStore:
         A task's lines land when it last did anything, and under the skill it
         spent the most on: `task_changes` keeps a total per task, not per hour.
         """
-        expression = {
-            "model": "COALESCE(t.model, 'unknown')",
-            "project": "COALESCE(t.project, 'none')",
-            "skill": "COALESCE(NULLIF(u.skill, ''), '(no skill)')",
-            "state": "t.state",
-        }.get(group_by, "COALESCE(t.model, 'unknown')")
+        expression = _group(group_by)
         width = _BUCKETS.get(bucket, "day")
-        when = "greatest(t.created_at, t.started_at, t.finished_at)"
         rows = await self.db.pool.fetch(
-            f"""SELECT date_trunc('{width}', {when}) AS bucket, {expression} AS series,
+            f"""SELECT date_trunc('{width}', {_LINES_WHEN}) AS bucket, {expression} AS series,
                        sum(c.code_lines)::bigint AS code, sum(c.asset_lines)::bigint AS assets
-                FROM task_changes c JOIN tasks t ON t.id = c.task_id
-                LEFT JOIN LATERAL (SELECT skill FROM task_usage WHERE task_id = t.id
-                                   ORDER BY cost_usd DESC LIMIT 1) u ON true
-                WHERE {_window(since, width, offset, when)}
-                  AND ($1::text[] IS NULL OR t.project = ANY($1))
+                {_lines_scope(since, width, offset)}
                 GROUP BY 1, 2
                 HAVING sum(c.code_lines) + sum(c.asset_lines) > 0
                 ORDER BY 1""",
@@ -1259,12 +1249,7 @@ class CostStore:
         `group_by` is validated against a fixed set rather than interpolated
         freely — it names a SQL expression.
         """
-        expression = {
-            "model": "COALESCE(t.model, 'unknown')",
-            "project": "COALESCE(t.project, 'none')",
-            "skill": "COALESCE(NULLIF(u.skill, ''), '(no skill)')",
-            "state": "t.state",
-        }.get(group_by, "COALESCE(t.model, 'unknown')")
+        expression = _group(group_by)
         width = _BUCKETS.get(bucket, "day")
 
         rows = await self.db.pool.fetch(
@@ -1277,9 +1262,7 @@ class CostStore:
                        sum(u.cache_write_tokens)::bigint AS cache_write,
                        sum(u.output_tokens)::bigint AS output,
                        sum(u.thinking_tokens)::bigint AS thinking
-                FROM task_usage u JOIN tasks t ON t.id = u.task_id
-                WHERE {_window(since, width, offset)}
-                  AND ($1::text[] IS NULL OR t.project = ANY($1))
+                {_usage_scope("task_usage", since, width, offset)}
                 GROUP BY 1, 2
                 ORDER BY 1""",
             projects,
@@ -1291,9 +1274,7 @@ class CostStore:
                        sum(u.in_seconds)::float8 AS in_seconds,
                        sum(u.out_tokens)::bigint AS out_tokens,
                        sum(u.out_seconds)::float8 AS out_seconds
-                FROM task_throughput u JOIN tasks t ON t.id = u.task_id
-                WHERE {_window(since, width, offset)}
-                  AND ($1::text[] IS NULL OR t.project = ANY($1))
+                {_usage_scope("task_throughput", since, width, offset)}
                 GROUP BY 1, 2""",
             projects,
         )
@@ -1316,12 +1297,141 @@ class CostStore:
         ]
 
 
+    async def slice_tasks(
+        self, since: str = "week", bucket: str = "day", group_by: str = "model",
+        projects: list[str] | None = None, offset: int = 0, *,
+        at: datetime | None = None, series: list[str] | None = None,
+        source: str = "usage", sort: str = "cost", page: int = 0, limit: int = 25,
+    ) -> dict[str, Any]:
+        """The tasks behind one slice of the dashboard, a page at a time.
+
+        A slice is what `series` (cost and tokens) or `line_series` (lines)
+        draws: the same period page and projects, narrowed to one bucket
+        (`at`, a bucket's start as those return it) and to some of the group's
+        series (`series`, as named there). Both are optional: none is the whole
+        chart. Rows are scoped by the very FROM/WHERE the chart sums, so a
+        task's figures here are exactly its share of the slice and `cost` (or
+        `code` and `assets`) adds up to what the slice shows.
+        """
+        width = _BUCKETS.get(bucket, "day")
+        expression = _group(group_by)
+        lines = source == "lines"
+        when = _LINES_WHEN if lines else "u.hour"
+        scope = _lines_scope(since, width, offset) if lines else _usage_scope("task_usage", since, width, offset)
+        narrowed = f"""{scope}
+                  AND ($2::timestamptz IS NULL OR date_trunc('{width}', {when}) = $2)
+                  AND ($3::text[] IS NULL OR {expression} = ANY($3))"""
+        if lines:
+            sums = """sum(c.code_lines)::bigint AS code, sum(c.asset_lines)::bigint AS assets"""
+            having = "HAVING sum(c.code_lines) + sum(c.asset_lines) > 0"
+            orders = {"lines": "s.code + s.assets DESC", "date": "t.created_at DESC"}
+            default = "lines"
+        else:
+            sums = """sum(u.cost_usd)::float8 AS cost,
+                      sum(u.input_tokens)::bigint AS input,
+                      sum(u.cache_read_tokens)::bigint AS cache_read,
+                      sum(u.cache_write_tokens)::bigint AS cache_write,
+                      sum(u.output_tokens)::bigint AS output,
+                      sum(u.thinking_tokens)::bigint AS thinking"""
+            having = ""
+            orders = {
+                "cost": "s.cost DESC",
+                "tokens": "s.input + s.cache_read + s.cache_write + s.output DESC",
+                "date": "t.created_at DESC",
+            }
+            default = "cost"
+        sort = sort if sort in orders else default
+        limit = max(1, min(int(limit), 100))
+        page = max(0, int(page))
+        chosen = list(series) if series else None
+        per_task = f"""SELECT t.id AS task_id, {sums} {narrowed} GROUP BY t.id {having}"""
+
+        summary = await self.db.pool.fetchrow(
+            f"""SELECT count(*) AS total,
+                       {"COALESCE(sum(s.code), 0)::bigint AS code, COALESCE(sum(s.assets), 0)::bigint AS assets"
+                        if lines else
+                        "COALESCE(sum(s.cost), 0)::float8 AS cost, "
+                        "COALESCE(sum(s.input + s.cache_read + s.cache_write + s.output), 0)::bigint AS tokens"}
+                FROM ({per_task}) s""",
+            projects, at, chosen,
+        )
+        rows = await self.db.pool.fetch(
+            f"""SELECT s.*, t.title, t.slug, t.project, t.model, t.state, t.thread_id,
+                       t.created_at, t.finished_at
+                FROM ({per_task}) s JOIN tasks t ON t.id = s.task_id
+                ORDER BY {orders[sort]}, t.created_at DESC, t.id
+                LIMIT $4 OFFSET $5""",
+            projects, at, chosen, limit, page * limit,
+        )
+
+        def row_json(r: Any) -> dict[str, Any]:
+            item: dict[str, Any] = {
+                "id": r["task_id"], "title": r["title"], "slug": r["slug"],
+                "project": r["project"], "model": r["model"], "state": r["state"],
+                "threadId": r["thread_id"],
+                "createdAt": r["created_at"].timestamp() if r["created_at"] else None,
+                "finishedAt": r["finished_at"].timestamp() if r["finished_at"] else None,
+            }
+            if lines:
+                item.update(code=int(r["code"] or 0), assets=int(r["assets"] or 0))
+            else:
+                item.update(
+                    cost=float(r["cost"] or 0), input=int(r["input"] or 0),
+                    cacheRead=int(r["cache_read"] or 0), cacheWrite=int(r["cache_write"] or 0),
+                    output=int(r["output"] or 0), thinking=int(r["thinking"] or 0),
+                )
+                item["tokens"] = item["input"] + item["cacheRead"] + item["cacheWrite"] + item["output"]
+            return item
+
+        return {
+            "tasks": [row_json(r) for r in rows],
+            **{k: v for k, v in dict(summary).items()},
+            "page": page, "limit": limit, "sort": sort, "source": "lines" if lines else "usage",
+        }
+
 def _speed(row: Any) -> dict[str, float]:
     """A bucket's throughput sums, as the dashboard averages them: tokens over seconds."""
     return {
         "timedIn": int(row["in_tokens"] or 0), "inSeconds": float(row["in_seconds"] or 0),
         "timedOut": int(row["out_tokens"] or 0), "outSeconds": float(row["out_seconds"] or 0),
     }
+
+
+#: What each dashboard grouping splits by. A whitelist: it lands in SQL text.
+_GROUPS = {
+    "model": "COALESCE(t.model, 'unknown')",
+    "project": "COALESCE(t.project, 'none')",
+    "skill": "COALESCE(NULLIF(u.skill, ''), '(no skill)')",
+    "state": "t.state",
+}
+
+#: When a task's lines land: `task_changes` keeps a total per task, not per hour.
+_LINES_WHEN = "greatest(t.created_at, t.started_at, t.finished_at)"
+
+
+def _group(group_by: str) -> str:
+    return _GROUPS.get(group_by, _GROUPS["model"])
+
+
+def _usage_scope(table: str, since: str, width: str, offset: int) -> str:
+    """FROM and WHERE of every cost rollup: one page of a period, `$1` the projects.
+
+    Shared by the chart (`series`) and its drill-down (`slice_tasks`), so the
+    tasks listed for a slice are the rows that slice sums.
+    """
+    assert table in ("task_usage", "task_throughput")
+    return f"""FROM {table} u JOIN tasks t ON t.id = u.task_id
+                WHERE {_window(since, width, offset)}
+                  AND ($1::text[] IS NULL OR t.project = ANY($1))"""
+
+
+def _lines_scope(since: str, width: str, offset: int) -> str:
+    """The same for lines, which land under the skill a task spent the most on."""
+    return f"""FROM task_changes c JOIN tasks t ON t.id = c.task_id
+                LEFT JOIN LATERAL (SELECT skill FROM task_usage WHERE task_id = t.id
+                                   ORDER BY cost_usd DESC LIMIT 1) u ON true
+                WHERE {_window(since, width, offset, _LINES_WHEN)}
+                  AND ($1::text[] IS NULL OR t.project = ANY($1))"""
 
 
 #: Whitelists, because these land in SQL text rather than as parameters.
