@@ -20,7 +20,7 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
   - dram: average and p95 DRAM bandwidth, read, write and total, and gpu: its busy share,
     clock and the FP16 ceiling at that clock (scripts/mac_metrics.py, IOReport, no root);
   - tokens: the server's prompt and output tokens per second, from llama-server's `/metrics`
-    counters (start it with `--metrics`) plus its running requests' progress in `/slots`, and the FP16 work they take in TFLOPS when the
+    counters (start it with `--metrics`) plus the running replies' tokens in `/slots`, and the FP16 work they take in TFLOPS when the
     model's entry in ~/.dex/local-models.json gives `active_params_b`. llama.cpp dequantizes
     quantized weights to FP16 in its kernels, so its work is FLOPs, not integer TOPS.
   While requests are in flight each snapshot is logged as a `machine:` line.
@@ -116,24 +116,24 @@ _COUNTER = re.compile(r"^llamacpp:(prompt_tokens_total|tokens_predicted_total)\s
 
 
 def parse_counters(metrics: str) -> dict[str, float]:
-    """llama-server's Prometheus token counters (`--metrics`): prompt tokens read, tokens written.
-    It adds a request to them only once the request finishes."""
+    """llama-server's Prometheus token counters (`--metrics`): prompt tokens read (counted as
+    they are read) and tokens written (counted when the request finishes)."""
     return {k: float(v) for k, v in _COUNTER.findall(metrics)}
 
 
 def in_progress(slots: list) -> dict[str, float]:
-    """What the requests still running have done so far, from llama-server's `/slots`: prompt
-    tokens processed and tokens decoded, keyed like the counters. Finished totals plus this is
-    all the work done, and it grows while a request runs: when one finishes, its count moves
-    from here into the totals, so the sum neither drops nor counts it twice."""
-    prompt = decoded = 0.0
+    """What the requests still running have written so far, from llama-server's `/slots`
+    (tokens decoded), keyed like the counters. llama-server counts prompt tokens as it reads
+    them, but adds a reply's tokens only once the request finishes; finished totals plus this is
+    all the output so far, and when a request finishes its count moves from here into the total,
+    so the sum neither drops nor counts it twice."""
+    decoded = 0.0
     for s in slots if isinstance(slots, list) else []:
         if isinstance(s, dict) and s.get("is_processing"):
-            prompt += float(s.get("n_prompt_tokens_processed") or 0)
             nxt = s.get("next_token")
             nxt = nxt[0] if isinstance(nxt, list) and nxt else nxt
             decoded += float((nxt or {}).get("n_decoded") or 0) if isinstance(nxt, dict) else 0.0
-    return {"prompt_tokens_total": prompt, "tokens_predicted_total": decoded}
+    return {"tokens_predicted_total": decoded}
 
 
 def model_gflop_per_token(model: str, path: str | None = None) -> float:

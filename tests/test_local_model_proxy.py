@@ -283,20 +283,22 @@ def test_gpu_busy_share_clock_and_ceiling():
     assert g["ceiling_tflops"] == round(40 * 128 * 2 * g["mhz"] * 1e6 / 1e12, 1)
 
 
-def test_running_requests_count_before_they_finish():
+def test_running_replies_count_before_they_finish():
     slots = [{"id": 0, "is_processing": True, "n_prompt_tokens_processed": 5000,
               "next_token": [{"n_decoded": 0}]},
              {"id": 1, "is_processing": True, "n_prompt_tokens_processed": 300, "next_token": [{"n_decoded": 40}]},
              {"id": 2, "is_processing": False}]
-    assert proxy.in_progress(slots) == {"prompt_tokens_total": 5300.0, "tokens_predicted_total": 40.0}
+    # prompt tokens are already in llama-server's counter as they are read: not added again
+    assert proxy.in_progress(slots) == {"tokens_predicted_total": 40.0}
 
 
 def test_a_request_finishing_moves_its_count_without_a_jump():
-    """5 s apart: a prefill goes 2000 -> 4000 tokens; a decode at 90 tokens finishes at 100."""
+    """5 s apart: the prompt counter goes 12050 -> 14050 as a prefill is read; a reply at 90
+    tokens finishes at 100 (the output counter takes its 100 only then)."""
     reads = iter([
-        (dict(p=10000, o=500), [{"is_processing": True, "n_prompt_tokens_processed": 2000},
+        (dict(p=12050, o=500), [{"is_processing": True, "n_prompt_tokens_processed": 2000},
                                 {"is_processing": True, "n_prompt_tokens_processed": 50, "next_token": [{"n_decoded": 90}]}]),
-        (dict(p=10050, o=600), [{"is_processing": True, "n_prompt_tokens_processed": 4000}]),
+        (dict(p=14050, o=600), [{"is_processing": True, "n_prompt_tokens_processed": 4000}]),
     ])
     current = {}
 
@@ -316,5 +318,5 @@ def test_a_request_finishing_moves_its_count_without_a_jump():
     async def run():
         await machine._rates()
         return await machine._rates()
-    # prompt: (10050 + 4000) - (10000 + 2050) = 2000 in 5 s; output: 600 - (500 + 90) = 10 in 5 s
+    # prompt: 14050 - 12050 = 2000 in 5 s; output: 600 - (500 + 90) = 10 in 5 s
     assert asyncio.run(run()) == {"in_tps": 400.0, "out_tps": 2.0}
