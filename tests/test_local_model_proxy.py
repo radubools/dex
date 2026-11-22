@@ -399,3 +399,9 @@ def test_a_request_finishing_moves_its_count_without_a_jump():
         return await machine._rates()
     # prompt: 14050 - 12050 = 2000 in 5 s; output: 600 - (500 + 90) = 10 in 5 s
     assert asyncio.run(run()) == {"in_tps": 400.0, "out_tps": 2.0}
+
+
+def test_the_backend_waits_on_its_ready_path_which_defaults_to_health() -> None:
+    # Splash answers /health at once and /ready only once its model is loaded.
+    assert proxy.Backend("true", 0, "m", sleep_after=0, stop_after=3600).ready_path == "/health"
+    assert proxy.Backend("true", 0, "m", sleep_after=0, stop_after=3600, ready_path="ready").ready_path == "/ready"

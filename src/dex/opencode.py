@@ -126,8 +126,10 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 #: server's /v1), served (its model name there), context, output, priced_as
 #: (the Go model whose list rates price its tokens), images (true when its
 #: server takes images), and optionally thinking and answer_tokens (see
-#: LOCAL_THINKING)}. dex's effort picks the run's variant, which carries its
-#: thinking budget and reply cap to the server. Offered only while its
+#: LOCAL_THINKING) and effort_fields}. dex's effort picks the run's variant, which carries its
+#: thinking budget and reply cap to the server. An entry with `"effort_fields": true`
+#: (a server that reads the OpenAI names, such as Splash) also sends the effort itself as
+#: `reasoning_effort` and the budget as `thinking_token_budget`. Offered only while its
 #: server answers; a Go sign-in is not needed.
 LOCAL = "local/"
 LOCAL_FILE = Path(os.environ.get("DEX_LOCAL_MODELS", Path.home() / ".dex" / "local-models.json"))
@@ -312,8 +314,10 @@ def local_budgets(entry: dict[str, Any]) -> dict[str, dict[str, Any]]:
     and a cap on the whole reply (LOCAL_THINKING, LOCAL_ANSWER_TOKENS)."""
     thinking = {**LOCAL_THINKING, **(entry.get("thinking") or {})}
     answer = int(entry.get("answer_tokens") or LOCAL_ANSWER_TOKENS)
+    named = bool(entry.get("effort_fields"))
     return {level: {"thinking_budget_tokens": int(budget), "reasoning_budget_message": LOCAL_BUDGET_MESSAGE,
-                    "max_completion_tokens": int(budget) + answer}
+                    "max_completion_tokens": int(budget) + answer,
+                    **({"reasoning_effort": level, "thinking_token_budget": int(budget)} if named else {})}
             for level, budget in thinking.items() if level in EFFORTS}
 
 

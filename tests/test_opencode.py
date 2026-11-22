@@ -360,6 +360,18 @@ def test_a_local_models_effort_defaults_to_medium_and_its_entry_can_tune_the_bud
     assert tuned["high"]["max_completion_tokens"] == 4096 + 4000
 
 
+def test_a_local_model_with_effort_fields_also_sends_the_effort_and_budget_by_their_openai_names(local) -> None:
+    # Splash reads reasoning_effort and thinking_token_budget, not llama-server's thinking_budget_tokens.
+    plain = opencode.local_budgets(LOCAL_27B)
+    named = opencode.local_budgets({**LOCAL_27B, "effort_fields": True})
+    assert "reasoning_effort" not in plain["medium"] and "thinking_token_budget" not in plain["medium"]
+    assert named["medium"]["reasoning_effort"] == "medium" and named["medium"]["thinking_token_budget"] == 2048
+    assert named["none"]["reasoning_effort"] == "none" and named["none"]["thinking_token_budget"] == 0
+    assert named["medium"]["thinking_budget_tokens"] == 2048
+    variants = opencode.local_provider({**LOCAL_27B, "effort_fields": True})["models"]["qwen3.8-27b"]["variants"]
+    assert variants["high"]["reasoning_effort"] == "high"
+
+
 @pytest.mark.parametrize("outcome, failed", [("succeeded", False), (None, True), ("failed", True)])
 def test_an_exit_code_after_a_session_that_succeeded_is_not_a_failure(tmp_path: Path, outcome, failed) -> None:
     # Says its last word, then exits 1 with nothing on stderr: OpenCode's shutdown.

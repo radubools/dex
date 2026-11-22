@@ -34,7 +34,8 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
     python local_model_proxy.py --serve ~/.dex/vllm-qwen27b.sh --model qwen3.8-27b
 
 The serve script starts the server on $PORT (the backend port) and answers
-`GET /health` with 200 once ready. For vLLM, start it with `--enable-sleep-mode`
+`GET /health` with 200 once ready (`--ready-path` names another: Splash's /health
+answers at once, its /ready only once the model is loaded). For vLLM, start it with `--enable-sleep-mode`
 (this sets VLLM_SERVER_DEV_MODE=1, which the sleep endpoints need). A server
 with no sleep mode (llama.cpp's llama-server) runs with `--sleep-after 0`: it
 is only stopped when idle.
@@ -255,8 +256,9 @@ class Backend:
 
     def __init__(self, serve: str, port: int, model: str, sleep_after: float, stop_after: float,
                  start_timeout: float = 900, peers: list[str] | None = None, peer_wait: float = 1800,
-                 stop_grace: float = 30) -> None:
+                 stop_grace: float = 30, ready_path: str = "/health") -> None:
         self.stop_grace = stop_grace
+        self.ready_path = "/" + ready_path.lstrip("/")
         self.peers, self.peer_wait = [u.rstrip("/") for u in peers or []], peer_wait
         self.serve, self.port, self.model = os.path.expanduser(serve), port, model
         self.sleep_after, self.stop_after, self.start_timeout = sleep_after, stop_after, start_timeout
@@ -321,7 +323,7 @@ class Backend:
                 self.state = "stopped"
                 raise RuntimeError(f"the server exited while starting ({self.proc.returncode})")
             with contextlib.suppress(httpx.HTTPError):
-                if (await self.http.get(f"{self.url}/health", timeout=3)).status_code == 200:
+                if (await self.http.get(f"{self.url}{self.ready_path}", timeout=3)).status_code == 200:
                     log.info("server up after %.0f s", time.time() - t0)
                     return
             await asyncio.sleep(2)
@@ -585,10 +587,12 @@ def main() -> None:
     ap.add_argument("--peer", action="append", default=[],
                     help="another proxy (e.g. http://127.0.0.1:8100) whose model must be unloaded before this one "
                          "loads; repeatable")
+    ap.add_argument("--ready-path", default="/health",
+                    help="the backend's path that answers 200 once it can serve (default /health; Splash: /ready)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     backend = Backend(a.serve, a.backend_port, a.model, a.sleep_after, a.stop_after, start_timeout=a.start_timeout,
-                      peers=a.peer, stop_grace=a.stop_grace)
+                      peers=a.peer, stop_grace=a.stop_grace, ready_path=a.ready_path)
     uvicorn.run(app_for(backend, a.power_every, model_gflop_per_token(a.model)), host="127.0.0.1", port=a.port, log_level="warning",
                 timeout_graceful_shutdown=max(40, a.stop_grace + 10))
 
