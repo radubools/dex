@@ -5,15 +5,18 @@
 import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
 
+/** A day `n` days back, as the server names its buckets: fixtures stay inside the week shown. */
+const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00+00:00'
+
 const point = (bucket: string, series: string, cost: number, thinking: number) => ({
   bucket, series, cost, tasks: 1, input: 100, cacheRead: 9000, cacheWrite: 500, output: thinking * 2, thinking,
 })
 const fixture = {
   totals: { day: 1, week: 7, month: 30, all_time: 90 },
   series: [
-    point('2026-10-29T00:00:00+00:00', 'game-story', 5, 400),
-    point('2026-10-29T00:00:00+00:00', '(no skill)', 1, 100),
-    point('2026-10-30T00:00:00+00:00', 'game-story', 2, 200),
+    point(day(2), 'game-story', 5, 400),
+    point(day(2), '(no skill)', 1, 100),
+    point(day(1), 'game-story', 2, 200),
   ],
   coverage: { spend: 8, with_tokens: 6, inferred: 2 },
   period: 'week', granularity: 'day', group: 'skill',
@@ -22,11 +25,40 @@ const fixture = {
 /** `COSTS_JSON` swaps in a dump of real responses, to look at the real thing. */
 const real = process.env.COSTS_JSON ? JSON.parse(readFileSync(process.env.COSTS_JSON, 'utf8')) : null
 
-async function open(page: Page, costs: unknown = fixture, earliest?: string) {
+/** The drill-down's answer: whatever was asked for, recorded, and `drill` tasks paged by `limit`. */
+type Asked = { bucket: string | null; series: string[]; page: number; sort: string | null; source: string | null }
+const drillTask = (n: number) => ({
+  id: `task-${n}`, title: `Task ${n}`, slug: `task-${n}`, project: 'alpha', model: 'claude-x', state: 'succeeded',
+  threadId: null, createdAt: 1_793_000_000 + n, finishedAt: null, cost: 10 - n * 0.5, tokens: 1000 * n,
+})
+
+async function open(page: Page, costs: unknown = fixture, earliest?: string, drill: { total: number; asked?: Asked[]; project?: boolean } = { total: 3 }) {
   await page.route('**/api/**', (route) => {
     const url = new URL(route.request().url())
     const p = url.pathname
     const q = url.searchParams
+    if (p === '/api/costs/tasks') {
+      const page = Number(q.get('page') ?? 0), limit = Number(q.get('limit') ?? 25)
+      drill.asked?.push({ bucket: q.get('bucket'), series: q.getAll('series'), page, sort: q.get('sort'), source: q.get('source') })
+      const all = Array.from({ length: drill.total }, (_, i) => drillTask(i))
+      return route.fulfill({ json: {
+        tasks: all.slice(page * limit, page * limit + limit), total: drill.total,
+        cost: all.reduce((a, t) => a + t.cost, 0), tokens: 0, page, limit, sort: q.get('sort'), source: 'usage',
+      } })
+    }
+    if (p.startsWith('/api/tasks/task-')) {
+      const id = p.split('/')[3]
+      if (p.endsWith('/events')) return route.fulfill({ json: { taskId: id, events: [] } })
+      if (p.endsWith('/messages')) return route.fulfill({ json: { messages: [] } })
+      if (p.endsWith(id)) return route.fulfill({ json: { task: { ...drillTask(Number(id.slice(5))), problem: 'p',
+        activity: null, startedAt: null, error: null, costUsd: 1, turns: 1, outputDir: '', artifacts: [], pending: [],
+        attempt: 1, parentId: null, sessionId: null, resumedFrom: null, outputSlug: id, costIsEstimate: false,
+        canResume: false, canRerun: false, canRestart: false, canPause: false } } })
+      return route.fulfill({ json: { taskId: id, events: [], messages: [] } })
+    }
+    const thread = { id: 't1', title: 'Main', project: 'alpha', kind: 'chat', createdAt: 0, updatedAt: 0, messageCount: 0, taskIds: [] }
+    if (drill.project && p === '/api/threads') return route.fulfill({ json: { threads: [thread] } })
+    if (drill.project && p === '/api/threads/t1') return route.fulfill({ json: { thread: { ...thread, messages: [] }, tasks: [] } })
     const body =
       p === '/api/costs' ? { ...(real?.[`${q.get('period')}/${q.get('granularity')}/${q.get('group')}`] ?? costs),
           period: q.get('period'), granularity: q.get('granularity'), offset: Number(q.get('offset') ?? 0),
@@ -34,7 +66,10 @@ async function open(page: Page, costs: unknown = fixture, earliest?: string) {
       : p === '/api/auth/me' ? { state: 'open', user: null, googleEnabled: false, passwordEnabled: false }
       : p === '/api/health' ? { ok: true, workspace: '', assetsDir: '', model: 'test', concurrency: 1 }
       : p === '/api/settings' ? { settings: { auto_approve: false }, costs: fixture.totals, tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0, visible: 0, counted: 0, with_cost: 0 }, models: [], efforts: [] }
-      : p === '/api/projects' ? { projects: [], default: null }
+      // Steps back are recorded per project, so a test of back needs one.
+      : p === '/api/projects' ? (drill.project
+          ? { projects: [{ slug: 'alpha', name: 'Alpha', description: '', createdAt: 0, updatedAt: 0, threads: 0, tasks: 0 }], default: 'alpha' }
+          : { projects: [], default: null })
       : p === '/api/threads' ? { threads: [] }
       : p === '/api/tasks' ? { tasks: [] }
       : p === '/api/packages' ? { packages: [] }
@@ -163,7 +198,6 @@ test('the arrows page through earlier periods and stop at the ends', async ({ pa
 })
 
 test('hovering a bar lists its values and leaving hides them', async ({ page }) => {
-  const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00+00:00'
   await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(1), 'game-mesh', 1.5, 1)] })
   const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
   await expect(panel.locator('.cost-chart .axis')).toHaveCount(0)
@@ -190,8 +224,7 @@ test.describe('on a touch screen', () => {
   test.use({ hasTouch: true })
 
   test('a tap keeps the card for 5 s, until another bar or a tap outside', async ({ page }) => {
-    const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00+00:00'
-    await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(3), 'game-mesh', 2, 1)] })
+      await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(3), 'game-mesh', 2, 1)] })
     await page.clock.install()
     const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
     const columns = panel.locator('.cost-column')
@@ -274,4 +307,75 @@ test('Code lines and Asset lines show summed lines, not cost', async ({ page }) 
   await page.getByRole('button', { name: 'Asset lines' }).click()
   await expect(page.locator('.legend-item', { hasText: 'game-story' }).locator('.legend-value')).toHaveText('40')
   await expect(page.locator('.legend-item', { hasText: 'game-story' })).not.toContainText('$')
+})
+
+test('clicking a bar lists the tasks it sums, a page at a time, and a task opens its view', async ({ page }) => {
+  const asked: Asked[] = []
+  await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(1), 'game-mesh', 1, 1)] },
+             undefined, { total: 23, asked, project: true })
+  const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
+  const list = panel.getByRole('region', { name: 'Tasks in this slice' })
+  await expect(list).toHaveCount(0)
+
+  // The bottom of the bar is the largest series, game-story.
+  // Measured at each click: the list below can scroll the pane.
+  const column = panel.locator('.cost-column').nth(5)
+  const at = async (where: 'top' | 'bottom') => {
+    await column.scrollIntoViewIfNeeded()
+    const box = (await column.boundingBox())!
+    await page.mouse.click(box.x + box.width / 2, where === 'top' ? box.y + 3 : box.y + box.height - 3)
+  }
+  await at('bottom')
+  await expect(list).toBeVisible()
+  await expect.poll(() => asked.at(-1)).toMatchObject({ bucket: day(1), series: ['game-story'], page: 0, sort: 'cost', source: 'usage' })
+  await expect(list).toContainText('game-story')
+  await expect(list).toContainText('23 tasks')
+  await expect(list.locator('tbody tr')).toHaveCount(10)
+  await expect(list.locator('tbody tr').first()).toContainText('$10.00')
+  await expect(panel.locator('.cost-chart g.dim')).toHaveCount(6)
+  if (process.env.COSTS_SHOTS) await page.screenshot({ path: `${process.env.COSTS_SHOTS}/drill.png`, fullPage: true })
+
+  // Pages, then a sort, which starts again from the first page.
+  await list.getByRole('button', { name: 'Next page of tasks' }).click()
+  await expect(list).toContainText('Page 2 of 3')
+  await expect.poll(() => asked.at(-1)?.page).toBe(1)
+  await list.getByRole('button', { name: 'Tokens' }).click()
+  await expect.poll(() => asked.at(-1)).toMatchObject({ sort: 'tokens', page: 0 })
+
+  // The top of the tallest bar is its last series; Whole bar is every series.
+  await at('top')
+  await expect.poll(() => asked.at(-1)).toMatchObject({ bucket: day(1), series: ['game-mesh'] })
+  await list.getByRole('button', { name: 'Whole bar' }).click()
+  await expect.poll(() => asked.at(-1)).toMatchObject({ bucket: day(1), series: [] })
+  await expect(list).toContainText('all series')
+  await expect(list.getByRole('button', { name: 'Whole bar' })).toHaveCount(0)
+  // A segment clicked again clears it, and so does ✕.
+  await at('bottom')
+  await at('bottom')
+  await expect(list).toHaveCount(0)
+  await at('bottom')
+  await list.getByRole('button', { name: 'Clear selection' }).click()
+  await expect(list).toHaveCount(0)
+
+  // A task opens its own view; back returns to the dashboard and its slice.
+  await at('bottom')
+  await list.getByRole('button', { name: 'Task 2' }).click()
+  await expect(page.getByRole('dialog', { name: 'Cost dashboard' })).toHaveCount(0)
+  await expect(page.locator('.task-panel')).toContainText('Task 2')
+  await page.goBack()
+  await expect(page.getByRole('dialog', { name: 'Cost dashboard' }).getByRole('region', { name: 'Tasks in this slice' }))
+    .toContainText('game-story')
+})
+
+test('a legend pick narrows the whole bar to the series left on', async ({ page }) => {
+  const asked: Asked[] = []
+  await open(page, { ...fixture, series: [point(day(1), 'game-story', 5, 1), point(day(1), 'game-mesh', 1, 1)] },
+             undefined, { total: 1, asked })
+  const panel = page.getByRole('dialog', { name: 'Cost dashboard' })
+  await panel.locator('.legend-item', { hasText: 'game-mesh' }).click()
+  const box = (await panel.locator('.cost-column').nth(5).boundingBox())!
+  // game-mesh alone is the tallest bar now: the whole bar, from the list.
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 3)
+  await panel.getByRole('button', { name: 'Whole bar' }).click()
+  await expect.poll(() => asked.at(-1)).toMatchObject({ series: ['game-mesh'] })
 })

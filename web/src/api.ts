@@ -1,5 +1,5 @@
 import type {
-  AssetResponse, CostTotals, CostsResponse, DexEvent, Health, Plan, PlannedTask,
+  AssetResponse, CostSlice, CostTasksResponse, CostTotals, CostsResponse, DexEvent, Health, Plan, PlannedTask,
   AnimationInfo, FeedResponse, GuideResponse, Project, ProjectsResponse, Settings,
   SettingsResponse, Task, TaskMessage, Thread, ThreadSummary, DesignReply,
   PackageEntry, TagCount, UploadBatch, SkillsResponse, SkillVersion, TaskGraph,
@@ -183,6 +183,18 @@ export const getCosts = (period: string, granularity: string, group: string, pro
     `/api/costs?period=${period}&granularity=${granularity}&group=${group}&offset=${offset}` +
       (projects.length ? `&projects=${encodeURIComponent(projects.join(','))}` : ''),
   )
+
+/** The tasks behind one slice of the cost chart, a page at a time. */
+export function getCostTasks(slice: CostSlice, sort: string, page: number, limit = 25) {
+  const q = new URLSearchParams({
+    period: slice.period, granularity: slice.granularity, group: slice.group,
+    offset: String(slice.offset), source: slice.source, sort, page: String(page), limit: String(limit),
+  })
+  if (slice.projects.length) q.set('projects', slice.projects.join(','))
+  if (slice.bucket) q.set('bucket', slice.bucket)
+  for (const s of slice.series ?? []) q.append('series', s)
+  return request<CostTasksResponse>(`/api/costs/tasks?${q}`)
+}
 
 /**
  * One task by id, for opening a run the listing did not carry.

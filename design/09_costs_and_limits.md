@@ -124,6 +124,24 @@ validated against a fixed set rather than interpolated into SQL.
 Cost figures are admin-only: a non-admin reading settings gets them omitted, and
 `/api/costs` needs `manage_users`.
 
+### Drilling down to tasks
+
+Clicking a bar of the dashboard's chart, or one segment of it, lists the tasks
+behind that slice right under the chart, ten to a page, largest cost first
+(tokens or date on request); a task opens its own view (activity and files),
+and back returns to the dashboard, slice and page included. **Whole bar**
+widens a segment to its bar, clicking the same again or ✕ clears it.
+
+`GET /api/costs/tasks` takes the chart's own `period`, `granularity`, `group`,
+`projects` and `offset`, plus `bucket` (a bucket's start exactly as
+`/api/costs` sent it), `series` (repeated: the group's names, several for
+Other), `source` (`usage` for cost and tokens, `lines` for code and asset
+lines), `sort`, `page` and `limit`. It answers
+`{tasks, total, cost, tokens | code, assets, page, limit, sort, source}`.
+`CostStore.slice_tasks` reads through the same FROM/WHERE as `series` and
+`line_series` (`_usage_scope`, `_lines_scope`, `_GROUPS`), so a slice's tasks
+are exactly the rows its bar sums and their total is the bar's.
+
 ---
 
 ## Usage limits

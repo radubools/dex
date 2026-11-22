@@ -16,6 +16,7 @@ import secrets
 import tempfile
 import time
 from collections.abc import AsyncIterator
+from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from collections.abc import Awaitable, Callable
@@ -1116,6 +1117,39 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             "granularity": granularity,
             "group": group,
         }
+
+    @app.get("/api/costs/tasks", dependencies=admin_only)
+    async def cost_tasks(
+        period: str = Query(default="week"),
+        granularity: str = Query(default="day"),
+        group: str = Query(default="model"),
+        projects: str | None = Query(default=None),
+        offset: int = Query(default=0, ge=0),
+        bucket: str | None = Query(default=None),
+        series: list[str] | None = Query(default=None),
+        source: str = Query(default="usage"),
+        sort: str = Query(default="cost"),
+        page: int = Query(default=0, ge=0),
+        limit: int = Query(default=25, ge=1, le=100),
+    ) -> dict[str, Any]:
+        """The tasks behind a slice of `/api/costs`: the same period, group and
+        projects, narrowed to one bucket (its start, as the chart's `bucket`)
+        and to some of the group's series (`series`, repeated). A page at a
+        time, largest cost first unless `sort` says otherwise."""
+        chosen = [p for p in (projects or "").split(",") if p] or None
+        at = None
+        if bucket:
+            try:
+                at = datetime.fromisoformat(bucket)
+            except ValueError as exc:
+                raise HTTPException(400, f"bucket is not a time: {bucket}") from exc
+            if at.tzinfo is None:
+                raise HTTPException(400, "bucket needs its offset, as /api/costs sends it")
+        return await CostStore(db).slice_tasks(
+            period, granularity, group, chosen, offset,
+            at=at, series=[s for s in series or [] if s] or None,
+            source=source, sort=sort, page=page, limit=limit,
+        )
 
     @app.get("/api/tasks", dependencies=guard)
     async def list_tasks(access: Access = Depends(access_dep)) -> dict[str, Any]:

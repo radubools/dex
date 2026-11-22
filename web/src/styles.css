@@ -2085,3 +2085,24 @@ td.clipped:hover { color: var(--accent); }
 
 .thread-tie { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 14px 0; font-size: 12px; color: var(--muted); }
 .thread-tie select { max-width: 60%; }
+
+/* The cost chart's drill-down: a clicked slice, and its tasks under the chart. */
+.cost-column { cursor: pointer; }
+.cost-chart g.dim rect:not(.cost-column), .cost-chart rect.dim { opacity: 0.35; }
+.cost-chart g.picked rect:not(.cost-column):not(.dim) { stroke: var(--text, #e5e7eb); stroke-width: 1; }
+.cost-hint { margin: 4px 0 8px; }
+.cost-tasks { margin: 8px 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.cost-tasks-head { display: flex; align-items: center; gap: 8px; }
+.cost-tasks-head { flex-wrap: wrap; }
+.cost-tasks-label { font-weight: 600; font-size: 12px; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.cost-tasks-head .ghost-btn { font-size: 11px; padding: 2px 8px; }
+.cost-task-table thead th:first-child, .cost-task-table thead th:nth-child(3) { text-align: left; }
+.cost-task-table { margin: 6px 0; }
+.cost-task-table tbody th { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.cost-task-title { all: unset; cursor: pointer; color: var(--text, inherit); }
+.cost-task-title:hover, .cost-task-title:focus-visible { text-decoration: underline; }
+.cost-task-state { text-align: left !important; }
+.cost-task-state .state-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; vertical-align: middle; }
+.cost-sort { all: unset; cursor: pointer; }
+.cost-sort.on { color: var(--text, #e5e7eb); font-weight: 600; }
+.cost-sort.on::after { content: ' ↓'; }

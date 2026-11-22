@@ -1071,6 +1071,14 @@ export default function App() {
               setShowCosts(false)
             }}
             onBack={() => back(() => setShowCosts(false))}
+            onOpenTask={(id) => {
+              // The task's own view, as a step: back returns to the dashboard
+              // as it was, slice and page included.
+              go()
+              setShowCosts(false)
+              setViewing(null)
+              setActiveTaskId(id)
+            }}
           />
         </Suspense>
       )}

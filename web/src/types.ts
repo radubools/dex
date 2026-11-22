@@ -370,6 +370,57 @@ export type CostsResponse = {
   group: string
 }
 
+/** One task of a slice of the cost chart, with its share of that slice. */
+export type CostTask = {
+  id: string
+  title: string
+  slug: string
+  project: string | null
+  model: string | null
+  state: TaskState
+  threadId: string | null
+  createdAt: number | null
+  finishedAt: number | null
+  /** Cost and tokens (usage slices), or lines (line slices). */
+  cost?: number
+  tokens?: number
+  input?: number
+  cacheRead?: number
+  cacheWrite?: number
+  output?: number
+  thinking?: number
+  code?: number
+  assets?: number
+}
+
+export type CostTasksResponse = {
+  tasks: CostTask[]
+  /** Every task in the slice, and what they sum to, across all pages. */
+  total: number
+  cost?: number
+  tokens?: number
+  code?: number
+  assets?: number
+  page: number
+  limit: number
+  sort: string
+  source: 'usage' | 'lines'
+}
+
+/** A slice of the cost chart, as the drill-down asks for it. */
+export type CostSlice = {
+  period: string
+  granularity: string
+  group: string
+  projects: string[]
+  offset: number
+  /** A bucket's start, as `/api/costs` sent it; none is the whole period. */
+  bucket: string | null
+  /** Some of the group's series; none is all of them. */
+  series: string[] | null
+  source: 'usage' | 'lines'
+}
+
 export type TaskMessage = {
   id: string
   body: string
