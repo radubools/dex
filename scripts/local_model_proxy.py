@@ -26,6 +26,8 @@ vLLM never unloads by itself, so this proxy sits on the address dex knows
     model's entry in ~/.dex/local-models.json gives `active_params_b`. llama.cpp dequantizes
     quantized weights to FP16 in its kernels, so its work is FLOPs, not integer TOPS.
   While requests are in flight each snapshot is logged as a `machine:` line.
+- `--max-images N` leaves the oldest images out of a chat request that carries more than N
+  (Splash refuses more than 64), half of N at a time so the prompt's start stays cached;
 - every chat completion it forwards carries the latest snapshot as an extra `dex_machine`
   field: in a stream, on the first `data:` chunk, on any chunk once a newer snapshot exists,
   and on the closing one (a finish reason or usage); in a JSON reply, at its top level.
@@ -477,7 +479,42 @@ class Forwarded(StreamingResponse):
                 self.done()
 
 
-def app_for(backend: Backend, power_every: float = 5, gflop_per_token: float = 0.0) -> Starlette:
+DROPPED_IMAGE = "[an earlier image, left out: this model takes at most {limit} images a request]"
+
+
+def trim_images(content: bytes, limit: int) -> tuple[bytes, int]:
+    """A chat request with its oldest images left out, so that it carries at most `limit`.
+
+    A request carries the whole conversation, so an agent's session that has opened
+    many images (Splash takes at most 64 a request) would otherwise be refused on
+    every request from then on, and could never go on. The oldest go first, in steps
+    of half the limit: the images left out stay the same for the next limit/2
+    images, so the start of the prompt, and the server's cache of it, holds between
+    steps. Each is replaced by a short note saying so. Anything that is not a chat
+    request with too many images is returned as it came. Returns (body, how many left out).
+    """
+    if limit <= 0 or b"image_url" not in content:
+        return content, 0
+    try:
+        req = json.loads(content)
+    except ValueError:
+        return content, 0
+    parts = [(m["content"], i) for m in req.get("messages") or [] if isinstance(m, dict)
+             and isinstance(m.get("content"), list)
+             for i, part in enumerate(m["content"]) if isinstance(part, dict) and part.get("type") == "image_url"]
+    over = len(parts) - limit
+    if over <= 0:
+        return content, 0
+    step = max(1, limit // 2)
+    drop = min(len(parts), -(-over // step) * step)
+    note = {"type": "text", "text": DROPPED_IMAGE.format(limit=limit)}
+    for msg_content, i in parts[:drop]:
+        msg_content[i] = dict(note)
+    return json.dumps(req).encode(), drop
+
+
+def app_for(backend: Backend, power_every: float = 5, gflop_per_token: float = 0.0,
+            max_images: int = 0) -> Starlette:
     machine = Machine(backend, gflop_per_token)
 
     async def sample() -> None:
@@ -514,6 +551,10 @@ def app_for(backend: Backend, power_every: float = 5, gflop_per_token: float = 0
         # The body is read before the wait for the server: a start takes a minute or more, and a
         # client that left meanwhile must not be found out only once the request counts as in flight.
         content = await request.body()
+        if max_images and request.url.path.endswith("/chat/completions"):
+            content, dropped = trim_images(content, max_images)
+            if dropped:
+                log.info("left out the %d oldest images of a request (at most %d a request)", dropped, max_images)
         backend.waiting += 1
         backend.last = time.time()
         try:
@@ -603,11 +644,14 @@ def main() -> None:
                          "loads; repeatable")
     ap.add_argument("--ready-path", default="/health",
                     help="the backend's path that answers 200 once it can serve (default /health; Splash: /ready)")
+    ap.add_argument("--max-images", type=int, default=0,
+                    help="images a chat request may carry; the oldest beyond it are left out, half the limit at a "
+                         "time (Splash takes at most 64); default 0 leaves requests alone")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     backend = Backend(a.serve, a.backend_port, a.model, a.sleep_after, a.stop_after, start_timeout=a.start_timeout,
                       peers=a.peer, stop_grace=a.stop_grace, ready_path=a.ready_path)
-    uvicorn.run(app_for(backend, a.power_every, model_gflop_per_token(a.model)), host="127.0.0.1", port=a.port, log_level="warning",
+    uvicorn.run(app_for(backend, a.power_every, model_gflop_per_token(a.model), a.max_images), host="127.0.0.1", port=a.port, log_level="warning",
                 timeout_graceful_shutdown=max(40, a.stop_grace + 10))
 
 

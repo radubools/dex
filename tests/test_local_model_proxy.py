@@ -437,3 +437,62 @@ def test_splash_counters_are_read_under_llama_server_names_without_slots():
     first, second = asyncio.run(run())
     assert first is None and asked == ["/metrics", "/metrics"]  # Splash counts running replies itself
     assert second == {"in_tps": 520.0, "out_tps": 70.0, "tflops": round(590 * 13.4 / 1000, 2)}
+
+
+def chat_with_images(n: int) -> dict:
+    """A conversation whose tool turns opened n images, one per message, then a question."""
+    msgs = [{"role": "system", "content": "be brief"}]
+    for i in range(n):
+        msgs.append({"role": "tool", "content": [{"type": "text", "text": f"shot {i}"},
+                                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{i}"}}]})
+    msgs.append({"role": "user", "content": "what now?"})
+    return {"model": "m", "messages": msgs}
+
+
+def images_of(body: bytes) -> list[str]:
+    return [p["image_url"]["url"] for m in json.loads(body)["messages"] if isinstance(m["content"], list)
+            for p in m["content"] if p["type"] == "image_url"]
+
+
+def test_a_request_within_the_image_limit_is_left_alone():
+    body = json.dumps(chat_with_images(64)).encode()
+    assert proxy.trim_images(body, 64) == (body, 0)
+    assert proxy.trim_images(b"not json image_url", 64) == (b"not json image_url", 0)
+    assert proxy.trim_images(body, 0) == (body, 0)
+
+
+def test_the_oldest_images_go_half_the_limit_at_a_time():
+    out, dropped = proxy.trim_images(json.dumps(chat_with_images(65)).encode(), 64)
+    assert dropped == 32
+    kept = images_of(out)
+    assert len(kept) == 33 and kept[0].endswith(",32") and kept[-1].endswith(",64")
+    first = json.loads(out)["messages"][1]["content"]
+    assert first[1] == {"type": "text", "text": proxy.DROPPED_IMAGE.format(limit=64)}
+    assert first[0]["text"] == "shot 0"
+
+
+def test_what_is_left_out_holds_until_the_next_step_so_the_prompt_start_stays_cached():
+    a, _ = proxy.trim_images(json.dumps(chat_with_images(65)).encode(), 64)
+    b, _ = proxy.trim_images(json.dumps(chat_with_images(96)).encode(), 64)
+    c, dropped = proxy.trim_images(json.dumps(chat_with_images(97)).encode(), 64)
+    prefix = lambda body, n: json.loads(body)["messages"][:n]
+    assert prefix(a, 66) == prefix(b, 66)       # same 32 left out, same start
+    assert dropped == 64 and len(images_of(c)) == 33
+
+
+def test_the_proxy_forwards_the_trimmed_request():
+    seen = {}
+
+    async def chat(request):
+        seen["body"] = await request.body()
+        return JSONResponse({"choices": []})
+    up = Starlette(routes=[Route("/v1/chat/completions", chat, methods=["POST"])])
+    b = make_backend(up)
+    app = proxy.app_for(b, power_every=0, max_images=64)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://proxy") as c:
+            r = await c.post("/v1/chat/completions", json=chat_with_images(70))
+            return r.status_code
+    assert asyncio.run(go()) == 200
+    assert len(images_of(seen["body"])) == 38
