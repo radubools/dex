@@ -18,7 +18,7 @@ enabled.
 |---|---|
 | `src/dex/skills.py` | Read a skill, hash it, enable and disable it, materialise `utils/` |
 | `src/dex/api.py` | `GET /skills`, `POST /skills/{name}/projects/{slug}`, export and import |
-| `src/dex/runner.py` | Each enabled skill's `SKILL.md` appended to the brief |
+| `src/dex/runner.py`, `src/dex/prompts.py` | Every enabled skill's line (name, full description, where its `SKILL.md` is) in the brief |
 | `web/src/components/SkillAdmin.tsx` | The admin list, with a checkbox per project |
 
 ---
@@ -324,6 +324,16 @@ instructions for capabilities most tasks never touch, growing without limit.
 
 So the **description is load-bearing**: it is the only thing an agent sees when
 deciding whether to look further.
+
+**Every enabled skill gets its whole line, in every task, from the start.**
+Not only the skill of the thread the task runs in. For two days in November
+2026 (`7cd2b14`, then `3d97639`), skills outside the thread's own were cut to
+their name, then to their first sentence. The aim was a shorter start that a
+local model would prefill faster. Local models then wandered: a task that
+needed a skill it had only seen named went looking for what the full line
+would have told it. Prefill is now fast enough for the whole roster, so the
+cut was undone. The roster stays word for word the same for every task of a
+project, which still lets a model server's prompt cache keep it.
 
 Making each skill a *tool* was the alternative and is worse: tool definitions
 cost more than a roster line, sit in every request whether relevant or not, and

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 #: The guide every project shares, at the workspace root. Not `AGENTS.md`
@@ -439,15 +438,17 @@ def power_prompt(problem: str, task_dir: Path, workspace: Path) -> str:
     )
 
 
-def skills_listing(skills: list[tuple[str, str, str, bool]], focus: str | None = None) -> tuple[str, str | None]:
+def skills_listing(skills: list[tuple[str, str, str, bool]]) -> tuple[str, str | None]:
     """The skills list of a brief, and the directory its `<skills>` stands for.
 
     A task's skills are its own copies, under a directory named after the
     task, so their paths are written against `<skills>` (said once, at the
     end of the brief): the list is then the same for every task of a thread,
-    and a model server's prompt cache keeps it. With a `focus` (the thread's
-    skill), that skill, the ones its `SKILL.md` mentions and `power` are
-    described in full, and the others in their first sentence.
+    and a model server's prompt cache keeps it. Every enabled skill is
+    described in full, whatever the thread: a task told only a skill's name,
+    or its first sentence, wanders looking for what the full line would have
+    said (it was briefly cut to that on 2026-11-20, and local models
+    meandered).
     """
     if not skills:
         return "", None
@@ -457,31 +458,13 @@ def skills_listing(skills: list[tuple[str, str, str, bool]], focus: str | None =
     def where(name: str, path: str) -> str:
         return f"<skills>/{name}" if root else path
 
-    names = {name for name, *_ in skills}
-    described = names
-    if focus in names:
-        # Power is how any task gets a change to code it may not touch: always in full.
-        path = next(p for n, _, p, _ in skills if n == focus)
-        try:
-            guide = (Path(path) / "SKILL.md").read_text()
-        except OSError:
-            guide = ""
-        described = {focus, "power"} | {n for n in names if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", guide)}
-    # Every skill keeps a line, so a task always knows what each one does: the
-    # thread's own (and those it names) in full, the rest in their first sentence.
     lines = [
-        f"- `{name}` — {description if name in described else short_description(description)}\n"
+        f"- `{name}` — {description}\n"
         f"  Read `{where(name, path)}/SKILL.md`."
         + (f" Promote a helper into `{where(name, path)}/utils/`." if has_utils else "")
         for name, description, path, has_utils in skills
     ]
     return "\n".join(lines), root
-
-
-def short_description(description: str, limit: int = 160) -> str:
-    """A skill's description to its first sentence, and at most `limit` characters."""
-    first = re.split(r"(?<=[.!?])\s+(?=[A-Z])|:\s", description.strip(), maxsplit=1)[0].rstrip(".")
-    return first if len(first) <= limit else first[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
 def generation_prompt(
@@ -499,9 +482,6 @@ def generation_prompt(
     #: on the machine. Named in the brief because a task that has to discover
     #: them spends turns on it, and one that never does ignores the material.
     linked: list[tuple[str, str]] | None = None,
-    #: The skill of the thread the task runs in, if it has one: that skill,
-    #: and those its `SKILL.md` names, are described in full; the rest briefly.
-    focus: str | None = None,
 ) -> str:
     """The full brief for one task.
 
@@ -574,7 +554,7 @@ def generation_prompt(
     #
     # The description is therefore load-bearing: it is the only thing the agent
     # sees when deciding whether to look further.
-    listed, skills_root = skills_listing(skills or [], focus)
+    listed, skills_root = skills_listing(skills or [])
     skills_note = (
         f"\n`<skills>` in the skills list above is `{skills_root}`: this task's own copies\n"
         "of the skills, the ones to read and to promote a helper into.\n"

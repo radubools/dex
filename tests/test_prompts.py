@@ -412,7 +412,7 @@ def test_the_brief_runs_from_what_tasks_share_to_what_is_the_tasks_own(tmp_path:
         (work / "game-story" / "SKILL.md").write_text("Stories ask `game-voice` for their captions.")
         skills = [(n, f"{n} things", str(work / n), True) for n in ("game-story", "game-voice", "game-sfx")]
         return generation_prompt(problem=request, task_dir=tmp_path / "proj" / task, python=Path("/py"),
-                                 manim_available=True, workspace=tmp_path, skills=skills, focus="game-story")
+                                 manim_available=True, workspace=tmp_path, skills=skills)
 
     a, b = brief("t1", "Make story one"), brief("t2", "Make story two")
     head_a, head_b = a.split("\n# Request\n")[0], b.split("\n# Request\n")[0]
@@ -427,24 +427,19 @@ def test_the_brief_runs_from_what_tasks_share_to_what_is_the_tasks_own(tmp_path:
     assert "# Finish" in head_a
 
 
-def test_without_a_thread_skill_every_skill_is_described() -> None:
+def test_every_skill_is_described_in_full(tmp_path: Path) -> None:
+    """Every enabled skill reaches a task in full from its start, whatever
+    thread it runs in: no skill is cut to its name or its first sentence."""
     from dex.prompts import skills_listing
 
     listed, root = skills_listing([("a", "does a", "/s/a/v1", False), ("b", "does b", "/s/b/v2", False)])
     assert root is None and "does a" in listed and "does b" in listed and "/s/a/v1/SKILL.md" in listed
 
-
-def test_skills_outside_the_thread_are_described_in_their_first_sentence(tmp_path: Path) -> None:
-    from dex.prompts import skills_listing
-
-    (tmp_path / "work" / "game-story").mkdir(parents=True)
-    (tmp_path / "work" / "game-story" / "SKILL.md").write_text("Stories.")
     skills = [(n, d, str(tmp_path / "work" / n), False) for n, d in (
         ("game-story", "Lesson scripts. With many details after."),
         ("game-sfx", "Procedural, seeded sound effects: a DSP toolkit and more."),
         ("power", "Arbitrary code changes to dex itself. Overrides the restrictions."))]
-    listed, root = skills_listing(skills, "game-story")
+    listed, root = skills_listing(skills)
     assert root == str(tmp_path / "work")
-    assert "- `game-story` — Lesson scripts. With many details after." in listed
-    assert "- `game-sfx` — Procedural, seeded sound effects\n" in listed
-    assert "- `power` — Arbitrary code changes to dex itself. Overrides the restrictions." in listed
+    for _, description, _, _ in skills:
+        assert f" — {description}\n" in listed
