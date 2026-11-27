@@ -22,6 +22,11 @@ TEST_DSN = os.environ.get("DEX_TEST_DATABASE_URL", "postgresql://127.0.0.1/dex_t
 DEFAULT_PROJECT = "algorithms"
 
 
+# The remote bridge reads ~/.config/dex/remote.json; a test must never reach
+# the real cloud project through it, whatever the machine has configured.
+os.environ["DEX_REMOTE_CONFIG"] = os.devnull + ".dex-remote-none"
+
+
 @pytest.fixture(autouse=True)
 def _no_routing(monkeypatch):
     """A message stays where it is posted, without a real model call, unless a test routes it."""

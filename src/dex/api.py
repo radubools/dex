@@ -262,6 +262,8 @@ class SettingsRequest(BaseModel):
     model: str | None = None
     #: Per-project override, e.g. {"algorithms": "claude-sonnet-5"}.
     project_models: dict[str, str] | None = None
+    #: Per-project switch: poll the dex-remote queue for it, e.g. {"ml": true}.
+    project_remote: dict[str, bool] | None = None
     #: Per-skill override for the tasks in its threads, e.g. {"game-reading": "oc:qwen3.8-flash"};
     #: "" goes back to the project's or global model.
     skill_models: dict[str, str] | None = None
@@ -412,6 +414,11 @@ def create_app(config: Config = CONFIG) -> FastAPI:
     # A run the CLI just refused asks for the hold to be re-decided now, not
     # at the watcher's next pass.
     tasks.usage_recheck = usage.check
+    # Tasks queued from the dex-remote page (remote.py): off unless
+    # ~/.config/dex/remote.json exists and a project's switch is on.
+    from .remote import RemoteBridge, setting_key as remote_key  # noqa: PLC0415
+
+    bridge = RemoteBridge(config, db, tasks, threads)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -435,6 +442,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
         await tasks.start()
         await watcher.start()
         await usage.start()
+        await bridge.start()
         # Tasks from before `context_tokens` was kept get theirs from their
         # session transcripts, in the background: nothing waits on it.
         backfilling = asyncio.create_task(transcripts.backfill(TaskStore(db)))
@@ -442,6 +450,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             yield
         finally:
             backfilling.cancel()
+            await bridge.stop()
             await usage.stop()
             await watcher.stop()
             await tasks.stop()
@@ -851,6 +860,7 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             # design or survey turns running as tasks.
             "planning": tasks.chat_active,
             "limit": await _limit_status(settings, await settings.model_for(None, config.model)),
+            "remote": bridge.status.to_json(),
         }
 
     @app.put("/api/settings", dependencies=can_manage_projects)
@@ -913,6 +923,10 @@ def create_app(config: Config = CONFIG) -> FastAPI:
             await settings.set(SettingsStore.project_model_key(project), model)
         for skill, model in (body.skill_models or {}).items():
             await settings.set(SettingsStore.skill_model_key(skill), model)
+        for project, on in (body.project_remote or {}).items():
+            await settings.set(remote_key(project), bool(on))
+        if body.project_remote:
+            bridge.wake()
 
         current = await settings.all()
         bus.publish(Event(type="settings", data={"settings": current}))

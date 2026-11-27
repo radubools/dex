@@ -44,6 +44,7 @@ This document is the map. Each feature has its own document:
 | [25](25_line_changes.md) | Line changes |
 | [26](26_intent_routing.md) | One chat — every message is routed to its task or thread |
 | [30](30_context_window.md) | A task agent's context window — what fills it at start, on resume, from skills and tools, and what summaries replace |
+| [31](31_remote.md) | dex-remote — tasks sent from a Google Cloud page through Pub/Sub, run locally, mirrored to Firestore |
 
 ---
 
@@ -166,6 +167,7 @@ flowchart TB
 | `artifacts` | What counts as a generated artifact, and what is scratch beside it |
 | `authn` / `identity` | Who is calling and what they may do |
 | `queue` | Claims tasks, enforces capacity, pause / resume / archive |
+| `remote` | The dex-remote bridge: pulls a project's Pub/Sub queue, runs requests as local tasks, mirrors one-liners, questions and files to Firestore and the bucket |
 | `runner` | One task through the SDK, translated into events |
 | `antigravity` / `opencode` / `codex` | Tasks on the Google, OpenCode Go and ChatGPT subscriptions, through their CLIs, as SDK messages (27, 28, 29) |
 | `permissions` | What a task may do without asking |

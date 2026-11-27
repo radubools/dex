@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// Read-only for people.
+//
+//   users/<email>                         kept BY HAND in the Firebase console:
+//                                         {role: "user", projects: {<slug>: true}}
+//                                         or {role: "admin"} (every served project).
+//                                         No document, or any other role: not authorised.
+//
+// Written by local dex (remote.py) with a service account, which these rules
+// do not apply to:
+//   projects/<slug>                       name, and which machines serve it
+//   projects/<slug>/tasks/<id>            a task's state, summary, files, open question
+//   projects/<slug>/tasks/<id>/events/*   its one-line steps
+//   projects/<slug>/requests/<id>         accepted or rejected, and why
+// Requests and answers go to Pub/Sub, not here.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function me() {
+      return request.auth.token.email.lower();
+    }
+    function user() {
+      return get(/databases/$(database)/documents/users/$(me())).data;
+    }
+    function authorised() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(me()))
+        && user().get('role', '') in ['user', 'admin'];
+    }
+    function isAdmin() {
+      return authorised() && user().get('role', '') == 'admin';
+    }
+    function granted(project) {
+      return authorised()
+        && (user().get('role', '') == 'admin' || user().get('projects', {}).get(project, false) == true);
+    }
+
+    // The page reads its own entry at sign-in to decide what to show.
+    match /users/{email} {
+      allow get: if signedIn() && email == me();
+    }
+
+    match /projects/{project} {
+      allow get: if granted(project);
+      // An admin sees every served project, so may list them.
+      allow list: if isAdmin();
+
+      match /tasks/{task} {
+        allow get, list: if granted(project);
+        match /events/{event} {
+          allow get, list: if granted(project);
+        }
+      }
+
+      // list: the page queries `where email == <me>`, which this proves.
+      match /requests/{request} {
+        allow get, list: if granted(project) && resource.data.email == me();
+      }
+    }
+
+    match /{document=**} {
+      allow write: if false;
+    }
+  }
+}

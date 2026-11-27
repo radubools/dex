@@ -376,3 +376,19 @@ CREATE TABLE IF NOT EXISTS task_changes (
     inferred    BOOLEAN NOT NULL DEFAULT false,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Tasks that came from the dex-remote page (remote.py): which request each
+-- answers, and how far it has been mirrored back. `request_id` is unique so a
+-- redelivered Pub/Sub message cannot queue the same request twice.
+CREATE TABLE IF NOT EXISTS remote_tasks (
+    task_id    TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    project    TEXT        NOT NULL,
+    request_id TEXT        NOT NULL UNIQUE,
+    email      TEXT        NOT NULL,
+    last_seq   BIGINT      NOT NULL DEFAULT 0,
+    last_state TEXT,
+    -- What has been uploaded: relative path -> [size, mtime_ns].
+    files      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    done       BOOLEAN     NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -377,6 +377,26 @@ export function SettingsMenu({
             />
           </div>}
 
+          {overrideProject && <label className="menu-row toggle">
+            <span>
+              Take tasks from dex-remote for <code>{overrideProject}</code>
+              <small>{(() => {
+                const remote = data?.remote
+                if (!remote?.configured) return 'Not set up on this machine: no ~/.config/dex/remote.json (see remote/README.md)'
+                if (remote.error) return `Polling, but the last pass failed: ${remote.error}`
+                const ago = remote.lastPoll ? `last polled ${Math.max(0, Math.round(Date.now() / 1000 - remote.lastPoll))}s ago` : 'not polled yet'
+                return `Off by default. Polls this project's dex-remote queue every 15 s and runs, here as ${remote.machine}, what people authorised for it in Firebase send; ${ago}`
+              })()}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              disabled={!data?.remote?.configured}
+              checked={settings?.[`remote:${overrideProject}`] === true}
+              onChange={(e) => patch({ project_remote: { [overrideProject]: e.target.checked } })}
+            />
+          </label>}
+
           <div className="menu-row column">
             <span>
               dex server

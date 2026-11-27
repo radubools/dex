@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- dex: a hexagonal core with a neon D, orbited by a satellite.
+       Source of the favicons (web/public) and the app icon (app/Assets.xcassets):
+       ~/games/engine/tools/app-icons.mjs (usage in its header). -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="72%">
+      <stop offset="0" stop-color="#1d2f7a"/>
+      <stop offset=".5" stop-color="#0a1238"/>
+      <stop offset="1" stop-color="#02030b"/>
+    </radialGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5ef6ff"/>
+      <stop offset=".55" stop-color="#7f9bff"/>
+      <stop offset="1" stop-color="#c06bff"/>
+    </linearGradient>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".25" stop-color="#bff9ff"/>
+      <stop offset=".6" stop-color="#3fd8ff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#3fd8ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="dfill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123a8a" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#2a0f5c" stop-opacity=".9"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="16" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- stars -->
+  <g fill="#cfe6ff">
+    <circle cx="96" cy="140" r="3" opacity=".8"/><circle cx="210" cy="72" r="2" opacity=".6"/>
+    <circle cx="880" cy="118" r="3" opacity=".9"/><circle cx="944" cy="300" r="2" opacity=".5"/>
+    <circle cx="70" cy="420" r="2" opacity=".6"/><circle cx="128" cy="880" r="3" opacity=".7"/>
+    <circle cx="300" cy="960" r="2" opacity=".5"/><circle cx="900" cy="860" r="3" opacity=".8"/>
+    <circle cx="760" cy="40" r="2" opacity=".6"/><circle cx="980" cy="620" r="2" opacity=".6"/>
+    <circle cx="40" cy="660" r="2" opacity=".5"/><circle cx="690" cy="990" r="2" opacity=".6"/>
+  </g>
+
+  <!-- orbit, back half -->
+  <g transform="rotate(-24 512 512)">
+    <path d="M 72 512 A 440 120 0 0 1 952 512" fill="none" stroke="#5ef6ff" stroke-width="6" opacity=".45"/>
+  </g>
+
+  <!-- circuit traces from the hexagon's corners -->
+  <g stroke="url(#neon)" stroke-width="8" fill="none" opacity=".75" stroke-linecap="round">
+    <path d="M 512 172 V 96 H 600"/>
+    <path d="M 806 342 L 880 300 V 220"/>
+    <path d="M 806 682 L 900 736"/>
+    <path d="M 512 852 V 930 H 420"/>
+    <path d="M 218 682 L 140 726 V 800"/>
+    <path d="M 218 342 L 124 288"/>
+  </g>
+  <g fill="#9ff6ff" filter="url(#soft)">
+    <circle cx="600" cy="96" r="12"/><circle cx="880" cy="220" r="12"/><circle cx="900" cy="736" r="12"/>
+    <circle cx="420" cy="930" r="12"/><circle cx="140" cy="800" r="12"/><circle cx="124" cy="288" r="12"/>
+  </g>
+
+  <!-- hexagon frame -->
+  <polygon points="512,172 806,342 806,682 512,852 218,682 218,342" fill="#060a24" fill-opacity=".55"
+           stroke="url(#neon)" stroke-width="22" stroke-linejoin="round" filter="url(#glow)"/>
+  <polygon points="512,222 763,367 763,657 512,802 261,657 261,367" fill="none"
+           stroke="#7fdcff" stroke-width="4" opacity=".35" stroke-dasharray="18 14"/>
+
+  <!-- the D -->
+  <path d="M 376 330 V 694 H 466 A 182 182 0 0 0 466 330 Z" fill="url(#dfill)"
+        stroke="url(#neon)" stroke-width="40" stroke-linejoin="round" filter="url(#glow)"/>
+  <path d="M 376 330 V 694 H 466 A 182 182 0 0 0 466 330 Z" fill="none"
+        stroke="#ffffff" stroke-width="10" stroke-linejoin="round" opacity=".85"/>
+  <circle cx="500" cy="512" r="96" fill="url(#core)"/>
+  <circle cx="500" cy="512" r="26" fill="#ffffff"/>
+
+  <!-- orbit, front half, and its satellite -->
+  <g transform="rotate(-24 512 512)">
+    <path d="M 952 512 A 440 120 0 0 1 72 512" fill="none" stroke="#9ff6ff" stroke-width="8" opacity=".9" filter="url(#soft)"/>
+    <circle cx="300" cy="618" r="22" fill="#ffffff" filter="url(#glow)"/>
+  </g>
+</svg>

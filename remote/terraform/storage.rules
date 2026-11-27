@@ -1,0 +1,42 @@
+rules_version = '2';
+
+// The files bucket, as people see it through Firebase Storage. Local dex and
+// Terraform use service accounts and are not bound by this. Who is authorised
+// is Firestore's users/<email>, kept by hand (see firestore.rules).
+service firebase.storage {
+  match /b/{bucket}/o {
+    function user() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.token.email.lower())).data;
+    }
+    function authorised() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.token.email.lower()))
+        && user().get('role', '') in ['user', 'admin'];
+    }
+    function granted(project) {
+      return authorised()
+        && (user().get('role', '') == 'admin' || user().get('projects', {}).get(project, false) == true);
+    }
+
+    // The page itself. The public bucket holds only the sign-in shell; the
+    // application is here, so nobody unauthorised ever receives it.
+    match /app/{file} {
+      allow read: if authorised();
+    }
+
+    // What a task produced, uploaded by local dex as it appears.
+    match /projects/{project}/tasks/{task}/files/{path=**} {
+      allow read: if granted(project);
+    }
+
+    // Attachments for a request, uploaded by its sender before publishing:
+    // their own folder only, new files only, 100 MB each.
+    match /projects/{project}/uploads/{uid}/{request}/{name} {
+      allow read: if granted(project) && request.auth.uid == uid;
+      allow create: if granted(project)
+        && request.auth.uid == uid
+        && request.resource.size < 100 * 1024 * 1024;
+    }
+  }
+}

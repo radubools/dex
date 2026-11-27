@@ -1,0 +1,7 @@
+web/node_modules/
+web/dist/
+web/public/config.json
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/*.tfvars
+web/dist-app/

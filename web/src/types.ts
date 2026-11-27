@@ -350,6 +350,16 @@ export type SettingsResponse = {
   /** Tasks currently parked, whether by a pause or by a lowered limit. */
   paused: number
   limit: LimitStatus
+  /** The dex-remote bridge (remote.py); absent for a read-only reader. */
+  remote?: RemoteStatus
+}
+
+export type RemoteStatus = {
+  configured: boolean
+  error: string | null
+  lastPoll: number | null
+  machine: string
+  accepted: number
 }
 
 export type LinePoint = { bucket: string; series: string; code: number; assets: number }
