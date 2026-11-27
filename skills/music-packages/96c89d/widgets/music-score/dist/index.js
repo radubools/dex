@@ -1,4 +1,4 @@
-//#region skills/music-packages/a0b070/widgets/music-score/src/smf.ts
+//#region skills/music-packages/96c89d/widgets/music-score/src/smf.ts
 var e = class {
 	offset = 0;
 	data;
@@ -142,7 +142,7 @@ function r(e, t) {
 	return 6e7 / n;
 }
 //#endregion
-//#region skills/music-packages/a0b070/widgets/music-score/src/score.ts
+//#region skills/music-packages/96c89d/widgets/music-score/src/score.ts
 var i = [
 	0,
 	0,
@@ -401,7 +401,7 @@ function T(e, t, n) {
 	return Math.min(Math.max(i, r.t0), r.t1);
 }
 //#endregion
-//#region skills/music-packages/a0b070/widgets/music-score/src/index.ts
+//#region skills/music-packages/96c89d/widgets/music-score/src/index.ts
 var E = [
 	".wav",
 	".mp3",

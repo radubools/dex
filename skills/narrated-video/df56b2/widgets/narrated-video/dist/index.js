@@ -1,4 +1,4 @@
-//#region skills/narrated-video/e1801d/widgets/narrated-video/src/index.ts
+//#region skills/narrated-video/df56b2/widgets/narrated-video/src/index.ts
 function e(e) {
 	let t = [], n = (e) => {
 		let t = e.trim().split(":").map(Number);

@@ -14387,7 +14387,7 @@ function Ud(e, t, n) {
 	});
 }
 //#endregion
-//#region skills/game-asset-viewer/draft/widgets/glb-viewer/src/index.ts
+//#region skills/game-asset-viewer/2d6f1e/widgets/glb-viewer/src/index.ts
 var Wd = [
 	"#ff8c1a",
 	"#3fa7ff",

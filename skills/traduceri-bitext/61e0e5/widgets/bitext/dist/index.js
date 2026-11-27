@@ -1,4 +1,4 @@
-//#region skills/traduceri-bitext/d4d703/widgets/bitext/src/index.ts
+//#region skills/traduceri-bitext/61e0e5/widgets/bitext/src/index.ts
 function e(e) {
 	let t;
 	try {
