@@ -238,8 +238,17 @@ export type MachineReading = {
   dram?: Partial<Record<'read' | 'write' | 'total', { avg_gbs: number; p95_gbs: number }>>
   /** The GPU's busy share (0-1), its clock while busy, and the FP16 rate that clock allows. */
   gpu?: { active?: number; mhz?: number; ceiling_tflops?: number; busy_ceiling_tflops?: number }
-  /** The model server's tokens per second over all its requests, and the FP16 work they take. */
-  tokens?: { in_tps?: number; out_tps?: number; tflops?: number } | null
+  /**
+   * Watts read without root: the whole Mac from the SMC (`system_w`; `source` says which sensor: the
+   * system total on a laptop, the power supply's output on a Mac Studio).
+   */
+  watts?: { system_w?: number; source?: string }
+  /**
+   * The model server, over all its requests: tokens per second over the interval (`in_tps`, `out_tps`, idle
+   * time included), the FP16 work they take, and each phase's speed while it ran: `prefill_tps` (input tokens
+   * per second of prompt reading) and `decode_tps` (output tokens per second of generating).
+   */
+  tokens?: { in_tps?: number; out_tps?: number; tflops?: number; prefill_tps?: number; decode_tps?: number } | null
 }
 
 export type AssetKind =

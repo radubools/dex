@@ -88,6 +88,10 @@ def parse_power(ioreg: str) -> dict | None:
     fields = {k: int(v) for k, v in _FIELD.findall(ioreg)}
     if "SystemPowerIn" not in fields:
         return None
+    if not fields["SystemPowerIn"] and not fields.get("BatteryPower") and not _RATING.search(ioreg):
+        # A desktop (a Mac Studio) lists the controller with nothing in it: no adapter, no battery.
+        # Its power comes from the SMC instead (Machine's `watts`).
+        return None
     battery = fields.get("BatteryPower", 0)
     if battery >= 1 << 63:
         battery -= 1 << 64
@@ -134,22 +138,56 @@ class Power:
         return {**now, "fresh_s": round(time.time() - self.changed)}
 
 
-_COUNTER = re.compile(r"^llamacpp:(prompt_tokens_total|tokens_predicted_total)\s+([\d.eE+]+)\s*$", re.M)
+_COUNTER = re.compile(r"^llamacpp:(prompt_tokens_total|tokens_predicted_total|prompt_seconds_total|"
+                      r"tokens_predicted_seconds_total)\s+([\d.eE+]+)\s*$", re.M)
 #: Splash's counters for the same two things, by the names llama-server's take here. Both move
 #: while a request runs (input per prefill batch, output per decode cycle), so Splash needs no
 #: /slots added.
-_SPLASH_COUNTER = re.compile(r"^splash_(prefill_input_tokens_total|decode_output_tokens_total)\s+([\d.eE+]+)\s*$",
+_SPLASH_COUNTER = re.compile(r"^splash_(prefill_input_tokens_total|decode_output_tokens_total|"
+                             r"prefill_wall_milliseconds_total|decode_wall_milliseconds_total)\s+([\d.eE+]+)\s*$",
                              re.M)
 _SPLASH_NAMES = {"prefill_input_tokens_total": "prompt_tokens_total",
-                 "decode_output_tokens_total": "tokens_predicted_total"}
+                 "decode_output_tokens_total": "tokens_predicted_total",
+                 "prefill_wall_milliseconds_total": "prompt_seconds_total",
+                 "decode_wall_milliseconds_total": "tokens_predicted_seconds_total"}
+#: The token counters the throughput is over (the others are the time each phase took).
+_TOKENS = ("prompt_tokens_total", "tokens_predicted_total")
 
 
 def parse_counters(metrics: str) -> dict[str, float]:
     """The server's Prometheus token counters: llama-server's (`--metrics`: prompt tokens read,
     counted as they are read, and tokens written, counted when the request finishes), else
-    Splash's, under llama-server's names."""
+    Splash's, or MTPLX's JSON, under llama-server's names; and the seconds each phase took (`prompt_seconds_total`,
+    `tokens_predicted_seconds_total`), from which the speeds come."""
     found = {k: float(v) for k, v in _COUNTER.findall(metrics)}
-    return found or {_SPLASH_NAMES[k]: float(v) for k, v in _SPLASH_COUNTER.findall(metrics)}
+    if found:
+        return found
+    if metrics.lstrip().startswith("{"):
+        return mtplx_counters(metrics)
+    # Splash times its phases in milliseconds; the seconds keep llama-server's names.
+    return {_SPLASH_NAMES[k]: float(v) / (1000 if k.endswith("_milliseconds_total") else 1)
+            for k, v in _SPLASH_COUNTER.findall(metrics)}
+
+
+def mtplx_counters(metrics: str) -> dict[str, float]:
+    """MTPLX's `/metrics` is JSON about finished requests (`recent`, newest last, a capped list):
+    summed, it reads as llama-server's counters, tokens and the seconds each phase took, moving
+    when a request finishes. When the cap drops an old request the sums fall; a rate never goes
+    below zero and a speed needs both tokens and time to rise, so that interval just has none."""
+    try:
+        recent = json.loads(metrics).get("recent") or []
+    except (ValueError, AttributeError):
+        return {}
+    total = dict.fromkeys(("prompt_tokens_total", "prompt_seconds_total", "tokens_predicted_total",
+                           "tokens_predicted_seconds_total"), 0.0)
+    for r in recent if isinstance(recent, list) else []:
+        if not isinstance(r, dict):
+            continue
+        total["prompt_tokens_total"] += float(r.get("new_prefill_tokens") or 0)
+        total["prompt_seconds_total"] += float(r.get("prompt_eval_time_s") or 0)
+        total["tokens_predicted_total"] += float(r.get("completion_tokens") or 0)
+        total["tokens_predicted_seconds_total"] += float(r.get("decode_elapsed_s") or 0)
+    return total if recent else {}
 
 
 def is_splash(metrics: str) -> bool:
@@ -171,6 +209,22 @@ def in_progress(slots: list) -> dict[str, float]:
     return {"tokens_predicted_total": decoded}
 
 
+def speeds(before: dict[str, float], now: dict[str, float]) -> dict[str, float]:
+    """How fast each phase ran while it ran, between two readings of the finished counters:
+    `prefill_tps`, input tokens per second of prompt reading, and `decode_tps`, output tokens per
+    second of generating. Unlike `in_tps` and `out_tps` (tokens over the whole interval, idle time
+    included), a prompt read in one second of a five-second interval counts at its real speed.
+    A phase with no time in the interval has none."""
+    out = {}
+    for key, tokens, seconds in (("prefill_tps", "prompt_tokens_total", "prompt_seconds_total"),
+                                 ("decode_tps", "tokens_predicted_total", "tokens_predicted_seconds_total")):
+        spent = now.get(seconds, 0.0) - before.get(seconds, 0.0)
+        made = now.get(tokens, 0.0) - before.get(tokens, 0.0)
+        if spent > 0.01 and made > 0:
+            out[key] = round(made / spent, 1)
+    return out
+
+
 def model_gflop_per_token(model: str, path: str | None = None) -> float:
     """2 x the model's active parameters (billions), from ~/.dex/local-models.json's
     `active_params_b`: the floating-point work one token takes through the weights. Attention is
@@ -188,8 +242,8 @@ def model_gflop_per_token(model: str, path: str | None = None) -> float:
 
 
 class Machine:
-    """One snapshot every few seconds of what the Mac and the server are doing: power draw, DRAM
-    bandwidth, the GPU's busy share and clock (scripts/mac_metrics.py), the server's prompt and
+    """One snapshot every few seconds of what the Mac and the server are doing: power draw (the
+    battery controller's adapter reading, and `watts`: the whole Mac from the SMC), DRAM bandwidth, the GPU's busy share and clock (scripts/mac_metrics.py), the server's prompt and
     output tokens per second (its /metrics counters), and the work those tokens take in TFLOPS.
 
     Bandwidth, GPU and token rates are each over the time since the previous snapshot, so one
@@ -198,16 +252,23 @@ class Machine:
     def __init__(self, backend: "Backend", gflop_per_token: float = 0.0) -> None:
         self.backend, self.gflop_per_token = backend, gflop_per_token
         self.power = Power()
-        self.bw = self.gpu = None
+        self.bw = self.gpu = self.system_power = None
         try:
             import sys
             here = os.path.dirname(os.path.abspath(__file__))
             if here not in sys.path:
                 sys.path.insert(0, here)
             import mac_metrics
-            self.bw, self.gpu = mac_metrics.MemBW(), mac_metrics.GPUState()
-        except (ImportError, OSError) as e:
-            log.info("no bandwidth or GPU readings: %s", e)
+        except ImportError as e:
+            log.info("no machine readings: %s", e)
+            mac_metrics = None
+        # Each on its own: a Mac that refuses one (an M5 Ultra names its bandwidth channels per
+        # die) keeps the others.
+        for attr, make in (("bw", "MemBW"), ("gpu", "GPUState"), ("system_power", "SystemPower")):
+            try:
+                setattr(self, attr, getattr(mac_metrics, make)() if mac_metrics else None)
+            except OSError as e:
+                log.info("no %s readings: %s", attr, e)
         self.counters: tuple[float, dict[str, float]] | None = None
         self.latest: dict | None = None
         self.clock = time.time
@@ -223,7 +284,7 @@ class Machine:
             if done and not is_splash(r.text):
                 sr = await self.backend.http.get(f"{self.backend.url}/slots", timeout=3)
                 running = in_progress(sr.json()) if sr.status_code == 200 else {}
-            now = (self.clock(), {k: v + running.get(k, 0.0) for k, v in done.items()}) if done else None
+            now = (self.clock(), {k: v + running.get(k, 0.0) for k, v in done.items()}, done) if done else None
         except (httpx.HTTPError, ValueError):
             now = None
         if not now or not now[1]:
@@ -232,11 +293,12 @@ class Machine:
         if not before or now[0] <= before[0]:
             return None
         dt = now[0] - before[0]
-        rate = {k: max(0.0, (now[1].get(k, 0) - before[1].get(k, 0)) / dt) for k in now[1]}
-        in_tps, out_tps = rate.get("prompt_tokens_total", 0.0), rate.get("tokens_predicted_total", 0.0)
+        rate = {k: max(0.0, (now[1].get(k, 0) - before[1].get(k, 0)) / dt) for k in _TOKENS}
+        in_tps, out_tps = rate["prompt_tokens_total"], rate["tokens_predicted_total"]
         out = {"in_tps": round(in_tps, 1), "out_tps": round(out_tps, 1)}
         if self.gflop_per_token:
             out["tflops"] = round((in_tps + out_tps) * self.gflop_per_token / 1000, 2)
+        out |= speeds(before[2] if len(before) > 2 else {}, now[2])
         return out
 
     async def snapshot(self) -> dict:
@@ -245,6 +307,8 @@ class Machine:
             snap["dram"] = await asyncio.to_thread(self.bw.read)
         if self.gpu:
             snap["gpu"] = await asyncio.to_thread(self.gpu.read)
+        if self.system_power and (watts := await asyncio.to_thread(self.system_power.read)):
+            snap["watts"] = watts
         snap["tokens"] = await self._rates()
         self.latest = snap
         return snap
@@ -255,6 +319,8 @@ class Machine:
         if p := s.get("power"):
             parts.append(f"{p['adapter_w']:.1f} W from the adapter (~{p['wall_w']:.1f} W at the wall), "
                          f"{battery_text(p['battery_w'])} (reading {p['fresh_s']} s old)")
+        if (w := s.get("watts")) and "system_w" in w:
+            parts.append(f"system {w['system_w']:.1f} W ({w.get('source', 'SMC')})")
         if (d := s.get("dram")) and "total" in d:
             parts.append(f"DRAM {d['total']['avg_gbs']:.0f} GB/s (read {d.get('read', {}).get('avg_gbs', 0):.0f}, "
                          f"write {d.get('write', {}).get('avg_gbs', 0):.0f}, p95 {d['total']['p95_gbs']:.0f})")
@@ -264,6 +330,10 @@ class Machine:
         if t := s.get("tokens"):
             parts.append(f"{t['in_tps']:.0f} t/s in, {t['out_tps']:.1f} t/s out"
                          + (f", ~{t['tflops']:.2f} TFLOPS of FP16 work" if "tflops" in t else ""))
+            if "prefill_tps" in t or "decode_tps" in t:
+                parts.append("speed " + ", ".join(x for x in (
+                    f"prefill {t['prefill_tps']:.0f} t/s" if "prefill_tps" in t else "",
+                    f"decode {t['decode_tps']:.1f} t/s" if "decode_tps" in t else "") if x))
         return f"machine: {'; '.join(parts)}; {active} in flight"
 
 

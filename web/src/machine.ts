@@ -51,12 +51,17 @@ export function machineLines(
   now: number,
 ): MachineLine[] {
   const p = machine?.power, d = machine?.dram, g = machine?.gpu, t = machine?.tokens ?? undefined
+  const ww = machine?.watts
   const lines: MachineLine[] = [
     {
       key: 'power', emoji: '⚡', label: 'Power from the adapter',
       text: num(p?.adapter_w) ? `${w(p.adapter_w)} from the adapter${num(p.wall_w) ? ` (~${w(p.wall_w)} at the wall)` : ''}` : null,
     },
     { key: 'battery', emoji: '🔋', label: 'Battery', text: battery(p?.battery_w) },
+    {
+      key: 'system', emoji: '🔌', label: 'Whole Mac power (SMC)',
+      text: num(ww?.system_w) ? `${w(ww.system_w)} for the whole Mac${ww.source ? ` (${ww.source})` : ''}` : null,
+    },
     {
       key: 'dram', emoji: '🧠', label: 'Memory bandwidth',
       text: d?.total ? `DRAM ${gbs(d.total.avg_gbs)}`
@@ -74,6 +79,14 @@ export function machineLines(
       key: 'server', emoji: '🖥️', label: 'The model server, over all its requests',
       text: num(t?.in_tps) || num(t?.out_tps)
         ? `server ${formatRate(num(t?.in_tps) ? t.in_tps : null)} in · ${formatRate(num(t?.out_tps) ? t.out_tps : null)} out t/s` : null,
+    },
+    {
+      key: 'prefill', emoji: '⏩', label: 'Prefill speed: input tokens per second while reading prompts',
+      text: num(t?.prefill_tps) ? `prefill ${formatRate(t.prefill_tps)} t/s` : null,
+    },
+    {
+      key: 'decode', emoji: '✍️', label: 'Decode speed: output tokens per second while writing',
+      text: num(t?.decode_tps) ? `decode ${formatRate(t.decode_tps)} t/s` : null,
     },
     {
       key: 'work', emoji: '🧮', label: 'Floating-point work the tokens take (FP16, weights only)',

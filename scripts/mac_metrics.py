@@ -13,8 +13,20 @@ clock, from IOReport (the private framework Activity Monitor and powermetrics us
   has no faster integer matrix path; llama.cpp dequantizes weights to FP16 in its kernels, so
   its work is counted in FLOPs, not integer TOPS.
 
-Both raise OSError where IOReport is missing or refuses the channels (not a Mac, or a new
-macOS), so a caller can go without them.
+- `SystemPower.read()`: the whole Mac's watts from the SMC (the System Management Controller,
+  read through AppleSMC without root): `PSTR` (system total) on a laptop, else `PD0R`, the
+  power supply's 12 V output on a Mac Studio (about 23 W idle on an M5 Ultra; its `Pb0f` agrees,
+  12.09 V x 1.82 A). Wall power is a little more, the supply's own loss.
+
+Per-part watts (CPU, GPU, DRAM, ANE) are not read: IOReport's "Energy Model" counters, in mJ, stay
+put unless powermetrics (root) runs, and the one that moves, "GPU Energy" in nJ, read 1.7 W for a
+GPU at 100% while the Mac Studio drew 97 W more than idle (2026-11-27): only part of the GPU.
+
+An M5 Ultra has a power manager per die: bandwidth comes from "PMP0" and "PMP1" (one AMCC each,
+`AMCC0 RD`, `AMCC1 RD`), summed; a single-die Mac has "PMP" (`AMCC RD`).
+
+All raise OSError where IOReport or the SMC is missing or refuses (not a Mac, or a new macOS),
+each on its own, so a caller can go without any of them.
 """
 from __future__ import annotations
 
@@ -87,9 +99,12 @@ def _ioreport() -> _IOReport:
 class _Subscription:
     """One IOReport group/subgroup; `states()` yields (channel, [(state, residency)]) since last."""
 
-    def __init__(self, group: str, subgroup: str) -> None:
+    def __init__(self, group: str, subgroup: str | None) -> None:
         self.lib = lib = _ioreport()
-        chans = lib.io.IOReportCopyChannelsInGroup(lib.cfstr(group), lib.cfstr(subgroup), 0, 0, 0)
+        chans = lib.io.IOReportCopyChannelsInGroup(lib.cfstr(group), lib.cfstr(subgroup) if subgroup else None,
+                                                   0, 0, 0)
+        if not chans:
+            raise OSError(f"IOReport has no {group} / {subgroup}")
         self.sub = C.c_void_p()
         self.subscription = lib.io.IOReportCreateSubscription(None, chans, C.byref(self.sub), 0, None)
         if not self.subscription:
@@ -97,6 +112,14 @@ class _Subscription:
         self.last = lib.io.IOReportCreateSamples(self.subscription, self.sub, None)
 
     def states(self):
+        """(channel, [(state, residency)]) for each state-residency channel, since the last call."""
+        for ch, name in self._delta(2):
+            lib = self.lib
+            yield name, [(lib.pystr(lib.io.IOReportStateGetNameForIndex(ch, j)).strip(),
+                          lib.io.IOReportStateGetResidency(ch, j))
+                         for j in range(lib.io.IOReportStateGetCount(ch))]
+
+    def _delta(self, fmt: int):
         lib = self.lib
         now = lib.io.IOReportCreateSamples(self.subscription, self.sub, None)
         delta = lib.io.IOReportCreateSamplesDelta(self.last, now, None)
@@ -106,12 +129,9 @@ class _Subscription:
             arr = lib.cf.CFDictionaryGetValue(delta, lib.channels_key)
             for i in range(lib.cf.CFArrayGetCount(arr) if arr else 0):
                 ch = lib.cf.CFArrayGetValueAtIndex(arr, i)
-                if lib.io.IOReportChannelGetFormat(ch) != 2:  # state residencies
+                if lib.io.IOReportChannelGetFormat(ch) != fmt:  # 2: state residencies
                     continue
-                name = lib.pystr(lib.io.IOReportChannelGetChannelName(ch)).strip()
-                yield name, [(lib.pystr(lib.io.IOReportStateGetNameForIndex(ch, j)).strip(),
-                              lib.io.IOReportStateGetResidency(ch, j))
-                             for j in range(lib.io.IOReportStateGetCount(ch))]
+                yield ch, lib.pystr(lib.io.IOReportChannelGetChannelName(ch)).strip()
         finally:
             lib.cf.CFRelease(delta)
 
@@ -132,19 +152,38 @@ def bandwidth(states: list[tuple[str, int]]) -> dict | None:
     return {"avg_gbs": round(sum((top - width / 2) * r for top, r in bands) / total, 1), "p95_gbs": p95}
 
 
+_AMCC = re.compile(r"AMCC\d* (RD|WR|RD\+WR)")
+
+
+def add_bandwidth(parts: list[dict]) -> dict | None:
+    """One die's figures added to another's: averages add up, and so (as a bound) do the p95s."""
+    if not parts:
+        return None
+    return {"avg_gbs": round(sum(p["avg_gbs"] for p in parts), 1), "p95_gbs": sum(p["p95_gbs"] for p in parts)}
+
+
 class MemBW:
-    KEYS = {"AMCC RD": "read", "AMCC WR": "write", "AMCC RD+WR": "total"}
+    KEYS = {"RD": "read", "WR": "write", "RD+WR": "total"}
+    GROUPS = ("PMP", "PMP0", "PMP1", "PMP2", "PMP3")
 
     def __init__(self) -> None:
-        self.sub = _Subscription("PMP", "DCS BW")
+        self.subs = []
+        for group in self.GROUPS:
+            try:
+                self.subs.append(_Subscription(group, "DCS BW"))
+            except OSError:
+                pass
+        if not self.subs:
+            raise OSError("IOReport refused every PMP / DCS BW")
 
     def read(self) -> dict:
-        out = {}
-        for name, states in self.sub.states():
-            key = self.KEYS.get(name)
-            if key and (bw := bandwidth(states)):
-                out[key] = bw
-        return out
+        parts: dict[str, list[dict]] = {}
+        for sub in self.subs:
+            for name, states in sub.states():
+                m = _AMCC.fullmatch(name)
+                if m and (bw := bandwidth(states)):
+                    parts.setdefault(self.KEYS[m.group(1)], []).append(bw)
+        return {k: add_bandwidth(v) for k, v in parts.items()}
 
 
 def gpu_state(states: list[tuple[str, int]], clocks_mhz: list[float], cores: int) -> dict | None:
@@ -193,9 +232,86 @@ class GPUState:
         return {}
 
 
+class _SMCKeyData(C.Structure):
+    """AppleSMC's call structure (SMCKeyData_t, 80 bytes)."""
+    class Vers(C.Structure):
+        _fields_ = [("major", C.c_uint8), ("minor", C.c_uint8), ("build", C.c_uint8), ("reserved", C.c_uint8),
+                    ("release", C.c_uint16)]
+
+    class PLimit(C.Structure):
+        _fields_ = [("version", C.c_uint16), ("length", C.c_uint16), ("cpu", C.c_uint32), ("gpu", C.c_uint32),
+                    ("mem", C.c_uint32)]
+
+    class KeyInfo(C.Structure):
+        _fields_ = [("dataSize", C.c_uint32), ("dataType", C.c_uint32), ("dataAttributes", C.c_uint8)]
+
+    _fields_ = [("key", C.c_uint32), ("vers", Vers), ("pLimitData", PLimit), ("keyInfo", KeyInfo),
+                ("result", C.c_uint8), ("status", C.c_uint8), ("data8", C.c_uint8), ("data32", C.c_uint32),
+                ("bytes", C.c_uint8 * 32)]
+
+
+class SMC:
+    """Read float keys from the System Management Controller, without root."""
+    GET_KEY_INFO, READ_KEY = 9, 5
+
+    def __init__(self) -> None:
+        try:
+            io = C.CDLL("/System/Library/Frameworks/IOKit.framework/IOKit")
+            libc = C.CDLL("/usr/lib/libSystem.B.dylib")
+        except OSError as e:
+            raise OSError(f"IOKit is not available: {e}") from e
+        io.IOServiceMatching.restype, io.IOServiceMatching.argtypes = C.c_void_p, [C.c_char_p]
+        io.IOServiceGetMatchingService.restype = C.c_uint32
+        io.IOServiceGetMatchingService.argtypes = [C.c_uint32, C.c_void_p]
+        io.IOServiceOpen.argtypes = [C.c_uint32, C.c_uint32, C.c_uint32, C.POINTER(C.c_uint32)]
+        io.IOConnectCallStructMethod.argtypes = [C.c_uint32, C.c_uint32, C.c_void_p, C.c_size_t, C.c_void_p,
+                                                 C.POINTER(C.c_size_t)]
+        self.io, self.conn = io, C.c_uint32()
+        service = io.IOServiceGetMatchingService(0, io.IOServiceMatching(b"AppleSMC"))
+        task = C.c_uint32.in_dll(libc, "mach_task_self_").value
+        if not service or io.IOServiceOpen(service, task, 0, C.byref(self.conn)):
+            raise OSError("AppleSMC refused")
+
+    def _call(self, inp: _SMCKeyData) -> _SMCKeyData | None:
+        out, size = _SMCKeyData(), C.c_size_t(C.sizeof(_SMCKeyData))
+        kr = self.io.IOConnectCallStructMethod(self.conn.value, 2, C.byref(inp), C.sizeof(_SMCKeyData),
+                                               C.byref(out), C.byref(size))
+        return None if kr or out.result else out
+
+    def float(self, key: str) -> float | None:
+        code = struct.unpack(">I", key.encode())[0]
+        info = self._call(_SMCKeyData(key=code, data8=self.GET_KEY_INFO))
+        if info is None or struct.pack(">I", info.keyInfo.dataType) != b"flt " or info.keyInfo.dataSize != 4:
+            return None
+        inp = _SMCKeyData(key=code, data8=self.READ_KEY)
+        inp.keyInfo.dataSize = 4
+        out = self._call(inp)
+        return struct.unpack("<f", bytes(out.bytes[:4]))[0] if out else None
+
+
+class SystemPower:
+    #: (key, what it measures), first with a reading wins.
+    KEYS = (("PSTR", "system total"), ("PD0R", "power supply output"))
+
+    def __init__(self) -> None:
+        self.smc = SMC()
+
+    def read(self) -> dict:
+        for key, source in self.KEYS:
+            w = self.smc.float(key)
+            if w and w > 0.05:
+                return {"system_w": round(w, 1), "source": source}
+        return {}
+
+
 if __name__ == "__main__":
     import time
-    bw, gpu = MemBW(), GPUState()
+    readers = {}
+    for name, make in (("dram", MemBW), ("gpu", GPUState), ("system", SystemPower)):
+        try:
+            readers[name] = make()
+        except OSError as e:
+            print(name, "unavailable:", e)
     for _ in range(3):
         time.sleep(1)
-        print(bw.read(), gpu.read())
+        print({name: r.read() for name, r in readers.items()})

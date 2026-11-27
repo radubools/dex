@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
@@ -214,7 +215,7 @@ llamacpp:tokens_predicted_total {o}
 
 def test_counters_are_read_from_llama_server_metrics():
     assert proxy.parse_counters(METRICS.format(p=1200, o=34)) == {
-        "prompt_tokens_total": 1200.0, "tokens_predicted_total": 34.0}
+        "prompt_tokens_total": 1200.0, "tokens_predicted_total": 34.0, "prompt_seconds_total": 12.5}
 
 
 def test_token_rates_and_tflops_come_from_counter_deltas():
@@ -496,3 +497,60 @@ def test_the_proxy_forwards_the_trimmed_request():
             return r.status_code
     assert asyncio.run(go()) == 200
     assert len(images_of(seen["body"])) == 38
+
+
+def test_an_ultra_adds_its_dies_bandwidth():
+    assert mac.add_bandwidth([{"avg_gbs": 100.25, "p95_gbs": 160}, {"avg_gbs": 90.0, "p95_gbs": 128}]) == {
+        "avg_gbs": 190.2, "p95_gbs": 288}
+    assert mac.add_bandwidth([]) is None
+    assert mac._AMCC.fullmatch("AMCC0 RD+WR").group(1) == "RD+WR"
+    assert mac._AMCC.fullmatch("AMCC RD").group(1) == "RD"
+    assert mac._AMCC.fullmatch("MACC0 RD") is None
+
+
+def test_the_snapshot_line_says_the_watts():
+    line = proxy.Machine.describe({"watts": {"system_w": 23.1, "source": "power supply output"}}, 1)
+    assert "system 23.1 W (power supply output)" in line
+
+
+def test_a_desktop_has_no_adapter_reading():
+    studio = ('"PowerTelemetryData" = {"SystemPowerIn"=0,"SystemVoltageIn"=12080,"SystemCurrentIn"=1940,'
+              '"AdapterEfficiencyLoss"=0}')
+    assert proxy.parse_power(studio) is None
+
+
+def test_each_phase_has_its_speed_while_it_ran():
+    """5 s apart: 2,000 prompt tokens read in 1.6 s and 160 tokens written in 4.0 s. The interval
+    averages say 400 in and 32 out; the phases ran at 1,250 and 40."""
+    before = {"prompt_tokens_total": 10_000, "prompt_seconds_total": 20.0,
+              "tokens_predicted_total": 500, "tokens_predicted_seconds_total": 30.0}
+    now = {"prompt_tokens_total": 12_000, "prompt_seconds_total": 21.6,
+           "tokens_predicted_total": 660, "tokens_predicted_seconds_total": 34.0}
+    assert proxy.speeds(before, now) == {"prefill_tps": 1250.0, "decode_tps": 40.0}
+    # an idle phase has no speed, and neither does a server without the time counters
+    assert proxy.speeds(now, {**now, "tokens_predicted_total": 700, "tokens_predicted_seconds_total": 35.0}) == {
+        "decode_tps": 40.0}
+    assert proxy.speeds({"prompt_tokens_total": 1}, {"prompt_tokens_total": 9}) == {}
+
+
+def test_splash_times_its_phases_in_milliseconds():
+    m = ("splash_prefill_input_tokens_total 4000\nsplash_prefill_wall_milliseconds_total 2500\n"
+         "splash_decode_output_tokens_total 900\nsplash_decode_wall_milliseconds_total 12000\n")
+    assert proxy.parse_counters(m) == {"prompt_tokens_total": 4000.0, "prompt_seconds_total": 2.5,
+                                       "tokens_predicted_total": 900.0, "tokens_predicted_seconds_total": 12.0}
+
+
+def test_the_snapshot_line_says_the_speeds():
+    line = proxy.Machine.describe({"tokens": {"in_tps": 400, "out_tps": 32, "prefill_tps": 1250, "decode_tps": 40}}, 1)
+    assert "400 t/s in, 32.0 t/s out; speed prefill 1250 t/s, decode 40.0 t/s" in line
+
+
+def test_mtplx_finished_requests_read_as_counters():
+    m = json.dumps({"latest": {}, "recent": [
+        {"new_prefill_tokens": 8999, "prompt_eval_time_s": 4.3, "completion_tokens": 2000, "decode_elapsed_s": 22.2},
+        {"new_prefill_tokens": 1000, "prompt_eval_time_s": 0.5, "completion_tokens": 100, "decode_elapsed_s": 1.8}]})
+    assert proxy.parse_counters(m) == pytest.approx({"prompt_tokens_total": 9999.0, "prompt_seconds_total": 4.8,
+                                                     "tokens_predicted_total": 2100.0,
+                                                     "tokens_predicted_seconds_total": 24.0})
+    assert proxy.parse_counters(json.dumps({"recent": []})) == {}
+    assert proxy.parse_counters("{not json") == {}
