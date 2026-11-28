@@ -21,6 +21,11 @@ export type Project = {
 
 export type TaskFile = { path: string; size: number; available: boolean; object: string }
 
+/** A file uploaded to the bucket, named by the SHA-256 of its bytes. */
+export type Attachment = { id: string; name: string; size: number }
+
+export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+
 export type Question = { id: string; text: string; options: string[] }
 
 export type Task = {
@@ -37,6 +42,7 @@ export type Task = {
   summary?: string | null
   error?: string | null
   files: TaskFile[]
+  attachments?: Attachment[]
   attempts?: number
   /** The question the task is waiting on, if any. */
   question?: Question | null
@@ -159,23 +165,43 @@ async function publish(slug: string, body: Record<string, unknown>): Promise<voi
   if (!reply.ok) throw new Error(`Pub/Sub: ${reply.status} ${(await reply.text()).slice(0, 200)}`)
 }
 
-/** Upload the attachments, then publish the request. Returns its id. */
-export async function submit(
-  slug: string, title: string, problem: string, files: File[],
-  progress: (note: string) => void = () => {},
-): Promise<string> {
+async function sha256(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Upload one attachment to the person's own area of the project, under its
+ *  SHA-256, and return its id. A file already there (sent before) is not sent
+ *  again. `progress` gets 0..1. */
+export async function uploadAttachment(
+  slug: string, file: File, progress: (fraction: number) => void = () => {},
+): Promise<Attachment> {
+  if (file.size > MAX_ATTACHMENT_BYTES) throw new Error('Larger than 100 MB')
   const { s, storage } = fb
-  await ctx.pubsubToken() // ask for it first: a popup after the uploads would be blocked
-  const id = newId()
-  const uploads: { object: string; name: string; size: number }[] = []
-  for (const [i, file] of files.entries()) {
-    progress(`Uploading ${file.name} (${i + 1} of ${files.length})`)
-    const object = `projects/${slug}/uploads/${ctx.user.uid}/${id}/${file.name.replace(/[\\/]/g, '_')}`
-    await s.uploadBytes(s.ref(storage, object), file, { contentType: file.type || undefined })
-    uploads.push({ object, name: file.name, size: file.size })
+  const id = await sha256(file)
+  const at = s.ref(storage, `projects/${slug}/attachments/${ctx.user.uid}/${id}`)
+  const attachment = { id, name: file.name, size: file.size }
+  try {
+    await s.getMetadata(at)
+    progress(1)
+    return attachment
+  } catch (e) {
+    if ((e as { code?: string }).code !== 'storage/object-not-found') throw e
   }
-  progress('Sending')
-  await publish(slug, { kind: 'task', requestId: id, title, problem, uploads })
+  await new Promise<void>((resolve, reject) => {
+    const task = s.uploadBytesResumable(at, file, {
+      contentType: file.type || undefined, customMetadata: { name: file.name },
+    })
+    task.on('state_changed', (snap) => progress(snap.totalBytes ? snap.bytesTransferred / snap.totalBytes : 0),
+      reject, () => resolve())
+  })
+  return attachment
+}
+
+/** Publish a request naming its attachments by id. Returns the request id. */
+export async function submit(slug: string, title: string, problem: string, attachments: Attachment[]): Promise<string> {
+  const id = newId()
+  await publish(slug, { kind: 'task', requestId: id, title, problem, attachments })
   return id
 }
 

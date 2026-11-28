@@ -30,12 +30,15 @@ service firebase.storage {
       allow read: if granted(project);
     }
 
-    // Attachments for a request, uploaded by its sender before publishing:
-    // their own folder only, new files only, 100 MB each.
-    match /projects/{project}/uploads/{uid}/{request}/{name} {
-      allow read: if granted(project) && request.auth.uid == uid;
+    // Attachments, uploaded by their sender as soon as they are picked, each
+    // named by its SHA-256 (the attachment id a request carries): their own
+    // area only, new files only, 100 MB each. Reading lets the page skip a
+    // file already there; local dex checks the bytes against the id.
+    match /projects/{project}/attachments/{uid}/{id} {
+      allow get: if granted(project) && request.auth.uid == uid;
       allow create: if granted(project)
         && request.auth.uid == uid
+        && id.matches('[0-9a-f]{64}')
         && request.resource.size < 100 * 1024 * 1024;
     }
   }

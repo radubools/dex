@@ -9,7 +9,7 @@ import {
 import {
   collection, doc, getDoc, getDocs, getFirestore, limit, orderBy, query, where,
 } from 'firebase/firestore'
-import { getBlob, getStorage, ref, uploadBytes } from 'firebase/storage'
+import { getBlob, getMetadata, getStorage, ref, uploadBytesResumable } from 'firebase/storage'
 import type { User } from 'firebase/auth'
 
 export type RemoteConfig = {
@@ -30,7 +30,7 @@ export function connect(config: RemoteConfig) {
     storage: getStorage(app),
     a: { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged },
     f: { collection, doc, getDoc, getDocs, limit, orderBy, query, where },
-    s: { getBlob, ref, uploadBytes },
+    s: { getBlob, getMetadata, ref, uploadBytesResumable },
   }
 }
 

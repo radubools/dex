@@ -104,6 +104,7 @@ class FakeGoogle:
         self.queue: dict[str, list[dict[str, Any]]] = {}
         self.acked: list[str] = []
         self.objects: dict[str, bytes] = {}
+        self.fetched: list[str] = []
         self.subscriptions: set[str] = set()
         self.commits: list[list[dict[str, Any]]] = []
 
@@ -163,7 +164,8 @@ class FakeGoogle:
         self.publishers = set(emails)
         return []
 
-    async def download(self, name):
+    async def download(self, name, limit=None):
+        self.fetched.append(name)
         return self.objects.get(name, b"")
 
     def request(self, project: str, rid: str, token: str = "", **body: Any) -> None:
@@ -319,20 +321,70 @@ async def test_the_token_not_the_body_says_who_sent_it(bridge, db):
     assert await db.pool.fetchval("SELECT count(*) FROM remote_tasks") == 0
 
 
-async def test_attachments_are_fetched_from_the_senders_own_area_only(bridge, db, config):
+def _sha(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+async def test_attachment_ids_are_fetched_from_the_senders_own_area_only(bridge, db, config):
     made, google, manager, _ = bridge
     _authorise(google, "op@x.com", "user", "ml")
-    mine = "projects/ml/uploads/u1/req-0006/data.csv"
-    theirs = "projects/ml/uploads/u2/req-0006/secret.csv"
-    google.objects[mine] = b"a,b\n1,2\n"
-    google.objects[theirs] = b"secret"
+    data, secret = b"a,b\n1,2\n", b"secret"
+    google.objects[f"projects/ml/attachments/u1/{_sha(data)}"] = data
+    google.objects[f"projects/ml/attachments/u2/{_sha(secret)}"] = secret
     google.request("ml", "req-0006", token="op@x.com|u1", title="Read", problem="Summarise the data",
-                   uploads=[{"object": mine}, {"object": theirs}])
+                   attachments=[{"id": _sha(data), "name": "data.csv", "size": len(data)}])
+    google.request("ml", "req-0007", token="op@x.com|u1", title="Peek", problem="Read theirs",
+                   attachments=[{"id": _sha(secret), "name": "secret.csv", "size": len(secret)}])
     await made.poll("ml")
     task = await manager.tasks.get(await db.pool.fetchval("SELECT task_id FROM remote_tasks"))
-    assert "data.csv" in task.problem and "secret.csv" not in task.problem
-    stored = config.project_datasets("ml") / "remote" / "req-0006" / "data.csv"
-    assert stored.read_bytes() == b"a,b\n1,2\n"
+    stored = config.project_datasets("ml") / "remote" / "attachments" / _sha(data) / "data.csv"
+    assert stored.read_bytes() == data and str(stored) in task.problem
+    # Someone else's attachment is not in this sender's area: refused, nothing runs.
+    assert google.docs["projects/ml/requests/req-0007"]["status"] == "rejected"
+    assert "secret.csv" in google.docs["projects/ml/requests/req-0007"]["reason"]
+    assert await db.pool.fetchval("SELECT count(*) FROM remote_tasks") == 1
+    doc = google.docs[f"projects/ml/tasks/{task.id}"]
+    assert doc["attachments"] == [{"id": _sha(data), "name": "data.csv", "size": len(data)}]
+
+
+async def test_attachments_are_looked_up_locally_before_downloading(bridge, db, config):
+    made, google, manager, _ = bridge
+    _authorise(google, "op@x.com", "user", "ml")
+    data = b"%PDF-1.7 the contract\n"
+    local = config.project_datasets("ml") / "contracts" / "contract.pdf"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(data)
+    (local.parent / "other.pdf").write_bytes(b"x" * len(data))  # same size, different bytes
+    google.request("ml", "req-0008", token="op@x.com|u1", title="Read", problem="Translate it",
+                   attachments=[{"id": _sha(data), "name": "renamed.pdf", "size": len(data)}])
+    await made.poll("ml")
+    task = await manager.tasks.get(await db.pool.fetchval("SELECT task_id FROM remote_tasks"))
+    assert str(local) in task.problem
+    assert google.fetched == []
+
+
+async def test_a_downloaded_attachment_is_reused_and_checked(bridge, db, config):
+    made, google, manager, _ = bridge
+    _authorise(google, "op@x.com", "user", "ml")
+    data = b"rows\n"
+    google.objects[f"projects/ml/attachments/u1/{_sha(data)}"] = data
+    bogus = "0" * 64
+    google.objects[f"projects/ml/attachments/u1/{bogus}"] = b"not what the id says"
+    item = {"id": _sha(data), "name": "rows.txt", "size": len(data)}
+    google.request("ml", "req-0009", token="op@x.com|u1", title="One", problem="First", attachments=[item])
+    google.request("ml", "req-0010", token="op@x.com|u1", title="Two", problem="Second", attachments=[item])
+    google.request("ml", "req-0011", token="op@x.com|u1", title="Bad", problem="Third",
+                   attachments=[{"id": bogus, "name": "bad.txt", "size": 20}])
+    google.request("ml", "req-0012", token="op@x.com|u1", title="Odd", problem="Fourth",
+                   attachments=[{"id": "../../etc/passwd", "name": "x"}])
+    await made.poll("ml")
+    assert google.fetched.count(f"projects/ml/attachments/u1/{_sha(data)}") == 1
+    assert made.status.downloaded == 1
+    assert google.docs["projects/ml/requests/req-0011"]["status"] == "rejected"
+    assert "does not match" in google.docs["projects/ml/requests/req-0011"]["reason"]
+    assert google.docs["projects/ml/requests/req-0012"]["status"] == "rejected"
+    assert await db.pool.fetchval("SELECT count(*) FROM remote_tasks") == 2
 
 
 async def test_token_verifier_checks_signature_audience_and_time():

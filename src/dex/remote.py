@@ -4,8 +4,11 @@ Nothing in the cloud runs code. The page (remote/web) is static files in a
 bucket; it signs people in with Google through Firebase Auth and, for someone
 granted a project, publishes the request straight to the Pub/Sub topic with
 their Google token, the project as an attribute and their Firebase ID token in
-the message. Attachments go to the files bucket first. Firestore is read-only
-to people: only this module writes it.
+the message. Attachments are uploaded to the files bucket as soon as they are
+picked, each under its SHA-256 (its attachment id), and a request names them by
+id; this end uses a copy the project already has, by content, and downloads
+only what it lacks. Firestore is read-only to people: only this module writes
+it.
 
 This module is the other end, inside the dex server. For each project whose
 Settings switch is on (`remote:<slug>`), it pulls that project's subscription,
@@ -35,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 import mimetypes
@@ -647,6 +651,64 @@ class Google:
             raise RuntimeError(f"delete {name}: {reply.status_code}")
 
 
+# --------------------------------------------------------------- attachments
+
+#: An attachment's id is the SHA-256 of its bytes, so the same file is never
+#: downloaded twice, and one already in the project's data is used where it is.
+ATTACHMENT_ID = re.compile(r"[0-9a-f]{64}")
+MAX_ATTACHMENTS = 20
+MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+#: How many files of a project's data to look through for a match by content.
+ATTACHMENT_SCAN_FILES = 20_000
+
+
+def attachment_object(project: str, uid: str, aid: str) -> str:
+    """Where the page puts an attachment: the sender's own area of the project."""
+    return f"projects/{project}/attachments/{uid}/{aid}"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1 << 20):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def find_attachment(root: Path, aid: str, size: int) -> Path | None:
+    """A local copy of attachment `aid`: one downloaded before (kept under
+    `remote/attachments/<id>/`), or any file in the project's data with the
+    same size and contents. None when it has to be downloaded."""
+    cache = root / "remote" / "attachments" / aid
+    if cache.is_dir():
+        for path in sorted(cache.iterdir()):
+            if path.is_file() and sha256_file(path) == aid:
+                return path
+    if size < 0 or not root.is_dir():
+        return None
+    seen = 0
+    for directory, dirs, names in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(names):
+            seen += 1
+            if seen > ATTACHMENT_SCAN_FILES:
+                return None
+            path = Path(directory) / name
+            try:
+                if path.is_symlink() or path.stat().st_size != size:
+                    continue
+                if sha256_file(path) == aid:
+                    return path
+            except OSError:
+                continue
+    return None
+
+
+def attached_ids(body: dict[str, Any], attached: list[Any]) -> list[tuple[str, Any]]:
+    ids = [str((i or {}).get("id") or "").lower() for i in (body.get("attachments") or []) if isinstance(i, dict)]
+    return list(zip(ids, attached))
+
+
 # --------------------------------------------------------------------- files
 
 
@@ -686,6 +748,8 @@ class BridgeStatus:
     last_poll: float | None = None
     machine: str = field(default_factory=machine_id)
     accepted: int = 0
+    #: Attachments fetched from the bucket (not found locally).
+    downloaded: int = 0
     #: Granted emails Google would not make publishers (no Google account).
     refused: list[str] = field(default_factory=list)
 
@@ -693,7 +757,7 @@ class BridgeStatus:
         return {
             "configured": self.configured, "error": self.error,
             "lastPoll": self.last_poll, "machine": self.machine, "accepted": self.accepted,
-            "refused": self.refused,
+            "downloaded": self.downloaded, "refused": self.refused,
         }
 
 
@@ -924,17 +988,11 @@ class RemoteBridge:
             return
 
         sources = self.config.project_datasets(project)
-        attached = []
-        for item in (body.get("uploads") or [])[:20]:
-            name = str((item or {}).get("object") or "")
-            # Only what this sender put in their own upload area for this request.
-            if not name.startswith(f"projects/{project}/uploads/{claims.get('user_id') or claims.get('sub')}/{request_id}/"):
-                continue
-            data = await self.google.download(name)
-            if data:
-                from . import uploads  # noqa: PLC0415
-
-                attached.append(uploads.store(sources / "remote" / request_id, name.rsplit("/", 1)[-1], data))
+        uid = str(claims.get("user_id") or claims.get("sub") or "")
+        attached, refused = await self.fetch_attachments(project, uid, body.get("attachments"))
+        if refused:
+            await reject(refused, email)
+            return
         from . import uploads  # noqa: PLC0415
 
         problem = uploads.with_sources(problem, attached, sources)
@@ -955,11 +1013,47 @@ class RemoteBridge:
                 "title": task.title, "problem": str(body.get("problem") or "")[:20000],
                 "state": task.state.value, "activity": "Queued", "machine": self.status.machine,
                 "createdAt": stamp, "updatedAt": stamp, "summary": None, "error": None,
-                "files": [], "attachments": [u.name for u in attached],
+                "files": [], "attachments": [
+                    {"id": a, "name": u.name, "size": u.bytes} for a, u in attached_ids(body, attached)
+                ],
             }),
         ])
         self.status.accepted += 1
         log.info("remote: %s from %s became task %s", path, email, task.id)
+
+    async def fetch_attachments(self, project: str, uid: str, items: Any) -> tuple[list[Any], str | None]:
+        """The files a request names by attachment id, as local paths: found
+        here when this project already has them, else downloaded from the
+        sender's own attachment area and checked against the id. Returns the
+        files, or why the request cannot run."""
+        from . import uploads  # noqa: PLC0415
+
+        assert self.google is not None
+        root = self.config.project_datasets(project)
+        found: list[Any] = []
+        for item in (items if isinstance(items, list) else [])[:MAX_ATTACHMENTS]:
+            item = item if isinstance(item, dict) else {}
+            aid = str(item.get("id") or "").lower()
+            name = _line(item.get("name") or "attachment", 200)
+            if not ATTACHMENT_ID.fullmatch(aid):
+                return found, f"The attachment {name!r} has no valid id."
+            try:
+                size = int(item.get("size"))
+            except (TypeError, ValueError):
+                size = -1
+            path = await asyncio.to_thread(find_attachment, root, aid, size)
+            if path is None:
+                if not uid:
+                    return found, "The sign-in on this request names no user."
+                data = await self.google.download(attachment_object(project, uid, aid), limit=MAX_ATTACHMENT_BYTES + 1)
+                if not data:
+                    return found, f"The attachment {name!r} is not in the bucket; attach it again."
+                if hashlib.sha256(data).hexdigest() != aid:
+                    return found, f"The attachment {name!r} does not match its id; attach it again."
+                path = uploads.store(root / "remote" / "attachments" / aid, name, data).path
+                self.status.downloaded += 1
+            found.append(uploads.Upload(name=path.name, path=path, bytes=path.stat().st_size))
+        return found, None
 
     async def answer(self, project: str, message: dict[str, Any], body: dict[str, Any]) -> None:
         """An answer to a task's question, from the page: `taskId` is the task

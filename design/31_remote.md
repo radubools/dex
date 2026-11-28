@@ -21,8 +21,13 @@ tests point that at nothing (`tests/conftest.py`).
    pull, and handle each message:
    - `kind: task`: check the Firebase ID token in the message was valid at
      `publishTime` (Pub/Sub does not say who published), check
-     `users/<email>` allows the project, fetch attachments from the sender's
-     own upload folder, `TaskManager.submit` into a `Remote · <email>` thread,
+     `users/<email>` allows the project, resolve the attachment ids
+     (SHA-256 of the bytes; `find_attachment` looks in
+     `datasets/<p>/remote/attachments/<id>/`, then for any file of the
+     project's data with that size and digest, and only then downloads
+     `projects/<p>/attachments/<uid>/<id>` from the sender's own area and
+     checks the digest; a missing or mismatched one rejects the request),
+     `TaskManager.submit` into a `Remote · <email>` thread,
      record `remote_tasks`, write the request as accepted (or rejected, with
      why), ack.
    - `kind: answer`: same checks, then `TaskManager.answer` on whichever

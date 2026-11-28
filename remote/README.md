@@ -30,7 +30,7 @@ any other dex task.
 | Who is authorised | Firestore `users/<email>` | **you, by hand** | that user |
 | Served projects, tasks, steps | Firestore `projects/…` | local dex | users granted the project |
 | Queue | Pub/Sub `dex-tasks` | authorised users (IAM, synced by dex) | local dex |
-| Attachments | `dex-remote-files/projects/<p>/uploads/<uid>/…` | their sender | sender, local dex |
+| Attachments | `dex-remote-files/projects/<p>/attachments/<uid>/<sha256>` | their sender | sender, local dex |
 | Results | `dex-remote-files/projects/<p>/tasks/<id>/files/…` | local dex | users granted the project |
 
 Local dex uses one service account, `dex-local`, with full read/write on
@@ -74,6 +74,14 @@ Pub/Sub access. That is expected for a private app; *Advanced → continue*.
 Each project gets its own Pub/Sub subscription; two machines serving the same
 project share it, and each request goes to one of them. A request sent while
 no machine serves its project waits in the queue for up to 7 days.
+
+Attachments upload to the bucket the moment they are picked (or dropped on
+the composer), each named by the SHA-256 of its bytes: its attachment id. A
+request carries only the ids. Local dex uses a copy it already has, either one
+it downloaded before (`datasets/<p>/remote/attachments/<id>/`) or any file in
+the project's data with the same contents, and downloads only what it lacks,
+checking the bytes against the id. A file already in the bucket is not
+uploaded again.
 
 What the page sees of a task: its state, one line per step ("Reading
 utils.py", "Running tests", the agent's own short description of a shell

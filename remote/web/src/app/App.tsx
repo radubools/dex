@@ -4,8 +4,8 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import type { Profile } from '../firebase'
 import {
-  answer, eventsOf, fetchFile, myProjects, myRequests, served, signOutNow, submit, tasksOf,
-  type Project, type Question, type Request, type Task, type TaskEvent, type TaskFile,
+  answer, eventsOf, fetchFile, myProjects, myRequests, served, signOutNow, submit, tasksOf, uploadAttachment,
+  type Attachment, type Project, type Question, type Request, type Task, type TaskEvent, type TaskFile,
 } from './data'
 
 const ACTIVE = new Set(['queued', 'running', 'awaiting_input', 'paused', 'blocked', 'todo'])
@@ -167,7 +167,7 @@ function ProjectView({ project, user, pollSeconds, taskId, setTaskId }: {
           {machines ? <>Served by {machines}</> : <>No dex is polling this project right now; requests wait in the queue for up to 7 days.</>}
         </div>
         {project.description && <p className="muted small">{project.description}</p>}
-        <Composer project={project} user={user} onSent={(id, title) => { setSent((s) => [{ id, title, at: Date.now() }, ...s]); void refresh() }} />
+        <Composer key={project.slug} project={project} user={user} onSent={(id, title) => { setSent((s) => [{ id, title, at: Date.now() }, ...s]); void refresh() }} />
         {error && <p className="error small">{error}</p>}
         <ul className="tasks">
           {sent.map((s) => (
@@ -203,22 +203,45 @@ function ProjectView({ project, user, pollSeconds, taskId, setTaskId }: {
   )
 }
 
+/** A file picked in the composer: uploaded at once, sent by id. */
+type Picked = { key: number; file: File; fraction: number; attachment?: Attachment; error?: string }
+
+let pickedKeys = 0
+
 function Composer({ project, user, onSent }: { project: Project; user: User; onSent: (id: string, title: string) => void }) {
   const [title, setTitle] = useState('')
   const [problem, setProblem] = useState('')
-  const [files, setFiles] = useState<File[]>([])
+  const [picked, setPicked] = useState<Picked[]>([])
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const input = useRef<HTMLInputElement>(null)
 
+  const patch = (key: number, change: Partial<Picked>) =>
+    setPicked((all) => all.map((p) => (p.key === key ? { ...p, ...change } : p)))
+
+  const upload = (item: Picked) => {
+    patch(item.key, { error: undefined, fraction: 0 })
+    uploadAttachment(project.slug, item.file, (fraction) => patch(item.key, { fraction }))
+      .then((attachment) => patch(item.key, { attachment, fraction: 1 }))
+      .catch((e) => patch(item.key, { error: String((e as Error).message ?? e) }))
+  }
+
+  const add = (files: File[]) => {
+    const room = Math.max(0, 20 - picked.length)
+    const items = files.slice(0, room).map((file) => ({ key: ++pickedKeys, file, fraction: 0 }))
+    setPicked((all) => [...all, ...items])
+    items.forEach(upload)
+  }
+
+  const pending = picked.some((p) => !p.attachment)
   const send = async () => {
-    if (!problem.trim() || busy) return
+    if (!problem.trim() || busy || pending) return
     setError('')
     setBusy('Sending')
     try {
-      const id = await submit(project.slug, title.trim(), problem.trim(), files, setBusy)
+      const id = await submit(project.slug, title.trim(), problem.trim(), picked.map((p) => p.attachment!))
       onSent(id, title.trim() || problem.trim().split('\n')[0].slice(0, 80))
-      setTitle(''); setProblem(''); setFiles([])
+      setTitle(''); setProblem(''); setPicked([])
     } catch (e) {
       setError(String((e as Error).message ?? e))
     } finally {
@@ -227,29 +250,44 @@ function Composer({ project, user, onSent }: { project: Project; user: User; onS
   }
 
   return (
-    <div className="composer card">
+    <div className="composer card"
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+      onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); add(Array.from(e.dataTransfer.files)) } }}>
       <input className="title-input" placeholder="Title (optional)" value={title} maxLength={200}
         onChange={(e) => setTitle(e.target.value)} />
       <textarea placeholder={`What should dex do in ${project.name}?`} value={problem} maxLength={20000}
         rows={4} onChange={(e) => setProblem(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send() }} />
-      {files.length > 0 && (
+      {picked.length > 0 && (
         <ul className="attached small">
-          {files.map((f, i) => (
-            <li key={i}>{f.name} <span className="muted">{size(f.size)}</span>
-              <button className="ghost small" onClick={() => setFiles(files.filter((_, j) => j !== i))} aria-label={`Remove ${f.name}`}>✕</button>
+          {picked.map((p) => (
+            <li key={p.key}>
+              <span className="name">{p.file.name}</span> <span className="muted">{size(p.file.size)}</span>
+              {p.error ? (
+                <>
+                  <span className="error">{p.error}</span>
+                  <button className="ghost small" onClick={() => upload(p)}>Retry</button>
+                </>
+              ) : p.attachment ? (
+                <span className="muted" title={p.attachment.id}>uploaded</span>
+              ) : (
+                <span className="muted">{p.fraction > 0 ? `uploading ${Math.round(p.fraction * 100)}%` : 'preparing…'}</span>
+              )}
+              <button className="ghost small" onClick={() => setPicked((all) => all.filter((q) => q.key !== p.key))}
+                aria-label={`Remove ${p.file.name}`}>✕</button>
             </li>
           ))}
         </ul>
       )}
       <div className="composer-row">
         <input ref={input} type="file" multiple hidden onChange={(e) => {
-          setFiles([...files, ...Array.from(e.target.files ?? [])].slice(0, 20)); e.target.value = ''
+          add(Array.from(e.target.files ?? [])); e.target.value = ''
         }} />
-        <button className="ghost" onClick={() => input.current?.click()} disabled={!!busy}>Attach</button>
+        <button className="ghost" onClick={() => input.current?.click()} disabled={!!busy || picked.length >= 20}>Attach</button>
         <span className="spacer" />
         {busy && <span className="muted small">{busy}…</span>}
-        <button className="primary" onClick={() => void send()} disabled={!problem.trim() || !!busy}>Send</button>
+        {!busy && pending && <span className="muted small">Waiting for uploads…</span>}
+        <button className="primary" onClick={() => void send()} disabled={!problem.trim() || !!busy || pending}>Send</button>
       </div>
       {error && <p className="error small">{error}</p>}
     </div>
@@ -289,6 +327,9 @@ function TaskView({ task, pollSeconds, onClose }: { task: Task; pollSeconds: num
         <details className="problem">
           <summary className="small muted">Request</summary>
           <pre>{task.problem}</pre>
+          {task.attachments?.length ? (
+            <p className="small muted">Attached: {task.attachments.map((a) => a.name).join(', ')}</p>
+          ) : null}
         </details>
         {task.error && <p className="error">{task.error}</p>}
         {task.question && task.state === 'awaiting_input' && (
